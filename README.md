@@ -85,6 +85,9 @@ See [Remote Exposure Guide](docs/remote-exposure.md) for SSH forwarding,
 Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and self-managed reverse
 proxy patterns.
 
+The optional managed routing track is defined separately in
+[telegent.dev Tunnel Routing Architecture](docs/telegent-dev-tunnel-architecture.md).
+
 In another shell using the same `TELEGENT_HOME`, invite a participant:
 
 ```bash
@@ -319,4 +322,5 @@ More design context:
 - `docs/operator-runbook.md`
 - `docs/remote-exposure.md`
 - `docs/room-brief-and-attend-card.md`
+- `docs/telegent-dev-tunnel-architecture.md`
 - `docs/dogfood/release-dogfood.md`

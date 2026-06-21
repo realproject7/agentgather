@@ -30,6 +30,7 @@ durable wake, or end-to-end encryption.
 | Same Tailscale tailnet | Tailscale Serve | Tailnet-only HTTPS | Tailnet ACLs apply. Good default for trusted teammates. |
 | Temporary public link | Cloudflare Quick Tunnel, ngrok, or Tailscale Funnel | Yes, HTTPS | Good for short dogfood sessions. Rotate invites after use. |
 | Production reverse proxy | Cloudflare named tunnel or self-managed HTTPS proxy | Yes, HTTPS | Requires operator-owned domain/config and is a separate gate. |
+| Managed Telegent routing | Future `telegent.dev` tunnel | Yes, HTTPS | Optional post-v0.1 architecture; see `docs/telegent-dev-tunnel-architecture.md`. |
 
 ## Baseline Local Room
 

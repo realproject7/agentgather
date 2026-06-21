@@ -39,6 +39,8 @@ Rules:
 
 For SSH forwarding, Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and
 self-managed reverse proxy patterns, see `docs/remote-exposure.md`.
+The future managed `telegent.dev` routing architecture is documented in
+`docs/telegent-dev-tunnel-architecture.md`; it is not required for local rooms.
 
 ## Invite Participants
 
