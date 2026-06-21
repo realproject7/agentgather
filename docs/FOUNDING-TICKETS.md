@@ -291,6 +291,9 @@ long-poll lifecycle handled in Ticket 3B.
   never from client body fields.
 - At message append time, call the Ticket 2 mention parser with the live
   participant roster so mentions resolve against current room membership.
+- At message append time, enforce `client_msg_id` idempotency per participant:
+  a retried append with the same `(participant, client_msg_id)` returns the
+  original message instead of appending a duplicate.
 - Return the flat standard error contract:
   `{ "ok": false, "error": "code", "message": "human-readable reason" }`.
 - Require TLS or another secure tunnel for any non-localhost exposure.
@@ -316,6 +319,8 @@ long-poll lifecycle handled in Ticket 3B.
 
 - API integration tests cover every non-`/wait` endpoint.
 - Auth tests prove one participant cannot spoof another participant's `from`.
+- Idempotency tests prove duplicate `(participant, client_msg_id)` submissions
+  return the original message without appending another JSONL line.
 - `/brief` tests cover read access, host-only update access, version increment,
   and system-message emission.
 - `/card` tests prove the current brief is included and the card is rendered
