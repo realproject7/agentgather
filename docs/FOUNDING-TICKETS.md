@@ -203,6 +203,8 @@ the operator's machine before delegating headless work.
 
 ## Ticket 2: Define room storage, protocol objects, brief model, validation, and log writer
 
+Depends on: repository scaffold from Ticket 1.
+
 ### Goal
 
 Implement the durable local data model that makes a Telegent room safe,
@@ -215,12 +217,15 @@ recoverable, and easy for agents to inspect.
 - Repo path: `test/fixtures/`
 - Reference: `/Users/cho/Projects/telegent-lite/server.js` (operator-local dogfood reference only; do not import from it)
 - In-repo proposal copy: `docs/PROPOSAL.md`,
-  sections §9, §10, §12.1-§12.4
+  sections §9, especially §9.4 Room Brief, §10, §12.1-§12.4
 
 ### Scope
 
 - Define Room, Participant, Invite, RoomBrief, Message, WaitResponse, and error
   objects.
+- Implement product source as TypeScript `.ts` files. Static browser assets in
+  later tickets may use `.html`, `.css`, and `.js`, but runtime CLI/server
+  source should not be written as loose JavaScript.
 - Enforce safe slug validation for room IDs and aliases: lowercase
   `[a-z0-9-]`, no dots, no separators, no traversal.
 - Implement room directory layout under `~/.telegent/rooms/<room>/`.
@@ -231,8 +236,9 @@ recoverable, and easy for agents to inspect.
 - Store participant cursors separately from message history.
 - Track `brief_version`, `brief_updated_at`, and `brief_updated_by` in room
   state.
-- Parse mentions against the current participant roster while ignoring fenced
-  code blocks and inline code spans.
+- Implement a pure mention parser that accepts message text plus a participant
+  roster and returns resolved aliases while ignoring fenced code blocks and
+  inline code spans.
 
 ### Acceptance Criteria
 
@@ -255,6 +261,8 @@ and fixture-testable.
 
 ## Ticket 3A: Implement host room HTTP API core and security contract
 
+Depends on: #3.
+
 ### Goal
 
 Expose the room as a host-run HTTP API that agents, curl participants, the CLI,
@@ -266,16 +274,23 @@ long-poll lifecycle handled in Ticket 3B.
 - Repo path: `src/server/`
 - Repo path: `src/auth/`
 - Repo path: `test/server/`
+- Extend existing CLI-independent TypeScript source; do not introduce loose
+  runtime `.js` server code.
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §9.4, §11.1, §12.1-§12.6, §12.8, §13, §15.1
 
 ### Scope
 
 - Serve `GET /` as the static browser room shell.
+- Provide a stable server asset lookup for `GET /`; Ticket 6 owns the static
+  browser files and build-copy packaging that makes those assets available from
+  the installed package.
 - Implement `/brief`, `/card`, `/join`, `/messages`, `/leave`, `/close`, and
   `/status`.
 - Bind sender identity from the authenticated token or host-local session,
   never from client body fields.
+- At message append time, call the Ticket 2 mention parser with the live
+  participant roster so mentions resolve against current room membership.
 - Return the flat standard error contract:
   `{ "ok": false, "error": "code", "message": "human-readable reason" }`.
 - Require TLS or another secure tunnel for any non-localhost exposure.
@@ -320,6 +335,8 @@ tested with integration fixtures.
 
 ## Ticket 3B: Implement `/wait`, TTL auto-close, and lifecycle delivery
 
+Depends on: #3.
+
 ### Goal
 
 Implement the long-poll attendance primitive that lets no-install agents stay in
@@ -329,6 +346,7 @@ the room without push infrastructure.
 
 - Repo path: `src/server/wait.ts`
 - Repo path: `test/server/wait.test.ts`
+- Implement as TypeScript `.ts`; do not add loose runtime `.js` server files.
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §8.3, §9.6, §12.5, §12.7, §12.8, §13.6
 
@@ -362,6 +380,8 @@ isolated fake-clock tests and a focused review.
 
 ## Ticket 4: Implement room lifecycle CLI commands
 
+Depends on: #3 and #4.
+
 ### Goal
 
 Give the host and participants a small, predictable CLI for creating, joining,
@@ -370,12 +390,16 @@ leaving, inspecting, and closing rooms.
 ### Where
 
 - Repo path: `src/cli/`
-- Repo path: `src/commands/room/`
+- Repo path: `src/cli/commands/room/`
+- Extend the existing CLI router in `src/cli/index.ts` and help text in
+  `src/cli/help.ts`.
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §8.1, §8.2, §9.3, §17 Phase 1
 
 ### Scope
 
+- Implement CLI command source as TypeScript `.ts` files under
+  `src/cli/commands/<area>/`.
 - Implement `telegent room start`.
 - Implement `telegent room brief set` and `telegent room brief view`.
 - Implement `telegent room serve`.
@@ -407,6 +431,8 @@ home directories and HTTP fixtures.
 
 ## Ticket 5: Implement agent messaging CLI, `/wait` attendance, and handoff
 
+Depends on: #4 and #5.
+
 ### Goal
 
 Make Telegent useful from inside agent sessions by providing simple messaging,
@@ -414,14 +440,18 @@ reading, attendance, reply, and handoff commands.
 
 ### Where
 
-- Repo path: `src/commands/message/`
-- Repo path: `src/commands/watch/`
-- Repo path: `src/handoff/`
+- Repo path: `src/cli/commands/message/`
+- Repo path: `src/cli/commands/watch/`
+- Repo path: `src/cli/commands/handoff/`
+- Extend the existing CLI router in `src/cli/index.ts` and help text in
+  `src/cli/help.ts`.
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §8.3-§8.6, §13.6, §14, §19.7
 
 ### Scope
 
+- Implement CLI command source as TypeScript `.ts` files under
+  `src/cli/commands/<area>/`.
 - Implement `telegent send`, `messages`, `read`, `reply`, and `watch`.
 - Implement `telegent instructions [--agent codex|claude|gemini]` to print the
   agent operating card and attendance instructions.
@@ -452,6 +482,8 @@ reading, attendance, reply, and handoff commands.
 
 ## Ticket 6: Implement static browser room shell and safe chat UX
 
+Depends on: #4.
+
 ### Goal
 
 Build the human-facing browser room as a single framework-free static page
@@ -462,12 +494,16 @@ served by the room server.
 - Repo path: `src/browser/room.html`
 - Repo path: `src/browser/room.css`
 - Repo path: `src/browser/room.js`
+- Repo path: `scripts/copy-assets.mjs`
 - Optional design package: `/Users/cho/Projects/z-design/telegent-design/` (operator-local, outside repo)
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §15.1-§15.4
 
 ### Scope
 
+- Keep the browser implementation framework-free, but add a build-copy step so
+  `pnpm build` ships `src/browser/room.html`, `room.css`, and `room.js` into
+  `dist/` for clean installs and package output.
 - Implement the chat-first layout: top bar, timeline, composer, collapsible
   roster rail.
 - Add compact design tokens for the browser room: color ramp, accent, type
@@ -487,13 +523,17 @@ served by the room server.
 
 ### Acceptance Criteria
 
-- The browser page loads from `GET /` with no build step and no framework.
+- The browser page is framework-free and has no browser bundler build.
+- `pnpm build` copies browser assets into `dist/`.
+- From a clean install or package output, `GET /` serves the shipped browser
+  asset rather than source-tree-only files.
 - Remote browser auth uses fragment token and never puts long-lived credentials
   in query strings.
 - XSS tests with HTML, script-like text, `javascript:` URLs, and code spans do
   not execute or create unsafe DOM.
 - Playwright or equivalent browser tests verify sending, receiving, dedupe,
-  empty state, error state, and room-closed state.
+  empty state, error state, room-closed state, brief panel rendering, and the
+  brief-updated indicator.
 - Browser tests verify brief rendering is XSS-safe and does not use untrusted
   `innerHTML`.
 - UI text does not overlap at desktop and narrow mobile widths.
@@ -506,6 +546,8 @@ static.
 
 ## Ticket 7: Implement roster, human controls, export, and diagnostics
 
+Depends on: #4 and #8.
+
 ### Goal
 
 Give human participants enough visibility and control to use Telegent like a
@@ -514,13 +556,17 @@ temporary chat room without turning it into a heavy orchestrator.
 ### Where
 
 - Repo path: `src/browser/`
-- Repo path: `src/commands/export/`
-- Repo path: `src/commands/doctor/`
+- Repo path: `src/cli/commands/export/`
+- Repo path: `src/cli/commands/doctor/`
+- Extend the existing CLI router in `src/cli/index.ts` and help text in
+  `src/cli/help.ts`.
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §7, §15.3-§15.5, §16, §17 Phase 2
 
 ### Scope
 
+- Implement CLI command source as TypeScript `.ts` files under
+  `src/cli/commands/<area>/`.
 - Render roster fields: alias, kind, location, install, attention, last seen.
 - Show observed state, not host-decreed mode.
 - Show a visible brief-updated indicator when `/status?json` reports a newer
@@ -549,6 +595,8 @@ browser control placement and visual verification.
 
 ## Ticket 8: Add end-to-end dogfood tests and acceptance fixtures
 
+Depends on: #4, #5, #6, #7, and #8.
+
 ### Goal
 
 Prove the MVP works through the exact collaboration pattern that motivated the
@@ -558,6 +606,8 @@ product: multiple agents and a human in one temporary room.
 
 - Repo path: `test/e2e/`
 - Repo path: `docs/dogfood/`
+- Test helpers should use TypeScript `.ts` where they compile with the project;
+  static fixtures may remain plain data files.
 - Current dogfood logs: `/Users/cho/.telegent-lite/rooms/` (operator-local references only; sanitize before copying fixtures)
 - In-repo proposal copy: `docs/PROPOSAL.md`,
   sections §16, §20, §22
@@ -590,6 +640,8 @@ product: multiple agents and a human in one temporary room.
 browser dogfood on this Mac.
 
 ## Ticket 9: Write public docs, security notes, and operator runbook
+
+Depends on: completion of MVP implementation issues #3 through #10.
 
 ### Goal
 
