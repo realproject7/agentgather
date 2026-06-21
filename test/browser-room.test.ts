@@ -83,6 +83,8 @@ test("build copies browser assets into dist", async () => {
   const js = await readFile(new URL("../src/browser/room.js", import.meta.url), "utf8");
   assert.match(html, /room.css/);
   assert.match(css, /room-shell/);
+  assert.match(css, /color-scheme: dark/);
+  assert.match(css, /message-bubble/);
   assert.match(js, /sessionStorage/);
 });
 
@@ -102,6 +104,7 @@ test("browser room joins with fragment token, sends, receives, and renders safel
 
     await postMessage(fixture, fixture.reviewerToken, "@host received in browser");
     await page.waitForSelector("text=@host received in browser");
+    await page.waitForSelector(".message-bubble");
 
     await postMessage(
       fixture,
@@ -114,6 +117,7 @@ test("browser room joins with fragment token, sends, receives, and renders safel
     assert.equal(await page.locator('.message-text a[href^="javascript:"]').count(), 0);
     assert.equal(await page.locator(".message-text a", { hasText: "https://example.com" }).count(), 1);
 
+    await page.screenshot({ path: path.join(fixture.root, "desktop-room.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 760 });
     await page.click("#roster-toggle");
     await page.screenshot({ path: path.join(fixture.root, "mobile-room.png"), fullPage: true });

@@ -282,12 +282,26 @@ function participantStatusText(participant) {
 function renderMessage(message) {
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
+  if (state.profile && message.from === state.profile.alias) item.classList.add("own");
   item.dataset.messageId = String(message.id);
 
   const time = document.createElement("time");
   time.className = "message-time";
   time.dateTime = message.ts;
   time.textContent = formatTime(message.ts);
+
+  if (message.type === "system") {
+    const pill = document.createElement("div");
+    pill.className = "system-pill";
+    const text = document.createElement("span");
+    text.className = "message-text";
+    appendRichText(text, message.text);
+    pill.append(time, text);
+    item.append(pill);
+    timeline.append(item);
+    item.scrollIntoView({ block: "nearest" });
+    return;
+  }
 
   const from = document.createElement("div");
   from.className = "message-from";
@@ -297,8 +311,16 @@ function renderMessage(message) {
   text.className = "message-text";
   appendRichText(text, message.text);
 
+  const meta = document.createElement("div");
+  meta.className = "message-meta";
+  meta.append(from, time);
+
+  const bubble = document.createElement("div");
+  bubble.className = "message-bubble";
+  bubble.append(meta, text);
+
   item.addEventListener("dblclick", () => setReply(message));
-  item.append(time, from, text);
+  item.append(bubble);
   timeline.append(item);
   item.scrollIntoView({ block: "nearest" });
 }

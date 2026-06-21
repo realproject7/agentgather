@@ -9,7 +9,7 @@
   <body>
     <main class="room-shell" data-state="loading">
       <header class="topbar">
-        <div>
+        <div class="room-heading">
           <div class="eyebrow">Telegent</div>
           <h1 id="room-title">Room</h1>
         </div>
@@ -39,14 +39,14 @@
         </form>
       </section>
 
-      <section class="brief-panel" aria-live="polite">
-        <div class="brief-heading">
+      <details class="brief-panel" aria-live="polite" open>
+        <summary class="brief-heading">
           <span>Room Brief</span>
           <span id="brief-version">v0</span>
-        </div>
+        </summary>
         <button id="brief-refresh" class="brief-refresh" type="button" hidden>Brief updated. Refresh</button>
         <p id="brief-body">Loading brief...</p>
-      </section>
+      </details>
 
       <section class="workspace">
         <section class="timeline-wrap" aria-label="Room messages">
