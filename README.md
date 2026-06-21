@@ -81,6 +81,10 @@ Remote serving is opt-in. Plain non-localhost `http://` public URLs are
 rejected because bearer tokens must not cross the network without TLS or an
 equivalently secure tunnel.
 
+See [Remote Exposure Guide](docs/remote-exposure.md) for SSH forwarding,
+Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and self-managed reverse
+proxy patterns.
+
 In another shell using the same `TELEGENT_HOME`, invite a participant:
 
 ```bash
@@ -313,5 +317,6 @@ More design context:
 - `docs/PROPOSAL.md`
 - `docs/FOUNDING-TICKETS.md`
 - `docs/operator-runbook.md`
+- `docs/remote-exposure.md`
 - `docs/room-brief-and-attend-card.md`
 - `docs/dogfood/release-dogfood.md`

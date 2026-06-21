@@ -37,6 +37,9 @@ Rules:
 - do not publish invite URLs or card URLs in logs; they contain bearer tokens.
 - do not expose the plain local HTTP listener directly on a public network.
 
+For SSH forwarding, Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and
+self-managed reverse proxy patterns, see `docs/remote-exposure.md`.
+
 ## Invite Participants
 
 Installed participant:
