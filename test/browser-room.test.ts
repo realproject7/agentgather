@@ -139,8 +139,8 @@ test("browser room joins with fragment token, sends, receives, and renders safel
   }
 });
 
-test("browser roster, brief indicator, system filter, and send errors update without reload", async () => {
-  const fixture = await startFixture({ rateLimitPerMinute: 1 });
+test("browser roster, brief indicator, system filter, unknown mentions, and send errors update without reload", async () => {
+  const fixture = await startFixture({ rateLimitPerMinute: 2 });
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
@@ -177,6 +177,10 @@ test("browser roster, brief indicator, system filter, and send errors update wit
     await page.fill("#message-text", "@reviewer first send");
     await page.click("#send-button");
     await page.waitForSelector("text=@reviewer first send");
+    await page.fill("#message-text", "@gpt typo mention");
+    await page.click("#send-button");
+    await page.waitForSelector("text=@gpt not in this room; not delivered as a mention.");
+    await page.waitForSelector("text=@gpt typo mention");
     await page.fill("#message-text", "@reviewer second send");
     await page.click("#send-button");
     await page.waitForSelector("text=rate limit exceeded");

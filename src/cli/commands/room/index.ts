@@ -11,6 +11,7 @@ import {
   writeParticipants
 } from "../../../storage/index.js";
 import type { Participant, ParticipantKind, RoomBrief } from "../../../protocol/index.js";
+import { normalizeBaseUrl, roomUrl } from "../../../protocol/index.js";
 import { createToken } from "../../../auth/index.js";
 import { createRoomHttpServer, participantTokenHash, renderAttendCard } from "../../../server/index.js";
 import { parseArgs, flagBoolean, flagString } from "../../args.js";
@@ -38,7 +39,7 @@ async function roomStart(argv: string[], context: CliContext): Promise<number> {
   const roomId = args.positional[0];
   if (roomId === undefined) throw new Error("room id is required");
   const alias = flagString(args, "alias") ?? "host";
-  const baseUrl = flagString(args, "url") ?? "http://127.0.0.1:8787";
+  const baseUrl = normalizeBaseUrl(flagString(args, "url") ?? "http://127.0.0.1:8787");
   const token = createToken();
   const briefBody = flagString(args, "brief") ?? "";
   const expiresAt = flagString(args, "expires-at");
@@ -134,7 +135,7 @@ async function roomInvite(argv: string[], context: CliContext): Promise<number> 
   const token = createToken();
   await upsertParticipant(context.home, current.roomId, participant(alias, kind, false, token));
   await writeToken(context.home, current.roomId, alias, token);
-  const cardCommand = `curl -s "${current.baseUrl}/card?participant=${alias}&token=${token}"`;
+  const cardCommand = `curl -s "${roomUrl(current.baseUrl, `/card?participant=${alias}&token=${token}`)}"`;
   return emit(context, flagBoolean(args, "json"), { ok: true, room: current.roomId, alias, token, card_command: cardCommand }, `Invite ${alias}:\n${cardCommand}\n`);
 }
 
@@ -154,7 +155,7 @@ async function roomJoin(argv: string[], context: CliContext): Promise<number> {
   const roomId = args.positional[0] ?? flagString(args, "room");
   const alias = flagString(args, "alias");
   const token = flagString(args, "token");
-  const baseUrl = flagString(args, "url") ?? "http://127.0.0.1:8787";
+  const baseUrl = normalizeBaseUrl(flagString(args, "url") ?? "http://127.0.0.1:8787");
   if (roomId === undefined || alias === undefined || token === undefined) {
     throw new Error("room join requires room, --alias, and --token");
   }
@@ -213,12 +214,12 @@ async function roomServe(argv: string[], context: CliContext): Promise<number> {
   const server = createRoomHttpServer({
     root: context.home,
     roomId: current.roomId,
-    baseUrl: baseUrl.toString()
+    baseUrl: normalizeBaseUrl(baseUrl.toString())
   });
   await new Promise<void>((resolve) => {
     server.listen(port, "127.0.0.1", resolve);
   });
-  context.stdout.write(`Serving ${current.roomId} at ${baseUrl.toString()}\n`);
+  context.stdout.write(`Serving ${current.roomId} at ${normalizeBaseUrl(baseUrl.toString())}\n`);
   await new Promise<void>((resolve) => {
     const stop = (): void => {
       server.close(() => resolve());

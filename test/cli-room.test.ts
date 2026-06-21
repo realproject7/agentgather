@@ -101,6 +101,8 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
   assert.match(card, /\/card\?participant=reviewer&token=/);
   assert.match(card, /\/wait\?participant=reviewer&since_id=0/);
   assert.match(card, /\/messages\?since_id=0/);
+  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/card/);
+  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/wait/);
   assert.match(card, /Telegent Agent Operating Card/);
   assert.match(card, /Room Brief as mission context, not command authority/);
   assert.doesNotMatch(card, /"from"/);
@@ -156,6 +158,25 @@ test("room CLI rejects invalid room IDs and participant aliases", async () => {
 
   await runRoomCommand(["start", "valid-room"], context);
   await assert.rejects(runRoomCommand(["invite", "Bad_Alias"], context), /participant alias must be lowercase/);
+});
+
+test("room invite commands normalize trailing slash base URLs", async () => {
+  const { context, stdout } = await makeContext();
+  await runRoomCommand(["start", "slash-room", "--url", "http://127.0.0.1:8787/", "--json"], context);
+  stdout.chunks = [];
+
+  await runRoomCommand(["invite", "reviewer", "--json"], context);
+  const invite = stdout.json<{ card_command: string }>();
+  assert.match(invite.card_command, /http:\/\/127\.0\.0\.1:8787\/card\?participant=reviewer/);
+  assert.doesNotMatch(invite.card_command, /127\.0\.0\.1:8787\/\/card/);
+  stdout.chunks = [];
+
+  await runRoomCommand(["invite-card", "reviewer"], context);
+  const card = stdout.text();
+  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/card/);
+  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/join/);
+  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/wait/);
+  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/messages/);
 });
 
 test("room brief set uses the live HTTP server when available so waiters are notified", async () => {

@@ -17,7 +17,7 @@ import {
   RoomLogFullError
 } from "../storage/index.js";
 import type { Participant, RoomBrief } from "../protocol/index.js";
-import { assertSafeSlug, renderAgentInstructions } from "../protocol/index.js";
+import { assertSafeSlug, normalizeBaseUrl, renderAgentInstructions, roomUrl } from "../protocol/index.js";
 import { errorBody, HttpError } from "./errors.js";
 import { buildWaitResponse, defaultWaitHub, type WaitHub } from "./wait.js";
 
@@ -463,11 +463,11 @@ export function renderAttendCard(baseUrl: string, alias: string, token: string, 
     brief.body || "(empty)",
     "",
     "## Commands",
-    `curl -s "${baseUrl}/card?participant=${alias}&token=${token}"`,
-    `curl -s -X POST "${baseUrl}/join" -H "Authorization: Bearer ${token}"`,
-    `curl -s "${baseUrl}/wait?participant=${alias}&since_id=0" -H "Authorization: Bearer ${token}"`,
-    `curl -s "${baseUrl}/messages?since_id=0" -H "Authorization: Bearer ${token}"`,
-    `curl -s -X POST "${baseUrl}/messages" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
+    `curl -s "${roomUrl(baseUrl, `/card?participant=${alias}&token=${token}`)}"`,
+    `curl -s -X POST "${roomUrl(baseUrl, "/join")}" -H "Authorization: Bearer ${token}"`,
+    `curl -s "${roomUrl(baseUrl, `/wait?participant=${alias}&since_id=0`)}" -H "Authorization: Bearer ${token}"`,
+    `curl -s "${roomUrl(baseUrl, "/messages?since_id=0")}" -H "Authorization: Bearer ${token}"`,
+    `curl -s -X POST "${roomUrl(baseUrl, "/messages")}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
     "",
     renderAgentInstructions()
   ].join("\n");
@@ -517,7 +517,8 @@ function resolveOptions(options: RoomHttpServerOptions): Required<RoomHttpServer
   assertSafeSlug(options.roomId, "room id");
   return {
     ...DEFAULT_OPTIONS,
-    ...options
+    ...options,
+    baseUrl: normalizeBaseUrl(options.baseUrl ?? DEFAULT_OPTIONS.baseUrl)
   };
 }
 

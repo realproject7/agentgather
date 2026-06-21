@@ -100,6 +100,7 @@ test("/wait heartbeat returns keep_waiting and next_cmd", async () => {
     assert.equal(waited.body.heartbeat, true);
     assert.equal(waited.body.keep_waiting, true);
     assert.equal(String(waited.body.next_cmd).includes("/wait?participant=agent&since_id=0"), true);
+    assert.equal(String(waited.body.next_cmd).includes("//wait?participant="), false);
   } finally {
     await fixture.close();
   }

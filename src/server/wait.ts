@@ -1,4 +1,4 @@
-import type { Message, WaitResponse } from "../protocol/index.js";
+import { roomUrl, type Message, type WaitResponse } from "../protocol/index.js";
 
 export interface BuildWaitResponseOptions {
   room: string;
@@ -51,7 +51,7 @@ export function buildWaitResponse(options: BuildWaitResponseOptions): WaitRespon
     next_since_id: nextSinceId,
     keep_waiting: options.keepWaiting,
     next_cmd: options.keepWaiting
-      ? `curl -s "${options.baseUrl}/wait?participant=${options.participant}&since_id=${nextSinceId}" -H "Authorization: Bearer $TOKEN"`
+      ? `curl -s "${roomUrl(options.baseUrl, `/wait?participant=${options.participant}&since_id=${nextSinceId}`)}" -H "Authorization: Bearer $TOKEN"`
       : null
   };
 }

@@ -130,6 +130,11 @@ async function submitMessage() {
   const text = messageText.value.trim();
   if (!text) return;
   sendError.hidden = true;
+  const unknownMentions = findUnknownMentions(text);
+  if (unknownMentions.length > 0) {
+    sendError.hidden = false;
+    sendError.textContent = `${unknownMentions.map((alias) => `@${alias}`).join(", ")} not in this room; not delivered as a mention.`;
+  }
   const body = {
     text,
     client_msg_id: `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -283,6 +288,18 @@ function appendTextWithTokens(parent, text) {
 
 function appendText(parent, text) {
   if (text) parent.append(document.createTextNode(text));
+}
+
+function findUnknownMentions(text) {
+  const found = [];
+  const seen = new Set();
+  for (const match of text.matchAll(/(^|[^\w-])@([a-z0-9-]+)/g)) {
+    const alias = match[2];
+    if (!alias || state.participants.has(alias) || seen.has(alias)) continue;
+    seen.add(alias);
+    found.push(alias);
+  }
+  return found;
 }
 
 function isSafeHref(value) {
