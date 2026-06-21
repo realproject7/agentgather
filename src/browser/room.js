@@ -258,14 +258,25 @@ function renderParticipants(participants) {
   for (const participant of participants) {
     const item = document.createElement("li");
     item.className = "participant";
+    item.dataset.attendanceState = participant.attendance_state || participant.attention;
     const name = document.createElement("strong");
     name.textContent = participant.display_name || participant.alias;
+    const status = document.createElement("span");
+    status.className = "participant-status";
+    status.textContent = participantStatusText(participant);
     const meta = document.createElement("span");
     const alias = participant.display_name ? `@${participant.alias} · ` : "";
-    meta.textContent = `${alias}${participant.kind} · ${participant.location} · ${participant.install} · ${participant.attention} · ${formatRelative(participant.lastSeenAt)}`;
-    item.append(name, meta);
+    meta.textContent = `${alias}${participant.kind} · ${participant.location} · ${participant.install} · ${participant.attendance_state || participant.attention} · ${formatRelative(participant.lastSeenAt)}`;
+    item.append(name, status, meta);
     participantList.append(item);
   }
+}
+
+function participantStatusText(participant) {
+  const state = participant.attendance_state || participant.attention;
+  if (state === "stale") return "stale";
+  if (state === "not_attending") return "not attending";
+  return state;
 }
 
 function renderMessage(message) {

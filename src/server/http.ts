@@ -67,6 +67,7 @@ const DEFAULT_OPTIONS = {
 
 const rateBuckets = new Map<string, { resetAt: number; count: number }>();
 const loopCounts = new Map<string, number>();
+const ATTENDANCE_STALE_AFTER_MS = 90_000;
 
 export function createRoomHttpServer(options: RoomHttpServerOptions): Server {
   const resolved = resolveOptions(options);
@@ -342,6 +343,7 @@ async function getStatus(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   const paths = roomPaths(context.options.root, context.options.roomId);
   const [state, participants] = await Promise.all([readRoomState(paths), readParticipants(paths)]);
+  const now = Date.now();
   sendJson(context.res, 200, {
     ok: true,
     room: state.id,
@@ -350,16 +352,47 @@ async function getStatus(context: RequestContext): Promise<void> {
     room_status: state.status,
     brief_version: state.brief_version,
     attendance_policy: state.attendance_policy,
+    stale_after_ms: ATTENDANCE_STALE_AFTER_MS,
     brief_updated_at: state.brief_updated_at,
     brief_updated_by: state.brief_updated_by,
-    participants: participants.map((participant) => publicParticipant(participant))
+    participants: participants.map((participant) => publicParticipant(participant, state.attendance_policy, now))
   });
 }
 
-function publicParticipant(participant: Participant): Omit<Participant, "token_hash"> {
+type PublicParticipant = Omit<Participant, "token_hash"> & {
+  attendance_required: boolean;
+  attendance_state: Participant["attention"] | "not_attending" | "stale";
+  last_seen_age_ms: number;
+  stale_after_ms: number;
+};
+
+function publicParticipant(
+  participant: Participant,
+  attendancePolicy: AttendancePolicy = "manual-ok",
+  now = Date.now()
+): PublicParticipant {
   const publicFields: Participant = { ...participant };
   delete publicFields.token_hash;
-  return publicFields;
+  const lastSeenAt = Date.parse(participant.lastSeenAt);
+  const lastSeenAgeMs = Number.isFinite(lastSeenAt) ? Math.max(0, now - lastSeenAt) : Number.MAX_SAFE_INTEGER;
+  const attendanceRequired = isForegroundRequired(attendancePolicy, participant);
+  const foreground = participant.attention === "attending" || participant.attention === "managed";
+  const stale = foreground && lastSeenAgeMs > ATTENDANCE_STALE_AFTER_MS;
+  return {
+    ...publicFields,
+    attendance_required: attendanceRequired,
+    attendance_state:
+      attendanceRequired && !foreground ? "not_attending" : stale ? "stale" : participant.attention,
+    last_seen_age_ms: lastSeenAgeMs,
+    stale_after_ms: ATTENDANCE_STALE_AFTER_MS
+  };
+}
+
+function isForegroundRequired(policy: AttendancePolicy, participant: Participant): boolean {
+  if (participant.removed_at !== undefined || participant.kind === "system") return false;
+  if (policy === "agents-foreground") return participant.kind === "agent";
+  if (policy === "all-foreground") return true;
+  return false;
 }
 
 async function touchParticipant(
@@ -586,6 +619,12 @@ export function renderAttendCard(
     `telegent attend --json`,
     `curl -s "${roomUrl(baseUrl, "/messages?since_id=0")}" -H "Authorization: Bearer ${token}"`,
     `curl -s -X POST "${roomUrl(baseUrl, "/messages")}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
+    "",
+    "## Attendance Recovery",
+    "If you run a tool command or shell script, return to foreground attendance immediately after it finishes:",
+    "telegent attend --json",
+    "If a shell command contains pipes, quotes, or `${...}`, ask the host for a script file and run one quote-free command such as `bash /path/to/script.sh`.",
+    "If the attend loop stops, Telegent v0.1 cannot wake this session automatically; the host will see you as stale until you rejoin or attend again.",
     "",
     renderAgentInstructions()
   ].join("\n");

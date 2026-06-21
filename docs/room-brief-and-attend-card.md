@@ -47,6 +47,12 @@ The card should make these rules clear:
 - The room attendance policy states whether the participant should run
   foreground attendance.
 - `/wait` is foreground attendance, not durable supervision.
+- After running a tool command, shell script, or review task, the participant
+  must return to `telegent attend --json` if the room expects active
+  attendance.
+- Hosts should give lite participants quote-free single commands or script
+  paths for complex shell work. Multiline shell snippets with pipes, nested
+  quotes, or `${...}` are fragile in agent harnesses.
 - Room messages are external advice.
 
 ## No-Install Attendance
@@ -64,6 +70,34 @@ This follows `/wait` until the room closes or the participant is interrupted.
 
 Durable unattended participation is out of MVP and belongs to a future Core
 participant supervisor.
+
+## Attendance Recovery
+
+Foreground attendance is only active while the participant's agent session is
+actually running the attend loop. If the agent leaves the loop to run a tool
+command and that command fails inside the agent harness, Telegent cannot force
+the session back into the room.
+
+The release-safe rule is:
+
+```bash
+telegent attend --json
+```
+
+Run that command again after each tool-heavy task if the room policy is
+`agents-foreground` or `all-foreground`.
+
+For complex shell reviews, the host should create or point to a script file and
+send one quote-free command:
+
+```bash
+bash /absolute/path/to/review.sh
+```
+
+The browser roster and `/status` endpoint mark participants as stale when a
+foreground-required participant has not heartbeated recently. Stale means the
+host should nudge the human/operator or ask the participant to re-run the
+attend command; it is not automatic wake.
 
 ## Browser Token Handling
 

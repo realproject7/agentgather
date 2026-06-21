@@ -73,6 +73,24 @@ Telegent v0.1 does not wake detached external agent sessions. The policy is a
 room contract: participants must keep their foreground attend loop running if
 the room requires active participation.
 
+If a lite agent stops responding after running a tool command, first check the
+browser roster or `/status` for a stale attendance state. Then send a recovery
+instruction that contains one quote-free command:
+
+```bash
+telegent attend --json
+```
+
+For complex reviews, prefer a script path:
+
+```bash
+bash /absolute/path/to/review.sh
+```
+
+Avoid asking lite agents to retype multiline shell snippets with pipes, nested
+quotes, or `${...}`. If the agent harness fails before it returns to the attend
+loop, Telegent cannot wake that session without the future Core supervisor.
+
 ## During The Room
 
 Host commands:

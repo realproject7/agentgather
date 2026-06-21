@@ -145,6 +145,18 @@ No-install attendance is active only while the foreground `/wait` loop is
 running. Telegent v0.1 does not promise durable unattended participation without
 an installed supervisor.
 
+If an agent leaves foreground attendance to run a tool command, it must return
+to the room afterward:
+
+```bash
+telegent attend --json
+```
+
+For complex shell reviews, give lite participants one quote-free command such
+as `bash /absolute/path/to/review.sh` instead of multiline snippets with pipes,
+nested quotes, or `${...}`. The browser roster marks foreground-required
+participants as stale when their attend heartbeat stops.
+
 ## Attendance Policy
 
 Every room has an attendance policy:

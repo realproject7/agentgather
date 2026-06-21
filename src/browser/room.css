@@ -310,6 +310,31 @@ pre {
   font-size: 12px;
 }
 
+.participant-status {
+  width: fit-content;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.participant[data-attendance-state="attending"] .participant-status,
+.participant[data-attendance-state="managed"] .participant-status {
+  border-color: #99f6e4;
+  background: #ecfdf5;
+  color: var(--accent-strong);
+}
+
+.participant[data-attendance-state="not_attending"] .participant-status,
+.participant[data-attendance-state="stale"] .participant-status {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: var(--warn);
+}
+
 .rail-actions {
   display: grid;
   gap: 8px;

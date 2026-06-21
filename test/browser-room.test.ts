@@ -189,6 +189,26 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
     ]);
     await page.waitForSelector("text=agent · local · lite · away");
 
+    const attendanceResponse = await fetch(`${fixture.baseUrl}/attendance`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fixture.hostToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ policy: "agents-foreground" })
+    });
+    assert.equal(attendanceResponse.status, 200);
+    await writeParticipants(fixture.root, fixture.roomId, [
+      participant("host", "human", true, fixture.hostToken),
+      {
+        ...participant("reviewer", "agent", false, fixture.reviewerToken),
+        attention: "attending",
+        lastSeenAt: new Date(Date.now() - 120_000).toISOString()
+      }
+    ]);
+    await page.waitForSelector(".participant[data-attendance-state='stale']");
+    await page.waitForSelector("text=agent · local · lite · stale");
+
     const briefResponse = await fetch(`${fixture.baseUrl}/brief`, {
       method: "POST",
       headers: {
