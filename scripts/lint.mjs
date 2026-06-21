@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+
+const root = process.cwd();
+const textExtensions = new Set([".ts", ".js", ".mjs", ".json", ".md"]);
+const ignoredDirs = new Set([".git", "node_modules", "dist", "coverage"]);
+const errors = [];
+
+async function walk(dir) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (ignoredDirs.has(entry.name)) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await walk(fullPath);
+      continue;
+    }
+    if (!textExtensions.has(path.extname(entry.name))) continue;
+    const text = await readFile(fullPath, "utf8");
+    const rel = path.relative(root, fullPath);
+    if (rel === "docs/PROPOSAL.md") continue;
+    const lines = text.split("\n");
+    lines.forEach((line, index) => {
+      if (/[ \t]+$/.test(line)) {
+        errors.push(`${rel}:${index + 1}: trailing whitespace`);
+      }
+    });
+    if (!text.endsWith("\n")) {
+      errors.push(`${rel}: missing final newline`);
+    }
+  }
+}
+
+await walk(root);
+
+if (errors.length > 0) {
+  for (const error of errors) console.error(error);
+  process.exit(1);
+}
