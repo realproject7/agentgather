@@ -1,0 +1,190 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { AddressInfo, createServer as createNetServer } from "node:net";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { chromium } from "playwright";
+import type { Participant } from "../src/protocol/index.js";
+import { createRoom, writeParticipants } from "../src/storage/index.js";
+import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
+
+async function makeRoot(): Promise<string> {
+  return mkdtemp(path.join(os.tmpdir(), "telegent-browser-test-"));
+}
+
+async function startFixture(): Promise<{
+  root: string;
+  roomId: string;
+  baseUrl: string;
+  hostToken: string;
+  reviewerToken: string;
+  close: () => Promise<void>;
+}> {
+  const root = await makeRoot();
+  const roomId = `browser-${Math.random().toString(36).slice(2, 10)}`;
+  const hostToken = `host-${roomId}`;
+  const reviewerToken = `reviewer-${roomId}`;
+  await createRoom({
+    root,
+    roomId,
+    hostAlias: "host",
+    briefBody: "Ship the browser room safely."
+  });
+  await writeParticipants(root, roomId, [
+    participant("host", "human", true, hostToken),
+    participant("reviewer", "agent", false, reviewerToken)
+  ]);
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const server = createRoomHttpServer({
+    root,
+    roomId,
+    baseUrl,
+    rateLimitPerMinute: 1_000
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  return {
+    root,
+    roomId,
+    baseUrl,
+    hostToken,
+    reviewerToken,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      })
+  };
+}
+
+async function getFreePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  return address.port;
+}
+
+test("build copies browser assets into dist", async () => {
+  const html = await readFile(new URL("../src/browser/room.html", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/browser/room.css", import.meta.url), "utf8");
+  const js = await readFile(new URL("../src/browser/room.js", import.meta.url), "utf8");
+  assert.match(html, /room.css/);
+  assert.match(css, /room-shell/);
+  assert.match(js, /sessionStorage/);
+});
+
+test("browser room joins with fragment token, sends, receives, and renders safely", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(page.url(), `${fixture.baseUrl}/`);
+
+    await page.fill("#message-text", "@reviewer hello from browser");
+    await page.click("#send-button");
+    await page.waitForSelector("text=@reviewer hello from browser");
+
+    await postMessage(fixture, fixture.reviewerToken, "@host received in browser");
+    await page.waitForSelector("text=@host received in browser");
+
+    await postMessage(
+      fixture,
+      fixture.reviewerToken,
+      "<img src=x onerror=\"window.__xss=1\"> javascript:alert(1) https://example.com ` <script>bad</script> `"
+    );
+    await page.waitForSelector("text=https://example.com");
+    assert.equal(await page.evaluate(() => (window as Window & { __xss?: unknown }).__xss), undefined);
+    assert.equal(await page.locator(".message-text script").count(), 0);
+    assert.equal(await page.locator('.message-text a[href^="javascript:"]').count(), 0);
+    assert.equal(await page.locator(".message-text a", { hasText: "https://example.com" }).count(), 1);
+
+    await page.setViewportSize({ width: 390, height: 760 });
+    await page.click("#roster-toggle");
+    await page.screenshot({ path: path.join(fixture.root, "mobile-room.png"), fullPage: true });
+    const layout = await page.evaluate(() => {
+      const composerElement = document.querySelector(".composer");
+      const topbarElement = document.querySelector(".topbar");
+      const textareaElement = document.querySelector("#message-text");
+      if (composerElement === null || topbarElement === null || textareaElement === null) {
+        throw new Error("browser room layout elements are missing");
+      }
+      const composer = composerElement.getBoundingClientRect();
+      const topbar = topbarElement.getBoundingClientRect();
+      const textarea = textareaElement.getBoundingClientRect();
+      return {
+        composerBelowTopbar: composer.top >= topbar.bottom,
+        textareaInsideViewport: textarea.left >= 0 && textarea.right <= window.innerWidth
+      };
+    });
+    assert.equal(layout.composerBelowTopbar, true);
+    assert.equal(layout.textareaInsideViewport, true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("guest browser uses fragment token without host controls and room close disables composer", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(await page.locator("#close-button").isHidden(), true);
+
+    await fetch(`${fixture.baseUrl}/close`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fixture.hostToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+    await page.waitForFunction(() => document.querySelector("#room-status")?.textContent === "closed");
+    assert.equal(await page.locator("#message-text").isDisabled(), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
+  return {
+    alias,
+    kind,
+    location: "local",
+    install: isHost ? "host" : "lite",
+    attention: "manual",
+    is_host: isHost,
+    token_hash: participantTokenHash(token),
+    joinedAt: "2026-06-21T00:00:00.000Z",
+    lastSeenAt: "2026-06-21T00:00:00.000Z"
+  };
+}
+
+async function postMessage(fixture: { baseUrl: string }, token: string, text: string): Promise<void> {
+  const response = await fetch(`${fixture.baseUrl}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ text })
+  });
+  assert.equal(response.status, 201);
+}

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
 import { hashToken, verifyToken } from "../auth/index.js";
 import {
@@ -75,6 +76,8 @@ async function handleRequest(context: RequestContext): Promise<void> {
 
   const { pathname } = context.url;
   if (context.req.method === "GET" && pathname === "/") return serveBrowserShell(context);
+  if (context.req.method === "GET" && pathname === "/room.css") return serveBrowserAsset(context, "room.css", "text/css; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/room.js") return serveBrowserAsset(context, "room.js", "text/javascript; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/brief") return getBrief(context);
   if (context.req.method === "POST" && pathname === "/brief") return postBrief(context);
   if (context.req.method === "GET" && pathname === "/card") return getCard(context);
@@ -89,20 +92,12 @@ async function handleRequest(context: RequestContext): Promise<void> {
 }
 
 async function serveBrowserShell(context: RequestContext): Promise<void> {
-  sendText(
-    context.res,
-    200,
-    [
-      "<!doctype html>",
-      "<meta charset=\"utf-8\">",
-      "<title>Telegent Room</title>",
-      "<main id=\"telegent-room\">",
-      "<header><h1>Telegent Room</h1></header>",
-      "<section id=\"telegent-timeline\" aria-live=\"polite\"></section>",
-      "<form id=\"telegent-composer\"><textarea name=\"text\"></textarea><button>Send</button></form>",
-      "</main>"
-    ].join("")
-  );
+  return serveBrowserAsset(context, "room.html", "text/html; charset=utf-8");
+}
+
+async function serveBrowserAsset(context: RequestContext, asset: string, contentType: string): Promise<void> {
+  const body = await readFile(new URL(`../browser/${asset}`, import.meta.url), "utf8");
+  sendText(context.res, 200, body, contentType);
 }
 
 async function getBrief(context: RequestContext): Promise<void> {
@@ -268,12 +263,14 @@ async function postClose(context: RequestContext): Promise<void> {
 }
 
 async function getStatus(context: RequestContext): Promise<void> {
-  await requireParticipant(context);
+  const auth = await requireParticipant(context);
   const paths = roomPaths(context.options.root, context.options.roomId);
   const [state, participants] = await Promise.all([readRoomState(paths), readParticipants(paths)]);
   sendJson(context.res, 200, {
     ok: true,
     room: state.id,
+    me: auth.participant.alias,
+    is_host: auth.participant.is_host,
     room_status: state.status,
     brief_version: state.brief_version,
     brief_updated_at: state.brief_updated_at,
@@ -485,9 +482,14 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.end(body);
 }
 
-function sendText(res: ServerResponse, status: number, body: string): void {
+function sendText(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  contentType = "text/html; charset=utf-8"
+): void {
   res.writeHead(status, {
-    "content-type": "text/html; charset=utf-8",
+    "content-type": contentType,
     "content-length": Buffer.byteLength(body)
   });
   res.end(body);
