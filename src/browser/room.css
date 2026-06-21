@@ -124,6 +124,16 @@ h1 {
   text-transform: uppercase;
 }
 
+.brief-refresh {
+  margin-top: 8px;
+  min-height: 30px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: #ecfdf5;
+  color: var(--accent-strong);
+  cursor: pointer;
+}
+
 #brief-body {
   margin: 6px 0 0;
   max-width: 900px;
@@ -149,6 +159,15 @@ h1 {
   min-height: 0;
   overflow: auto;
   padding: 16px 18px 20px;
+}
+
+.system-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .empty-state {
@@ -303,6 +322,20 @@ pre {
   opacity: 0.6;
 }
 
+.send-error {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: #fff7f7;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.timeline.hide-system .message.system {
+  display: none;
+}
+
 @media (max-width: 760px) {
   .topbar {
     align-items: flex-start;
@@ -348,4 +381,3 @@ pre {
     width: 100%;
   }
 }
-

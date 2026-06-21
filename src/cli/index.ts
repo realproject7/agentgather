@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { buildHelpText, VERSION } from "./help.js";
 import { createCliContext } from "./context.js";
+import { runDoctorCommand } from "./commands/doctor/index.js";
+import { runExportCommand } from "./commands/export/index.js";
 import { runHandoffCommand } from "./commands/handoff/index.js";
 import { runInstructionsCommand } from "./commands/instructions/index.js";
 import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } from "./commands/message/index.js";
@@ -29,6 +31,8 @@ async function main(argv: string[]): Promise<number> {
   if (command === "reply") return runReplyCommand(rest, createCliContext());
   if (command === "watch") return runWatchCommand(rest, createCliContext());
   if (command === "handoff") return runHandoffCommand(rest, createCliContext());
+  if (command === "export") return runExportCommand(rest, createCliContext());
+  if (command === "doctor") return runDoctorCommand(rest, createCliContext());
   if (command === "instructions") return runInstructionsCommand(rest, createCliContext());
 
   process.stderr.write(`Unknown command: ${command}\n\n${buildHelpText()}\n`);

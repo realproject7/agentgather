@@ -13,7 +13,7 @@ async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "telegent-browser-test-"));
 }
 
-async function startFixture(): Promise<{
+async function startFixture(options: { rateLimitPerMinute?: number } = {}): Promise<{
   root: string;
   roomId: string;
   baseUrl: string;
@@ -41,7 +41,7 @@ async function startFixture(): Promise<{
     root,
     roomId,
     baseUrl,
-    rateLimitPerMinute: 1_000
+    rateLimitPerMinute: options.rateLimitPerMinute ?? 1_000
   });
   await new Promise<void>((resolve) => {
     server.listen(port, "127.0.0.1", resolve);
@@ -133,6 +133,53 @@ test("browser room joins with fragment token, sends, receives, and renders safel
     });
     assert.equal(layout.composerBelowTopbar, true);
     assert.equal(layout.textareaInsideViewport, true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("browser roster, brief indicator, system filter, and send errors update without reload", async () => {
+  const fixture = await startFixture({ rateLimitPerMinute: 1 });
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    await writeParticipants(fixture.root, fixture.roomId, [
+      participant("host", "human", true, fixture.hostToken),
+      {
+        ...participant("reviewer", "agent", false, fixture.reviewerToken),
+        attention: "away",
+        lastSeenAt: new Date(Date.now() - 120_000).toISOString()
+      }
+    ]);
+    await page.waitForSelector("text=agent · local · lite · away");
+
+    const briefResponse = await fetch(`${fixture.baseUrl}/brief`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fixture.hostToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ body: "Updated browser brief" })
+    });
+    assert.equal(briefResponse.status, 200);
+    await page.waitForSelector("text=Brief updated. Refresh");
+    await page.click("#brief-refresh");
+    await page.waitForSelector("text=Updated browser brief");
+
+    await page.waitForSelector("text=Room brief updated to v2");
+    await page.uncheck("#system-filter");
+    assert.equal(await page.locator(".message.system", { hasText: "Room brief updated to v2" }).isHidden(), true);
+
+    await page.fill("#message-text", "@reviewer first send");
+    await page.click("#send-button");
+    await page.waitForSelector("text=@reviewer first send");
+    await page.fill("#message-text", "@reviewer second send");
+    await page.click("#send-button");
+    await page.waitForSelector("text=rate limit exceeded");
   } finally {
     await browser.close();
     await fixture.close();

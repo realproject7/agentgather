@@ -16,13 +16,16 @@ const roomStatus = document.getElementById("room-status");
 const participantCount = document.getElementById("participant-count");
 const briefVersion = document.getElementById("brief-version");
 const briefBody = document.getElementById("brief-body");
+const briefRefresh = document.getElementById("brief-refresh");
 const emptyState = document.getElementById("empty-state");
 const timeline = document.getElementById("timeline");
+const systemFilter = document.getElementById("system-filter");
 const participantList = document.getElementById("participant-list");
 const rosterToggle = document.getElementById("roster-toggle");
 const composer = document.getElementById("composer");
 const messageText = document.getElementById("message-text");
 const sendButton = document.getElementById("send-button");
+const sendError = document.getElementById("send-error");
 const replyIndicator = document.getElementById("reply-indicator");
 const closeButton = document.getElementById("close-button");
 const exportButton = document.getElementById("export-button");
@@ -41,12 +44,15 @@ async function init() {
   await pollMessages();
   setInterval(() => void pollMessages(), 3000);
   setInterval(() => void loadStatus(), 5000);
-  setInterval(() => void loadBrief(), 5000);
   bindEvents();
 }
 
 function bindEvents() {
   rosterToggle.addEventListener("click", () => shell.classList.toggle("roster-open"));
+  briefRefresh.addEventListener("click", () => void loadBrief());
+  systemFilter.addEventListener("change", () => {
+    timeline.classList.toggle("hide-system", !systemFilter.checked);
+  });
   messageText.addEventListener("input", autoGrowComposer);
   messageText.addEventListener("compositionstart", () => {
     state.composing = true;
@@ -83,6 +89,7 @@ async function loadBrief() {
   const changed = state.briefVersion !== 0 && state.briefVersion !== brief.brief_version;
   state.briefVersion = brief.brief_version;
   briefVersion.textContent = changed ? `v${brief.brief_version} updated` : `v${brief.brief_version}`;
+  briefRefresh.hidden = true;
   briefBody.textContent = brief.body || "(empty)";
 }
 
@@ -93,6 +100,10 @@ async function loadStatus() {
   roomTitle.textContent = payload.room;
   roomStatus.textContent = payload.room_status;
   roomStatus.dataset.status = payload.room_status;
+  if (payload.brief_version > state.briefVersion) {
+    briefRefresh.hidden = false;
+    briefVersion.textContent = `v${payload.brief_version} available`;
+  }
   state.participants = new Set(payload.participants.map((participant) => participant.alias));
   participantCount.textContent = `${payload.participants.length} participants`;
   renderParticipants(payload.participants);
@@ -118,15 +129,23 @@ async function pollMessages() {
 async function submitMessage() {
   const text = messageText.value.trim();
   if (!text) return;
+  sendError.hidden = true;
   const body = {
     text,
     client_msg_id: `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`
   };
   if (state.replyTo !== null) body.reply_to = state.replyTo;
-  const payload = await authFetch("/messages", {
-    method: "POST",
-    body: JSON.stringify(body)
-  });
+  let payload;
+  try {
+    payload = await authFetch("/messages", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    sendError.hidden = false;
+    sendError.textContent = error instanceof Error ? error.message : String(error);
+    return;
+  }
   messageText.value = "";
   state.replyTo = null;
   replyIndicator.hidden = true;
@@ -178,7 +197,7 @@ function renderParticipants(participants) {
     const name = document.createElement("strong");
     name.textContent = participant.alias;
     const meta = document.createElement("span");
-    meta.textContent = `${participant.kind} · ${participant.attention} · ${participant.install}`;
+    meta.textContent = `${participant.kind} · ${participant.location} · ${participant.install} · ${participant.attention} · ${formatRelative(participant.lastSeenAt)}`;
     item.append(name, meta);
     participantList.append(item);
   }
@@ -285,6 +304,15 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function formatRelative(value) {
+  const deltaSeconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
+  if (deltaSeconds < 60) return "last seen now";
+  const minutes = Math.round(deltaSeconds / 60);
+  if (minutes < 60) return `last seen ${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `last seen ${hours}h ago`;
 }
 
 function showError(message) {

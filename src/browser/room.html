@@ -30,11 +30,16 @@
           <span>Room Brief</span>
           <span id="brief-version">v0</span>
         </div>
+        <button id="brief-refresh" class="brief-refresh" type="button" hidden>Brief updated. Refresh</button>
         <p id="brief-body">Loading brief...</p>
       </section>
 
       <section class="workspace">
         <section class="timeline-wrap" aria-label="Room messages">
+          <label class="system-filter">
+            <input id="system-filter" type="checkbox" checked>
+            Show system messages
+          </label>
           <div id="empty-state" class="empty-state">No messages yet.</div>
           <ol id="timeline" class="timeline" aria-live="polite"></ol>
         </section>
@@ -51,6 +56,7 @@
 
       <form id="composer" class="composer">
         <div id="reply-indicator" class="reply-indicator" hidden></div>
+        <div id="send-error" class="send-error" role="alert" hidden></div>
         <textarea id="message-text" name="text" rows="1" autocomplete="off" placeholder="@participant message"></textarea>
         <button id="send-button" type="submit">Send</button>
       </form>
