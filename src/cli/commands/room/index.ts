@@ -286,30 +286,61 @@ async function roomDashboard(argv: string[], context: CliContext): Promise<numbe
 async function roomServe(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
   const current = await readCurrent(context.home);
-  const baseUrl = new URL(current.baseUrl);
-  const portValue = flagString(args, "port") ?? (baseUrl.port || "8787");
+  const currentUrl = new URL(current.baseUrl);
+  const portValue = flagString(args, "port") ?? (currentUrl.port || "8787");
   const port = Number(portValue);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error("port must be an integer between 1 and 65535");
   }
-  baseUrl.port = String(port);
+  const host = flagString(args, "host") ?? "127.0.0.1";
+  const allowRemote = flagBoolean(args, "allow-remote");
+  const publicUrl = new URL(flagString(args, "url") ?? current.baseUrl);
+  if (flagString(args, "url") === undefined) publicUrl.port = String(port);
+  validateServeExposure({ host, publicUrl, allowRemote });
+  const publicBaseUrl = normalizeBaseUrl(publicUrl.toString());
   const server = createRoomHttpServer({
     root: context.home,
     roomId: current.roomId,
-    baseUrl: normalizeBaseUrl(baseUrl.toString())
+    baseUrl: publicBaseUrl,
+    allowInsecureRemote: allowRemote
   });
   await new Promise<void>((resolve) => {
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(port, host, resolve);
   });
-  context.stdout.write(`Serving ${current.roomId} at ${normalizeBaseUrl(baseUrl.toString())}\n`);
+  await writeCurrent(context.home, { ...current, baseUrl: publicBaseUrl });
+  context.stdout.write(`Serving ${current.roomId} at ${publicBaseUrl}\n`);
   await new Promise<void>((resolve) => {
     const stop = (): void => {
+      process.removeListener("SIGINT", stop);
+      process.removeListener("SIGTERM", stop);
       server.close(() => resolve());
     };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
   });
   return 0;
+}
+
+function validateServeExposure(options: { host: string; publicUrl: URL; allowRemote: boolean }): void {
+  if (options.publicUrl.protocol !== "http:" && options.publicUrl.protocol !== "https:") {
+    throw new Error("--url must use http or https");
+  }
+  const localBind = isLocalBindHost(options.host);
+  const localPublicUrl = isLocalhostName(options.publicUrl.hostname);
+  if (!options.allowRemote && (!localBind || !localPublicUrl)) {
+    throw new Error("remote room serving requires --allow-remote");
+  }
+  if (options.allowRemote && !localPublicUrl && options.publicUrl.protocol !== "https:") {
+    throw new Error("remote public URLs must use https");
+  }
+}
+
+function isLocalBindHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+function isLocalhostName(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
 }
 
 function participant(alias: string, kind: ParticipantKind, isHost: boolean, token: string): Participant {

@@ -22,3 +22,19 @@ test("withWriterLock removes a stale lock whose process is no longer alive", asy
   assert.equal(value, "acquired");
   await assert.rejects(readFile(lockPath, "utf8"), /ENOENT/);
 });
+
+test("withWriterLock waits instead of deleting a fresh malformed lock", async () => {
+  const root = await makeRoot();
+  const lockPath = path.join(root, "write.lock");
+  await writeFile(lockPath, "");
+
+  await assert.rejects(
+    withWriterLock(lockPath, async () => "not acquired", {
+      retryDelayMs: 1,
+      timeoutMs: 20,
+      staleAfterMs: 30_000
+    }),
+    /timed out/
+  );
+  assert.equal(await readFile(lockPath, "utf8"), "");
+});

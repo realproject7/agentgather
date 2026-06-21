@@ -10,7 +10,7 @@ export function buildHelpText(): string {
     "  telegent --help",
     "  telegent --version",
     "  telegent room start <room> [--alias host] [--brief text] [--attendance manual-ok|agents-foreground|all-foreground|host-directed] [--url http://127.0.0.1:8787] [--json]",
-    "  telegent room serve [--port 8787]",
+    "  telegent room serve [--port 8787] [--host 127.0.0.1] [--url URL] [--allow-remote]",
     "  telegent room brief view|set [--body text] [--json]",
     "  telegent room attendance view|set [--policy agents-foreground] [--json]",
     "  telegent room invite <alias> [--kind agent|human] [--json]",

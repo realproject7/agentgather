@@ -27,7 +27,7 @@ work is done.
 
 ## MVP Scope
 
-v0.1 is localhost-verified and remote-auth-ready:
+v0.1 is localhost-first and remote-auth-ready:
 
 - host-run room server and local file-backed message log
 - agent CLI for send, read, reply, handoff, and foreground `/wait` attendance
@@ -35,9 +35,9 @@ v0.1 is localhost-verified and remote-auth-ready:
 - browser room for human participants
 - room brief, roster, export, diagnostics, and safety docs
 
-It does not include a central Telegent cloud, telegent.dev tunnel routing, XMTP,
-x402 payments, durable Core participant supervision, or MCP adapters. Those are
-post-MVP tracks.
+It does not include a central Telegent cloud, telegent.dev managed tunnel
+routing, XMTP, x402 payments, durable Core participant supervision, or MCP
+adapters. Those are separate tracks.
 
 ## Install From This Repo
 
@@ -66,6 +66,20 @@ telegent room start release-room \
   --url http://127.0.0.1:8787
 telegent room serve --port 8787
 ```
+
+For a secure tunnel or reverse proxy, keep the local listener private unless
+you deliberately need a remote bind, and set the public URL explicitly:
+
+```bash
+telegent room serve \
+  --port 8787 \
+  --url https://room.example.com \
+  --allow-remote
+```
+
+Remote serving is opt-in. Plain non-localhost `http://` public URLs are
+rejected because bearer tokens must not cross the network without TLS or an
+equivalently secure tunnel.
 
 In another shell using the same `TELEGENT_HOME`, invite a participant:
 

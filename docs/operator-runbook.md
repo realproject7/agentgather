@@ -14,6 +14,29 @@ telegent room serve --port 8787
 
 Keep the `room serve` process in the foreground while the room is open.
 
+## Serve Through A Secure Tunnel
+
+For remote participants, expose the room through a TLS tunnel or reverse proxy
+and keep the local listener bound to localhost unless you deliberately need a
+remote bind:
+
+```bash
+telegent room serve \
+  --port 8787 \
+  --url https://room.example.com \
+  --allow-remote
+```
+
+Rules:
+
+- `--url` is the public URL printed in invite cards, browser links, and
+  `/wait` `next_cmd` values.
+- `--allow-remote` is required for non-localhost public URLs or non-local bind
+  hosts.
+- non-localhost public URLs must use `https://`.
+- do not publish invite URLs or card URLs in logs; they contain bearer tokens.
+- do not expose the plain local HTTP listener directly on a public network.
+
 ## Invite Participants
 
 Installed participant:
@@ -174,5 +197,7 @@ should continue.
 
 Remote participant cannot connect:
 
-v0.1 is localhost-verified. Secure remote exposure is Backlog A. Do not expose
-the plain HTTP server directly to a network.
+Check that `room serve` was started with `--url https://... --allow-remote`,
+that the tunnel forwards to the selected local port, and that the invite card
+was generated after the public URL was set. Do not expose the plain local HTTP
+server directly to a public network.

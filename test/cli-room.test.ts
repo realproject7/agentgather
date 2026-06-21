@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, stat } from "node:fs/promises";
-import { AddressInfo } from "node:net";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { request } from "node:http";
+import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -211,6 +212,33 @@ test("human invites print a browser-openable fragment URL", async () => {
   assert.equal(invite.browser_url, `http://127.0.0.1:8787/#token=${invite.token}`);
 });
 
+test("room serve requires explicit secure remote opt-in", async () => {
+  const { context, stdout } = await makeContext();
+  await runRoomCommand(["start", "remote-room", "--alias", "operator", "--json"], context);
+  const started = stdout.json<{ token: string }>();
+
+  await assert.rejects(runRoomCommand(["serve", "--host", "0.0.0.0"], context), /--allow-remote/);
+  await assert.rejects(runRoomCommand(["serve", "--host", "::"], context), /--allow-remote/);
+  await assert.rejects(runRoomCommand(["serve", "--url", "http://room.example.com"], context), /--allow-remote/);
+  await assert.rejects(
+    runRoomCommand(["serve", "--url", "http://room.example.com", "--allow-remote"], context),
+    /https/
+  );
+
+  stdout.chunks = [];
+  const port = await getFreePort();
+  const servePromise = runRoomCommand(
+    ["serve", "--port", String(port), "--url", "https://room.example.com", "--allow-remote"],
+    context
+  );
+  await waitForServer(`http://127.0.0.1:${port}/status`, started.token, "room.example.com");
+  const current = JSON.parse(await readFile(currentPath(context.home), "utf8")) as { baseUrl: string };
+  assert.equal(current.baseUrl, "https://room.example.com");
+  process.emit("SIGTERM");
+  await servePromise;
+  assert.equal(stdout.text(), "Serving remote-room at https://room.example.com\n");
+});
+
 test("room brief set uses the live HTTP server when available so waiters are notified", async () => {
   const { context, stdout } = await makeContext();
   await runRoomCommand(["start", "server-brief", "--alias", "operator", "--json"], context);
@@ -259,4 +287,56 @@ test("room brief set uses the live HTTP server when available so waiters are not
 
 async function assertMode(file: string, expected: number): Promise<void> {
   assert.equal((await stat(file)).mode & 0o777, expected);
+}
+
+async function getFreePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  return address.port;
+}
+
+async function waitForServer(url: string, token: string, host: string): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < 1_000) {
+    try {
+      if ((await statusWithHost(url, token, host)) === 200) return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error("server did not start");
+}
+
+async function statusWithHost(urlValue: string, token: string, host: string): Promise<number> {
+  const url = new URL(urlValue);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Host: host
+        }
+      },
+      (res) => {
+        res.resume();
+        res.on("error", reject);
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
 }

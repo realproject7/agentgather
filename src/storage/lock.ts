@@ -1,9 +1,10 @@
-import { chmod, open, readFile, rm } from "node:fs/promises";
+import { chmod, open, readFile, rm, stat } from "node:fs/promises";
 import { SECURE_FILE_MODE } from "./secure-fs.js";
 
 export interface LockOptions {
   retryDelayMs?: number;
   timeoutMs?: number;
+  staleAfterMs?: number;
 }
 
 interface LockRecord {
@@ -30,6 +31,7 @@ async function acquireWriterLock(
 ): Promise<() => Promise<void>> {
   const retryDelayMs = options.retryDelayMs ?? 10;
   const timeoutMs = options.timeoutMs ?? 5_000;
+  const staleAfterMs = options.staleAfterMs ?? 30_000;
   const startedAt = Date.now();
   const record: LockRecord = { pid: process.pid, createdAt: new Date().toISOString() };
 
@@ -47,26 +49,39 @@ async function acquireWriterLock(
       if (Date.now() - startedAt > timeoutMs) {
         throw new Error(`timed out waiting for writer lock: ${lockPath}`);
       }
-      if (await removeStaleLock(lockPath)) continue;
+      if (await removeStaleLock(lockPath, staleAfterMs)) continue;
       await sleep(retryDelayMs);
     }
   }
 }
 
-async function removeStaleLock(lockPath: string): Promise<boolean> {
+async function removeStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
   try {
     const raw = await readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockRecord>;
-    if (typeof parsed.pid !== "number" || !isProcessAlive(parsed.pid)) {
+    if (typeof parsed.pid !== "number") {
+      return removeMalformedLockIfOld(lockPath, staleAfterMs);
+    }
+    if (!isProcessAlive(parsed.pid)) {
       await rm(lockPath, { force: true });
       return true;
     }
   } catch (error) {
     if (isNotFoundError(error)) return false;
-    await rm(lockPath, { force: true });
-    return true;
+    return removeMalformedLockIfOld(lockPath, staleAfterMs);
   }
   return false;
+}
+
+async function removeMalformedLockIfOld(lockPath: string, staleAfterMs: number): Promise<boolean> {
+  try {
+    const info = await stat(lockPath);
+    if (Date.now() - info.mtimeMs < staleAfterMs) return false;
+  } catch (error) {
+    return isNotFoundError(error);
+  }
+  await rm(lockPath, { force: true });
+  return true;
 }
 
 function isProcessAlive(pid: number): boolean {
