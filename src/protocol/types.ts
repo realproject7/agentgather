@@ -12,6 +12,7 @@ export type MessageType =
   | "request_debug"
   | "handoff"
   | "system";
+export type ClientMessageType = Exclude<MessageType, "system">;
 
 export interface RoomBrief {
   body: string;
@@ -55,6 +56,7 @@ export interface Invite {
 
 export interface ClientMessageInput {
   text: string;
+  type?: ClientMessageType;
   reply_to?: number;
   client_msg_id?: string;
 }

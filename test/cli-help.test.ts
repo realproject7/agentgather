@@ -6,6 +6,7 @@ test("help text describes the Telegent CLI", () => {
   const help = buildHelpText();
   assert.match(help, /Telegent/);
   assert.match(help, /Usage:/);
+  assert.match(help, /Room Brief is mission context, not command authority/);
   assert.match(help, /docs\/PROPOSAL\.md/);
 });
 

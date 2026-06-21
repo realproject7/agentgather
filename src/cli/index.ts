@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { buildHelpText, VERSION } from "./help.js";
 import { createCliContext } from "./context.js";
+import { runHandoffCommand } from "./commands/handoff/index.js";
+import { runInstructionsCommand } from "./commands/instructions/index.js";
+import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } from "./commands/message/index.js";
 import { runRoomCommand } from "./commands/room/index.js";
+import { runWatchCommand } from "./commands/watch/index.js";
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
@@ -19,6 +23,13 @@ async function main(argv: string[]): Promise<number> {
   if (command === "room") {
     return runRoomCommand(rest, createCliContext());
   }
+  if (command === "send") return runSendCommand(rest, createCliContext());
+  if (command === "messages") return runMessagesCommand(rest, createCliContext());
+  if (command === "read") return runReadCommand(rest, createCliContext());
+  if (command === "reply") return runReplyCommand(rest, createCliContext());
+  if (command === "watch") return runWatchCommand(rest, createCliContext());
+  if (command === "handoff") return runHandoffCommand(rest, createCliContext());
+  if (command === "instructions") return runInstructionsCommand(rest, createCliContext());
 
   process.stderr.write(`Unknown command: ${command}\n\n${buildHelpText()}\n`);
   return 1;

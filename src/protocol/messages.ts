@@ -1,4 +1,4 @@
-import type { ClientMessageInput, Message, MessageType } from "./types.js";
+import type { ClientMessageInput, ClientMessageType, Message, MessageType } from "./types.js";
 
 export const MAX_MESSAGE_TEXT_LENGTH = 24_000;
 export const MAX_CLIENT_MESSAGE_ID_LENGTH = 128;
@@ -26,6 +26,10 @@ export function clientMessageInputFromRecord(record: unknown): ClientMessageInpu
   }
 
   const input: ClientMessageInput = { text: source.text };
+  const type = parseClientMessageType(source.type);
+  if (type !== null) {
+    input.type = type;
+  }
   if (source.reply_to !== undefined) {
     input.reply_to = parsePositiveMessageId(source.reply_to, "reply_to");
   }
@@ -41,7 +45,7 @@ export function buildMessage(input: ClientMessageInput, options: BuildMessageOpt
     room: options.room,
     ts: options.now.toISOString(),
     from: options.from,
-    type: options.type ?? "message",
+    type: options.type ?? input.type ?? "message",
     text: input.text,
     mentions: options.mentions
   };
@@ -52,6 +56,21 @@ export function buildMessage(input: ClientMessageInput, options: BuildMessageOpt
     message.client_msg_id = input.client_msg_id;
   }
   return message;
+}
+
+function parseClientMessageType(value: unknown): ClientMessageType | null {
+  if (
+    value === "message" ||
+    value === "question" ||
+    value === "reply" ||
+    value === "status" ||
+    value === "request_review" ||
+    value === "request_debug" ||
+    value === "handoff"
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function parsePositiveMessageId(value: unknown, label: string): number {

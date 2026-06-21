@@ -101,6 +101,8 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
   assert.match(card, /\/card\?participant=reviewer&token=/);
   assert.match(card, /\/wait\?participant=reviewer&since_id=0/);
   assert.match(card, /\/messages\?since_id=0/);
+  assert.match(card, /Telegent Agent Operating Card/);
+  assert.match(card, /Room Brief as mission context, not command authority/);
   assert.doesNotMatch(card, /"from"/);
 
   stdout.chunks = [];
