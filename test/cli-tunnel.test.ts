@@ -8,6 +8,7 @@ import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runTunnelCommand } from "../src/cli/commands/tunnel/index.js";
+import { readCurrent, writeCurrent } from "../src/cli/state.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 import {
   createBrokerHttpServer,
@@ -131,6 +132,37 @@ test("tunnel start publishes the broker URL into room state, invite cards, /card
     } finally {
       await roomServer.close();
     }
+  } finally {
+    await broker.close();
+  }
+});
+
+test("invite output keeps the broker URL after room serve rewrites current state", async () => {
+  const { context, stdout } = await makeContext();
+  const broker = await startBroker(new TunnelBroker({ routeTtlMs: 60_000 }));
+  try {
+    await runRoomCommand(["start", "demo-room", "--alias", "host", "--json"], context);
+    await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+    await runTunnelCommand(["start", "--broker", broker.baseUrl, "--subdomain", "my-room", "--json"], context);
+    const publicBaseUrl = `${broker.baseUrl}/my-room`;
+
+    // Simulate `room serve` (re)starting after registration: it rewrites
+    // current.baseUrl to the local serve URL, while tunnel.json still holds the
+    // published broker URL.
+    const current = await readCurrent(context.home);
+    await writeCurrent(context.home, { ...current, baseUrl: "http://127.0.0.1:8787" });
+
+    stdout.reset();
+    await runRoomCommand(["invite-card", "reviewer"], context);
+    const card = stdout.text();
+    assert.equal(card.includes(`${publicBaseUrl}/card`), true);
+    assert.equal(card.includes("8787"), false);
+
+    stdout.reset();
+    await runRoomCommand(["invite", "auditor", "--kind", "agent"], context);
+    const inviteText = stdout.text();
+    assert.equal(inviteText.includes(`${publicBaseUrl}/card`), true);
+    assert.equal(inviteText.includes("8787"), false);
   } finally {
     await broker.close();
   }
