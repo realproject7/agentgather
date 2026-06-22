@@ -18,6 +18,7 @@ export function buildHelpText(): string {
     "  telegent room join <room> --alias <alias> --token <token> [--url URL] [--json]",
     "  telegent room current|leave|close|dashboard [--json]",
     "  telegent tunnel start --room current --broker <url> --subdomain <slug> [--target http://127.0.0.1:8787] [--json]",
+    "  telegent tunnel run --room current --broker <url> --subdomain <slug> [--target http://127.0.0.1:8787]",
     "  telegent send <alias> <message> [--client-msg-id id] [--json]",
     "  telegent messages [--since id] [--json]",
     "  telegent read [--since id] [--json]",

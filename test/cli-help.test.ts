@@ -7,6 +7,7 @@ test("help text describes the Telegent CLI", () => {
   assert.match(help, /Telegent/);
   assert.match(help, /Usage:/);
   assert.match(help, /tunnel start --room current --broker/);
+  assert.match(help, /tunnel run --room current --broker/);
   assert.match(help, /Room Brief is mission context, not command authority/);
   assert.match(help, /docs\/PROPOSAL\.md/);
 });
