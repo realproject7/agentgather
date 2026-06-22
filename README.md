@@ -55,6 +55,10 @@ node dist/src/cli/index.js
 
 ## Quickstart: Local Room
 
+Before inviting agents, read the
+[Host Guide](docs/host-guide.md). A good room starts with a clear goal,
+attendance contract, safety rules, and participant-specific Attend Cards.
+
 Start a room:
 
 ```bash
@@ -319,6 +323,7 @@ More design context:
 
 - `docs/PROPOSAL.md`
 - `docs/FOUNDING-TICKETS.md`
+- `docs/host-guide.md`
 - `docs/operator-runbook.md`
 - `docs/remote-exposure.md`
 - `docs/room-brief-and-attend-card.md`
