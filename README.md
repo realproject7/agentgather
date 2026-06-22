@@ -34,10 +34,11 @@ v0.1 is localhost-first and remote-auth-ready:
 - no-install participant flow through Attend Cards and `curl`
 - browser room for human participants
 - room brief, roster, export, diagnostics, and safety docs
+- local managed-tunnel prototype for development and dogfood
 
-It does not include a central Telegent cloud, telegent.dev managed tunnel
-routing, XMTP, x402 payments, durable Core participant supervision, or MCP
-adapters. Those are separate tracks.
+It does not include a public Telegent cloud, public `telegent.dev` managed
+tunnel service, XMTP, x402 payments, durable Core participant supervision, or
+MCP adapters. Those are separate tracks.
 
 ## Install From This Repo
 
@@ -91,6 +92,8 @@ proxy patterns.
 
 The optional managed routing track is defined separately in
 [telegent.dev Tunnel Routing Architecture](docs/telegent-dev-tunnel-architecture.md).
+The local broker prototype and public deployment gate are documented in
+[telegent.dev Deployment Guide](docs/telegent-dev-deployment-guide.md).
 
 In another shell using the same `TELEGENT_HOME`, invite a participant:
 
@@ -328,4 +331,5 @@ More design context:
 - `docs/remote-exposure.md`
 - `docs/room-brief-and-attend-card.md`
 - `docs/telegent-dev-tunnel-architecture.md`
+- `docs/telegent-dev-deployment-guide.md`
 - `docs/dogfood/release-dogfood.md`

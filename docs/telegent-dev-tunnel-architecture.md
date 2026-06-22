@@ -36,11 +36,12 @@ better served by a small persistent broker process.
 
 Recommended implementation order:
 
-1. Documented architecture only in v0.1.
+1. Documented architecture.
 2. Local broker prototype with no public domain.
-3. Staging broker on persistent infrastructure after operator approval.
-4. `telegent.dev` DNS/Vercel control plane after operator approval.
-5. Metering and x402 only after product demand is proven.
+3. Operator deployment guide and public gate checklist.
+4. Staging broker on persistent infrastructure after operator approval.
+5. `telegent.dev` DNS/Vercel control plane after operator approval.
+6. Metering and x402 only after product demand is proven.
 
 ## Data Flow
 
@@ -296,6 +297,7 @@ Blocked by operator gate:
      route shutdown.
    - Acceptance: no step requires hidden assumptions; all credential actions are
      marked operator gates.
+   - Current guide: `docs/telegent-dev-deployment-guide.md`.
 
 6. **Metering and x402 research**
    - Define usage counters, free quota units, spending caps, and payment prompts.

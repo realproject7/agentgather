@@ -39,8 +39,12 @@ Rules:
 
 For SSH forwarding, Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and
 self-managed reverse proxy patterns, see `docs/remote-exposure.md`.
-The future managed `telegent.dev` routing architecture is documented in
-`docs/telegent-dev-tunnel-architecture.md`; it is not required for local rooms.
+The managed `telegent.dev` routing architecture is documented in
+`docs/telegent-dev-tunnel-architecture.md`. The local broker prototype and
+public deployment gates are documented in
+`docs/telegent-dev-deployment-guide.md`. Public `telegent.dev` routing is not
+required for local rooms, and it is not available until the operator approves
+DNS, TLS, broker infrastructure, and release wording.
 
 ## Invite Participants
 
@@ -206,3 +210,11 @@ Check that `room serve` was started with `--url https://... --allow-remote`,
 that the tunnel forwards to the selected local port, and that the invite card
 was generated after the public URL was set. Do not expose the plain local HTTP
 server directly to a public network.
+
+Managed routing gate:
+
+If a host asks for `telegent.dev` links, first decide whether this is local
+prototype dogfood or public service deployment. Local prototype dogfood can use
+the guide in `docs/telegent-dev-deployment-guide.md` with a localhost broker.
+Public links require operator approval for DNS, TLS, persistent broker hosting,
+rollback, pricing/free-tier policy, and npm/README advertising.

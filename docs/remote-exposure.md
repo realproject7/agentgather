@@ -30,7 +30,7 @@ durable wake, or end-to-end encryption.
 | Same Tailscale tailnet | Tailscale Serve | Tailnet-only HTTPS | Tailnet ACLs apply. Good default for trusted teammates. |
 | Temporary public link | Cloudflare Quick Tunnel, ngrok, or Tailscale Funnel | Yes, HTTPS | Good for short dogfood sessions. Rotate invites after use. |
 | Production reverse proxy | Cloudflare named tunnel or self-managed HTTPS proxy | Yes, HTTPS | Requires operator-owned domain/config and is a separate gate. |
-| Managed Telegent routing | Future `telegent.dev` tunnel | Yes, HTTPS | Optional post-v0.1 architecture; see `docs/telegent-dev-tunnel-architecture.md`. |
+| Managed Telegent routing | `telegent.dev` tunnel | Yes, HTTPS | Local prototype exists for dogfood; public service is operator-gated. See `docs/telegent-dev-deployment-guide.md`. |
 
 ## Baseline Local Room
 
@@ -134,6 +134,22 @@ telegent room serve \
 For production or stable team URLs, use a named Cloudflare Tunnel and a
 published application route in the Cloudflare dashboard. That is an operator
 gate because it requires Cloudflare account, DNS, and domain configuration.
+
+## Managed telegent.dev Routing
+
+Managed `telegent.dev` routing is Telegent's own optional tunnel path. It is
+not central storage and it does not mint participant tokens. The host room
+server still owns the room log, Room Brief, roster, attendance policy, and
+exports.
+
+The current repo includes a local broker prototype for development dogfood. It
+can route `http://127.0.0.1:<broker>/<slug>/...` to a local `room serve`
+process, but it is not a public service. For exact local prototype commands and
+the public deployment gate, see `docs/telegent-dev-deployment-guide.md`.
+
+Public `https://<slug>.rooms.telegent.dev` links require operator approval for
+DNS, TLS, persistent broker hosting, rollback, pricing/free-tier policy, and
+public release wording.
 
 ## ngrok
 
