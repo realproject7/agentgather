@@ -9,6 +9,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from "node:crypto";
 import { URL } from "node:url";
 import {
+  type ForwardedRequest,
+  type ForwardedResponse,
   type HostRegistration,
   type RouteCloseRequest,
   type RouteCloseResult,
@@ -19,6 +21,7 @@ import {
 import { forwardToHost } from "./forwarding.js";
 import { BROKER_LIMITS, BrokerGuards, type BrokerLimits } from "./limits.js";
 import { BrokerLogger, type BrokerLogSink, classifyPath, routeHash } from "./logging.js";
+import { RelayHub } from "./relay.js";
 
 export interface BrokerOptions {
   /** Time source in epoch milliseconds. Injectable for deterministic tests. */
@@ -31,7 +34,14 @@ export interface BrokerOptions {
   limits?: Partial<BrokerLimits>;
   /** Structured, redaction-safe log sink. Defaults to stderr JSON lines. */
   logSink?: BrokerLogSink;
+  /** Relay: max ms a request waits unclaimed before the host is unavailable. */
+  claimTimeoutMs?: number;
+  /** Relay: max ms after a claim before the host response times out. */
+  responseTimeoutMs?: number;
 }
+
+const DEFAULT_CLAIM_TIMEOUT_MS = 10_000;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 35_000;
 
 const DEFAULT_ROUTE_TTL_MS = BROKER_LIMITS.idleTimeoutMs;
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -71,9 +81,10 @@ export class TunnelBroker {
   private readonly limits: BrokerLimits;
   private readonly guards: BrokerGuards;
   private readonly logger: BrokerLogger;
+  private readonly relay: RelayHub;
   private readonly routes = new Map<string, RouteMetadata>();
-  // Local room server URL per slug, used to forward participant requests. This
-  // is routing configuration, not stored room data.
+  // Optional local room server URL per slug for direct-fetch mode (local tests).
+  // Managed relay mode registers no target and never stores one.
   private readonly targets = new Map<string, string>();
 
   constructor(options: BrokerOptions = {}) {
@@ -83,6 +94,14 @@ export class TunnelBroker {
     this.maxRouteLifetimeMs = options.maxRouteLifetimeMs ?? this.limits.maxRouteLifetimeMs;
     this.guards = new BrokerGuards(this.now, this.limits);
     this.logger = new BrokerLogger(options.logSink);
+    this.relay = new RelayHub(
+      {
+        claimTimeoutMs: options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS,
+        responseTimeoutMs: options.responseTimeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS,
+        responseBodyBytes: this.limits.responseBodyBytes
+      },
+      () => mintId("req")
+    );
   }
 
   /** Register a route for a slug. Rejects a duplicate active slug. */
@@ -145,6 +164,7 @@ export class TunnelBroker {
     const route = this.findByConnection(request.route_id, request.host_connection_id);
     route.status = "closed";
     this.targets.delete(route.route_slug);
+    this.relay.closeRoute(route.route_slug);
     return { ok: true, route_slug: route.route_slug, status: "closed" };
   }
 
@@ -171,16 +191,30 @@ export class TunnelBroker {
     return [...this.routes.values()].map((route) => ({ ...this.refresh(route) }));
   }
 
+  /** Host claims the next pending relay request for its route, or null. */
+  claimRelay(routeId: string, hostConnectionId: string): ForwardedRequest | null {
+    const route = this.findByConnection(routeId, hostConnectionId);
+    if (route.status !== "active") {
+      throw new TunnelError(route.status === "closed" ? "route_closed" : "route_expired", 410, "route is not active");
+    }
+    this.touch(route.route_slug);
+    return this.relay.claim(route.route_slug);
+  }
+
+  /** Host posts the response for exactly one in-flight relay request id. */
+  respondRelay(routeId: string, hostConnectionId: string, requestId: string, response: ForwardedResponse): void {
+    this.findByConnection(routeId, hostConnectionId);
+    this.relay.respond(requestId, response);
+  }
+
   /**
-   * Forward a participant request under `/<slug>/` to the host room server,
-   * applying concurrency and rate guards and emitting a redaction-safe access
-   * log. The caller must have resolved the slug as an active route first.
+   * Forward a participant request under `/<slug>/`, applying concurrency and
+   * rate guards and emitting a redaction-safe access log. A route registered
+   * with a local target is fetched directly (local tests); otherwise the
+   * request is held for the host tunnel client to claim and answer. The caller
+   * must have resolved the slug as an active route first.
    */
   async forward(slug: string, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const target = this.targets.get(slug);
-    if (target === undefined) {
-      throw new TunnelError("route_not_found", 502, "route has no forwarding target");
-    }
     const forwardPath = url.pathname.slice(`/${slug}`.length) || "/";
     const pathClass = classifyPath(forwardPath);
     const isWait = pathClass === "wait";
@@ -202,14 +236,11 @@ export class TunnelBroker {
 
     this.touch(slug);
     try {
-      const result = await forwardToHost({
-        target,
-        path: `${forwardPath}${url.search}`,
-        req,
-        res,
-        requestBodyBytes: this.limits.requestBodyBytes,
-        responseBodyBytes: this.limits.responseBodyBytes
-      });
+      const target = this.targets.get(slug);
+      const result =
+        target !== undefined
+          ? await this.forwardDirect(target, forwardPath, url, req, res)
+          : await this.forwardViaRelay(slug, forwardPath, url, req, res);
       this.logger.log({
         event: "forward",
         route_hash: routeHash(slug),
@@ -227,6 +258,48 @@ export class TunnelBroker {
     } finally {
       release();
     }
+  }
+
+  private async forwardDirect(
+    target: string,
+    forwardPath: string,
+    url: URL,
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<{ status: number; bytesIn: number; bytesOut: number }> {
+    return forwardToHost({
+      target,
+      path: `${forwardPath}${url.search}`,
+      req,
+      res,
+      requestBodyBytes: this.limits.requestBodyBytes,
+      responseBodyBytes: this.limits.responseBodyBytes
+    });
+  }
+
+  private async forwardViaRelay(
+    slug: string,
+    forwardPath: string,
+    url: URL,
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<{ status: number; bytesIn: number; bytesOut: number }> {
+    const body = await readBody(req, this.limits.requestBodyBytes);
+    const response = await this.relay.enqueue(slug, {
+      route_slug: slug,
+      method: req.method ?? "GET",
+      path: `${forwardPath}${url.search}`,
+      headers: selectEnvelopeHeaders(req),
+      ...(body !== undefined ? { body_base64: body.toString("base64") } : {})
+    });
+    const responseBody =
+      typeof response.body_base64 === "string" ? Buffer.from(response.body_base64, "base64") : Buffer.alloc(0);
+    const responseHeaders: Record<string, string> = {};
+    const contentType = response.headers["content-type"] ?? response.headers["Content-Type"];
+    if (typeof contentType === "string") responseHeaders["content-type"] = contentType;
+    res.writeHead(response.status, responseHeaders);
+    res.end(responseBody);
+    return { status: response.status, bytesIn: body?.length ?? 0, bytesOut: responseBody.length };
   }
 
   private touch(slug: string): void {
@@ -354,6 +427,21 @@ async function handleHostRequest(
     sendJson(res, 200, result);
     return;
   }
+  if (action === "poll") {
+    const request = broker.claimRelay(body.route_id as string, body.host_connection_id as string);
+    sendJson(res, 200, { ok: true, request });
+    return;
+  }
+  if (action === "respond") {
+    broker.respondRelay(
+      body.route_id as string,
+      body.host_connection_id as string,
+      body.request_id as string,
+      body.response as ForwardedResponse
+    );
+    sendJson(res, 200, { ok: true });
+    return;
+  }
   throw new TunnelError("unsupported_route", 404, "unknown host control action");
 }
 
@@ -405,4 +493,32 @@ function isoFrom(ms: number): string {
 
 function errorCode(error: unknown): string {
   return error instanceof TunnelError ? error.code : "internal_error";
+}
+
+const ENVELOPE_HEADERS = new Set(["authorization", "content-type", "accept", "origin", "referer"]);
+
+function selectEnvelopeHeaders(req: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    const lower = name.toLowerCase();
+    if (ENVELOPE_HEADERS.has(lower)) headers[lower] = Array.isArray(value) ? value.join(", ") : value;
+  }
+  return headers;
+}
+
+async function readBody(req: IncomingMessage, limitBytes: number): Promise<Buffer | undefined> {
+  const method = req.method ?? "GET";
+  if (method === "GET" || method === "HEAD") return undefined;
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
+    total += buffer.length;
+    if (total > limitBytes) {
+      throw new TunnelError("request_too_large", 413, "request body exceeds the broker limit");
+    }
+    chunks.push(buffer);
+  }
+  return chunks.length === 0 ? undefined : Buffer.concat(chunks);
 }

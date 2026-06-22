@@ -10,13 +10,18 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { ensureSecureDir, writeSecureFile } from "../storage/index.js";
 import { normalizeBaseUrl, roomUrl } from "../protocol/index.js";
+import { relayToLocalServer } from "./forwarding.js";
 import {
+  type ForwardedRequest,
+  type ForwardedResponse,
   type RouteCloseResult,
   type RouteMetadata,
   TunnelError,
   type TunnelErrorBody,
   type TunnelErrorCode
 } from "./protocol.js";
+
+const RELAY_RESPONSE_BODY_BYTES = 1024 * 1024;
 
 export interface RegisterResult {
   route: RouteMetadata;
@@ -57,6 +62,52 @@ export class TunnelClient {
       host_connection_id: hostConnectionId
     });
     return payload as unknown as RouteCloseResult;
+  }
+
+  /** Claim the next pending relay request for the route, or null if none. */
+  async poll(routeId: string, hostConnectionId: string): Promise<ForwardedRequest | null> {
+    const payload = await this.post("/_host/poll", { route_id: routeId, host_connection_id: hostConnectionId });
+    return (payload.request as ForwardedRequest | null) ?? null;
+  }
+
+  /** Post the response for exactly one in-flight relay request id. */
+  async respond(
+    routeId: string,
+    hostConnectionId: string,
+    requestId: string,
+    response: ForwardedResponse
+  ): Promise<void> {
+    await this.post("/_host/respond", {
+      route_id: routeId,
+      host_connection_id: hostConnectionId,
+      request_id: requestId,
+      response
+    });
+  }
+
+  /**
+   * Attend the route once: claim a pending request, forward it to the local
+   * room server, and post the response back. Returns true if a request was
+   * handled, false if none were pending. This is the host outbound relay step;
+   * the broker never reaches the local server itself.
+   */
+  async attendOnce(routeId: string, hostConnectionId: string, target: string): Promise<boolean> {
+    const request = await this.poll(routeId, hostConnectionId);
+    if (request === null) return false;
+    let response: ForwardedResponse;
+    try {
+      response = await relayToLocalServer(target, request, RELAY_RESPONSE_BODY_BYTES);
+    } catch (error) {
+      response = {
+        status: error instanceof TunnelError ? error.status : 502,
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body_base64: Buffer.from(
+          JSON.stringify({ ok: false, error: error instanceof TunnelError ? error.code : "host_unavailable" })
+        ).toString("base64")
+      };
+    }
+    await this.respond(routeId, hostConnectionId, request.request_id, response);
+    return true;
   }
 
   publicBaseUrlFor(slug: string): string {
