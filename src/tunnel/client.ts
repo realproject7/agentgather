@@ -94,6 +94,21 @@ export class TunnelClient {
   async attendOnce(routeId: string, hostConnectionId: string, target: string): Promise<boolean> {
     const request = await this.poll(routeId, hostConnectionId);
     if (request === null) return false;
+    await this.handleClaim(routeId, hostConnectionId, request, target);
+    return true;
+  }
+
+  /**
+   * Forward an already-claimed request to the local room server and post the
+   * response. Failures become a stable error response so the participant never
+   * hangs. Used by the foreground run loop to process claims concurrently.
+   */
+  async handleClaim(
+    routeId: string,
+    hostConnectionId: string,
+    request: ForwardedRequest,
+    target: string
+  ): Promise<void> {
     let response: ForwardedResponse;
     try {
       response = await relayToLocalServer(target, request, RELAY_RESPONSE_BODY_BYTES);
@@ -107,7 +122,6 @@ export class TunnelClient {
       };
     }
     await this.respond(routeId, hostConnectionId, request.request_id, response);
-    return true;
   }
 
   publicBaseUrlFor(slug: string): string {

@@ -168,6 +168,24 @@ test("invite output keeps the broker URL after room serve rewrites current state
   }
 });
 
+test("a failed tunnel run registration does not mutate current room state", async () => {
+  const { context, stdout } = await makeContext();
+  await runRoomCommand(["start", "demo-room", "--alias", "host", "--json"], context);
+  stdout.reset();
+  await runRoomCommand(["current", "--json"], context);
+  const before = stdout.json<{ current: { baseUrl: string } }>().current.baseUrl;
+
+  // An unreachable broker fails registration before any state is written.
+  await assert.rejects(
+    runTunnelCommand(["run", "--broker", "http://127.0.0.1:1", "--subdomain", "run-room"], context),
+    /broker|route/i
+  );
+
+  stdout.reset();
+  await runRoomCommand(["current", "--json"], context);
+  assert.equal(stdout.json<{ current: { baseUrl: string } }>().current.baseUrl, before);
+});
+
 test("failed tunnel registration leaves the current room URL unchanged", async () => {
   const { context, stdout } = await makeContext();
   const broker = await startBroker(new TunnelBroker({ routeTtlMs: 60_000 }));
