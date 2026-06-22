@@ -152,6 +152,9 @@ test("the run session relays the full participant flow through the broker", asyn
     const shell = await fetch(`${fixture.publicBaseUrl}/`);
     assert.equal(shell.status, 200);
     assert.equal((await fetch(`${fixture.publicBaseUrl}/room.css`)).status, 200);
+    const script = await fetch(`${fixture.publicBaseUrl}/room.js`);
+    assert.equal(script.status, 200);
+    assert.match(await script.text(), /sessionStorage/);
   } finally {
     await session.stop();
     await fixture.close();

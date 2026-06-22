@@ -339,7 +339,8 @@ export class TunnelBroker {
 // Reserved path prefix for host control requests. The slug pattern forbids the
 // underscore, so this prefix can never collide with a participant route slug.
 const HOST_PREFIX = "_host";
-const MAX_HOST_BODY_BYTES = 16_000;
+const MAX_HOST_CONTROL_BODY_BYTES = 16_000;
+const MAX_HOST_RESPOND_BODY_BYTES = Math.ceil((BROKER_LIMITS.responseBodyBytes * 4) / 3) + 16_000;
 
 /**
  * Create a local HTTP listener for the broker. Host control requests use the
@@ -402,7 +403,7 @@ async function handleHostRequest(
   if (req.method !== "POST") {
     throw new TunnelError("unsupported_route", 405, "host control requires POST");
   }
-  const body = await readJsonBody(req);
+  const body = await readJsonBody(req, action === "respond" ? MAX_HOST_RESPOND_BODY_BYTES : MAX_HOST_CONTROL_BODY_BYTES);
   if (action === "register") {
     const route = broker.register({
       route_slug: body.route_slug as string,
@@ -445,13 +446,13 @@ async function handleHostRequest(
   throw new TunnelError("unsupported_route", 404, "unknown host control action");
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(req: IncomingMessage, limitBytes: number): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     const buffer = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
     total += buffer.length;
-    if (total > MAX_HOST_BODY_BYTES) {
+    if (total > limitBytes) {
       throw new TunnelError("invalid_registration", 413, "host control body is too large");
     }
     chunks.push(buffer);
