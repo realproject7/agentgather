@@ -2,6 +2,7 @@
 import { buildHelpText, VERSION } from "./help.js";
 import { createCliContext } from "./context.js";
 import { runAttendCommand } from "./commands/attend/index.js";
+import { runBrokerCommand } from "./commands/broker/index.js";
 import { runDoctorCommand } from "./commands/doctor/index.js";
 import { runExportCommand } from "./commands/export/index.js";
 import { runHandoffCommand } from "./commands/handoff/index.js";
@@ -29,6 +30,9 @@ async function main(argv: string[]): Promise<number> {
   }
   if (command === "tunnel") {
     return runTunnelCommand(rest, createCliContext());
+  }
+  if (command === "broker") {
+    return runBrokerCommand(rest, createCliContext());
   }
   if (command === "send") return runSendCommand(rest, createCliContext());
   if (command === "messages") return runMessagesCommand(rest, createCliContext());
