@@ -239,7 +239,10 @@ function exportRoom() {
 }
 
 async function authFetch(path, options = {}) {
-  const response = await fetch(path, {
+  // Resolve room API paths relative to the document base so the app works both
+  // when served locally at "/" and through a broker at "/<slug>/".
+  const target = new URL(path.replace(/^\//, ""), document.baseURI);
+  const response = await fetch(target, {
     ...options,
     headers: {
       Authorization: `Bearer ${state.token}`,

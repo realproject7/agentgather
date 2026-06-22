@@ -62,6 +62,45 @@ test("register rejects a malformed slug with a stable code", () => {
   assert.throws(() => broker.register({ route_slug: "Not A Slug" }), hasCode("invalid_registration"));
 });
 
+test("register rejects a non-local or non-http forwarding target", () => {
+  const broker = new TunnelBroker();
+  assert.throws(
+    () => broker.register({ route_slug: "demo-room", target: "http://169.254.169.254/latest/meta-data/" }),
+    hasCode("invalid_registration")
+  );
+  assert.throws(
+    () => broker.register({ route_slug: "demo-room", target: "file:///etc/passwd" }),
+    hasCode("invalid_registration")
+  );
+  assert.throws(
+    () => broker.register({ route_slug: "demo-room", target: "http://10.0.0.5:8787" }),
+    hasCode("invalid_registration")
+  );
+
+  const route = broker.register({ route_slug: "demo-room", target: "http://127.0.0.1:8787" });
+  assert.equal(route.status, "active");
+  assert.equal(broker.target("demo-room"), "http://127.0.0.1:8787");
+});
+
+test("re-registering a slug clears a previous forwarding target", () => {
+  const clock = makeClock(T0);
+  const broker = new TunnelBroker({ now: clock.now, routeTtlMs: 1_000 });
+
+  // Close then re-register without a target: the old target must not survive.
+  const first = broker.register({ route_slug: "demo-room", target: "http://127.0.0.1:8787" });
+  assert.equal(broker.target("demo-room"), "http://127.0.0.1:8787");
+  broker.closeRoute({ route_id: first.route_id, host_connection_id: first.host_connection_id });
+  assert.equal(broker.target("demo-room"), undefined);
+  broker.register({ route_slug: "demo-room" });
+  assert.equal(broker.target("demo-room"), undefined);
+
+  // Expire then re-register without a target: still no stale forwarding target.
+  broker.register({ route_slug: "other-room", target: "http://127.0.0.1:8788" });
+  clock.advance(1_001);
+  broker.register({ route_slug: "other-room" });
+  assert.equal(broker.target("other-room"), undefined);
+});
+
 test("register rejects a duplicate active slug", () => {
   const broker = new TunnelBroker({ now: makeClock(T0).now });
   broker.register({ route_slug: "demo-room" });

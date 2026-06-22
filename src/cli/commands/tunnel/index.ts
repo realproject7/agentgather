@@ -34,7 +34,7 @@ async function tunnelStart(argv: string[], context: CliContext): Promise<number>
   // Register first. The current room URL is only updated after the broker
   // confirms the route, so a failed registration leaves local state unchanged.
   const client = new TunnelClient(brokerUrl);
-  const { route, publicBaseUrl } = await client.register(subdomain);
+  const { route, publicBaseUrl } = await client.register(subdomain, targetUrl);
 
   await writeHostTunnelState(context.home, current.roomId, {
     public_base_url: publicBaseUrl,
