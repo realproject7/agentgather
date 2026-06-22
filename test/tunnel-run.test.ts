@@ -191,6 +191,18 @@ test("stopping the session with closeRoute closes the broker route", async () =>
   }
 });
 
+test("the foreground run session keeps the process alive while attending", async () => {
+  const fixture = await setup();
+  const session = startSession(fixture, { heartbeatIntervalMs: 10_000, pollIntervalMs: 10_000 });
+  try {
+    const internals = session as unknown as { heartbeatTimer?: NodeJS.Timeout };
+    assert.equal(internals.heartbeatTimer?.hasRef(), true);
+  } finally {
+    await session.stop();
+    await fixture.close();
+  }
+});
+
 test("tunnel run installs a signal shutdown that closes the route and prints status", async () => {
   const stdout = new Capture();
   const context: CliContext = {

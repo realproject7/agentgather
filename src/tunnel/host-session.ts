@@ -63,7 +63,6 @@ export class HostTunnelSession {
 
   start(): void {
     this.heartbeatTimer = setInterval(() => void this.beat(), this.heartbeatIntervalMs);
-    this.heartbeatTimer.unref();
     this.pollLoop = this.runPollLoop();
   }
 
@@ -146,7 +145,6 @@ export class HostTunnelSession {
         resolve();
       };
       const timer = setTimeout(done, ms);
-      timer.unref();
       signal.addEventListener("abort", done, { once: true });
     });
   }
