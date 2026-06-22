@@ -62,6 +62,13 @@ export async function forwardToHost(options: ForwardOptions): Promise<ForwardRes
     throw new TunnelError("internal_error", 502, "could not reach the host room server");
   }
 
+  // When the host declares an over-limit content-length we can still reject
+  // cleanly with a stable error before committing any upstream headers.
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > options.responseBodyBytes) {
+    throw new TunnelError("response_too_large", 502, "forwarded response exceeds the broker limit");
+  }
+
   const responseHeaders: Record<string, string> = {};
   const contentType = response.headers.get("content-type");
   if (contentType !== null) responseHeaders["content-type"] = contentType;
@@ -81,25 +88,33 @@ async function streamResponse(
     return 0;
   }
   // Stream the body through without buffering it to completion, so held /wait
-  // responses are released as soon as the host responds. Stop at the response
-  // size cap rather than relaying an unbounded body.
+  // responses are released as soon as the host responds. If a body with no (or
+  // an understated) content-length grows past the cap, headers are already
+  // committed, so we destroy the socket and throw response_too_large — the
+  // caller logs it as a limit failure rather than a successful forward.
   const source = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
   let bytesOut = 0;
+  let overflow = false;
   try {
     for await (const chunk of source) {
       const buffer = chunk as Buffer;
       bytesOut += buffer.length;
       if (bytesOut > responseBodyBytes) {
+        overflow = true;
         source.destroy();
-        res.destroy();
-        return bytesOut;
+        break;
       }
       if (!res.write(buffer)) await once(res, "drain");
     }
-    res.end();
   } catch {
     res.destroy();
+    return bytesOut;
   }
+  if (overflow) {
+    res.destroy();
+    throw new TunnelError("response_too_large", 502, "forwarded response exceeds the broker limit");
+  }
+  res.end();
   return bytesOut;
 }
 

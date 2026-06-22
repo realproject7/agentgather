@@ -139,31 +139,72 @@ test("a request body over the limit is rejected before forwarding", async () => 
   }
 });
 
-test("a forwarded response over the limit is truncated, not relayed in full", async () => {
+test("an over-limit response with a known content-length is rejected with a stable error before headers", async () => {
   const hostPort = await getFreePort();
   const big = "x".repeat(5_000);
   const target = createServer((_req, res) => {
-    res.writeHead(200, { "content-type": "text/plain" });
+    // setHeader (not writeHead) lets res.end compute and send a content-length,
+    // so the broker can reject cleanly before committing any headers.
+    res.setHeader("content-type", "text/plain");
     res.end(big);
   });
   await new Promise<void>((resolve) => target.listen(hostPort, "127.0.0.1", resolve));
-  const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
 
   const broker = new TunnelBroker({ routeTtlMs: 60_000, limits: { responseBodyBytes: 1_000 }, logSink: () => {} });
   const brokerServer = createBrokerHttpServer(broker);
   await new Promise<void>((resolve) => brokerServer.listen(0, "127.0.0.1", resolve));
   const brokerBaseUrl = `http://127.0.0.1:${(brokerServer.address() as AddressInfo).port}`;
-  await new TunnelClient(brokerBaseUrl).register("demo-room", hostBaseUrl);
+  await new TunnelClient(brokerBaseUrl).register("demo-room", `http://127.0.0.1:${hostPort}`);
 
   try {
-    let received = "";
-    let failed = false;
+    const response = await fetch(`${brokerBaseUrl}/demo-room/`);
+    const payload = (await response.json()) as { error: string };
+    assert.equal(response.status, 502);
+    assert.equal(payload.error, "response_too_large");
+    assert.equal(JSON.stringify(payload).includes("x".repeat(50)), false);
+  } finally {
+    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
+    await new Promise<void>((resolve) => target.close(() => resolve()));
+  }
+});
+
+test("an over-limit streamed response with no content-length is logged as response_too_large, not a success", async () => {
+  const hostPort = await getFreePort();
+  const target = createServer((_req, res) => {
+    // Chunked (no content-length): the cap is only hit mid-stream.
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.write("x".repeat(800));
+    res.write("x".repeat(800));
+    res.end();
+  });
+  await new Promise<void>((resolve) => target.listen(hostPort, "127.0.0.1", resolve));
+
+  const records: Array<Record<string, unknown>> = [];
+  const broker = new TunnelBroker({
+    routeTtlMs: 60_000,
+    limits: { responseBodyBytes: 1_000 },
+    logSink: (record) => records.push({ ...record })
+  });
+  const brokerServer = createBrokerHttpServer(broker);
+  await new Promise<void>((resolve) => brokerServer.listen(0, "127.0.0.1", resolve));
+  const brokerBaseUrl = `http://127.0.0.1:${(brokerServer.address() as AddressInfo).port}`;
+  await new TunnelClient(brokerBaseUrl).register("demo-room", `http://127.0.0.1:${hostPort}`);
+
+  try {
     try {
-      received = await (await fetch(`${brokerBaseUrl}/demo-room/`)).text();
+      await (await fetch(`${brokerBaseUrl}/demo-room/`)).text();
     } catch {
-      failed = true;
+      // Socket destruction mid-stream is expected once headers are committed.
     }
-    assert.equal(failed || received.length < big.length, true);
+    assert.equal(
+      records.some((record) => record.error === "response_too_large"),
+      true
+    );
+    assert.equal(
+      records.some((record) => record.event === "forward" && record.status === 200),
+      false
+    );
+    assert.equal(JSON.stringify(records).includes("x".repeat(50)), false);
   } finally {
     await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
     await new Promise<void>((resolve) => target.close(() => resolve()));
