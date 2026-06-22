@@ -12,7 +12,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { normalizeBaseUrl } from "../protocol/index.js";
-import { TunnelError } from "./protocol.js";
+import { type ForwardedRequest, type ForwardedResponse, TunnelError } from "./protocol.js";
 
 // Request headers passed through to the host. The Authorization header carries
 // the participant token the host uses to derive sender identity. Origin and
@@ -116,6 +116,60 @@ async function streamResponse(
   }
   res.end();
   return bytesOut;
+}
+
+/**
+ * Host-side relay step: apply a claimed forwarded request to the local room
+ * server and build a response envelope. Used by the host tunnel client (and by
+ * relay tests). Origin/Referer are translated to the host origin so same-origin
+ * checks pass; the response body is buffered (capped) into base64 for return.
+ */
+export async function relayToLocalServer(
+  target: string,
+  request: ForwardedRequest,
+  responseBodyBytes: number
+): Promise<ForwardedResponse> {
+  const targetBase = normalizeBaseUrl(target);
+  const targetUrl = `${targetBase}${request.path.startsWith("/") ? request.path : `/${request.path}`}`;
+  const headers = translateEnvelopeHeaders(request.headers, new URL(targetBase).origin);
+
+  const init: RequestInit = { method: request.method, headers, redirect: "manual" };
+  if (request.body_base64 !== undefined && request.method !== "GET" && request.method !== "HEAD") {
+    init.body = new Uint8Array(Buffer.from(request.body_base64, "base64"));
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(targetUrl, init);
+  } catch {
+    throw new TunnelError("host_unavailable", 502, "host room server is unreachable");
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > responseBodyBytes) {
+    throw new TunnelError("response_too_large", 502, "host response exceeds the broker limit");
+  }
+  const responseHeaders: Record<string, string> = {};
+  const contentType = response.headers.get("content-type");
+  if (contentType !== null) responseHeaders["content-type"] = contentType;
+  const result: ForwardedResponse = { status: response.status, headers: responseHeaders };
+  if (buffer.length > 0) result.body_base64 = buffer.toString("base64");
+  return result;
+}
+
+function translateEnvelopeHeaders(headers: Record<string, string>, targetOrigin: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (lower === "origin") {
+      result.origin = targetOrigin;
+    } else if (lower === "referer") {
+      result.referer = `${targetOrigin}/`;
+    } else if (FORWARDED_REQUEST_HEADERS.has(lower)) {
+      result[lower] = value;
+    }
+  }
+  return result;
 }
 
 function selectRequestHeaders(req: IncomingMessage, targetOrigin: string): Record<string, string> {

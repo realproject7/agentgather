@@ -51,6 +51,7 @@ test("tunnel error messages never echo URLs or tokens", () => {
 
 test("forwarded envelopes carry opaque base64 bodies that round-trip as JSON", () => {
   const request: ForwardedRequest = {
+    request_id: "req_sample",
     route_slug: "demo-room",
     method: "POST",
     path: "/messages",

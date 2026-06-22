@@ -26,6 +26,8 @@ export type TunnelErrorCode =
   | "rate_limited"
   | "request_too_large"
   | "response_too_large"
+  | "host_unavailable"
+  | "unknown_request"
   | "internal_error";
 
 /**
@@ -84,28 +86,49 @@ export interface RouteCloseResult {
 }
 
 /**
- * Remote participant request forwarded by the broker to the host room server.
- * Defined for later forwarding tickets; the broker never persists any field of
- * this envelope.
+ * Remote participant request the broker holds in flight for the host tunnel
+ * client to claim. The broker keeps this in memory only until the matching
+ * response arrives; it never persists any field.
  */
 export interface ForwardedRequest {
+  request_id: string;
   route_slug: string;
   method: string;
   path: string;
   headers: Record<string, string>;
-  /** Opaque, base64-encoded body. Forwarded in flight, never stored. */
+  /** Opaque, base64-encoded body. Held in flight, never stored. */
   body_base64?: string;
 }
 
 /**
- * Host room server response carried back through the broker. As with the
+ * Host room server response the host posts back for a request id. As with the
  * request envelope, the broker forwards but never stores the body.
  */
 export interface ForwardedResponse {
   status: number;
   headers: Record<string, string>;
-  /** Opaque, base64-encoded body. Forwarded in flight, never stored. */
+  /** Opaque, base64-encoded body. Held in flight, never stored. */
   body_base64?: string;
+}
+
+/** Host -> broker: claim the next pending participant request for a route. */
+export interface RelayPollRequest {
+  route_id: string;
+  host_connection_id: string;
+}
+
+/** Broker -> host: the claimed request, or null when none are pending. */
+export interface RelayClaim {
+  ok: true;
+  request: ForwardedRequest | null;
+}
+
+/** Host -> broker: the response for exactly one in-flight request id. */
+export interface RelayRespondRequest {
+  route_id: string;
+  host_connection_id: string;
+  request_id: string;
+  response: ForwardedResponse;
 }
 
 /** Structured tunnel error payload with a stable code and a generic message. */
