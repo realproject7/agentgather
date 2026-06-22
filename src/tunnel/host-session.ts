@@ -135,8 +135,19 @@ export class HostTunnelSession {
 
   private idle(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
+      const signal = this.controller.signal;
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      const done = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
       timer.unref();
+      signal.addEventListener("abort", done, { once: true });
     });
   }
 }
