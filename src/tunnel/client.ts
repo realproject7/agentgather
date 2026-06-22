@@ -32,8 +32,11 @@ export class TunnelClient {
   }
 
   /** Register a route for a slug and compute its public base URL. */
-  async register(slug: string): Promise<RegisterResult> {
-    const payload = await this.post("/_host/register", { route_slug: slug });
+  async register(slug: string, target?: string): Promise<RegisterResult> {
+    const payload = await this.post("/_host/register", {
+      route_slug: slug,
+      ...(target === undefined ? {} : { target })
+    });
     const route = payload.route as RouteMetadata;
     return { route, publicBaseUrl: this.publicBaseUrlFor(route.route_slug) };
   }

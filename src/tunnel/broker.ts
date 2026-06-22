@@ -16,6 +16,7 @@ import {
   type RouteMetadata,
   TunnelError
 } from "./protocol.js";
+import { forwardToHost } from "./forwarding.js";
 
 export interface BrokerOptions {
   /** Time source in epoch milliseconds. Injectable for deterministic tests. */
@@ -35,6 +36,9 @@ export class TunnelBroker {
   private readonly now: () => number;
   private readonly routeTtlMs: number;
   private readonly routes = new Map<string, RouteMetadata>();
+  // Local room server URL per slug, used to forward participant requests. This
+  // is routing configuration, not stored room data.
+  private readonly targets = new Map<string, string>();
 
   constructor(options: BrokerOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -62,7 +66,13 @@ export class TunnelBroker {
       status: "active"
     };
     this.routes.set(slug, route);
+    if (typeof registration.target === "string") this.targets.set(slug, registration.target);
     return { ...route };
+  }
+
+  /** Local room server URL a slug forwards to, if one was registered. */
+  target(slug: string): string | undefined {
+    return this.targets.get(slug);
   }
 
   /** Refresh an active route's last-seen and expiry timestamps. */
@@ -166,18 +176,35 @@ async function routeBrokerRequest(
       await handleHostRequest(broker, segments[1], req, res);
       return;
     }
-    handleParticipantRequest(broker, segments[0], res);
+    await handleParticipantRequest(broker, url, req, res);
   } catch (error) {
     sendTunnelError(res, error);
   }
 }
 
-function handleParticipantRequest(broker: TunnelBroker, slug: string | undefined, res: ServerResponse): void {
+async function handleParticipantRequest(
+  broker: TunnelBroker,
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  const slug = url.pathname.split("/").filter(Boolean)[0];
   if (slug === undefined) {
     throw new TunnelError("unsupported_route", 404, "request path does not name a route");
   }
   const route = broker.resolve(slug);
-  sendJson(res, 200, { ok: true, route_slug: route.route_slug, status: route.status });
+  // A bare `/<slug>` with no trailing slash is a route-status probe; anything
+  // under `/<slug>/` is forwarded to the host room server.
+  if (url.pathname === `/${slug}`) {
+    sendJson(res, 200, { ok: true, route_slug: route.route_slug, status: route.status });
+    return;
+  }
+  const target = broker.target(slug);
+  if (target === undefined) {
+    throw new TunnelError("route_not_found", 502, "route has no forwarding target");
+  }
+  const forwardPath = url.pathname.slice(`/${slug}`.length) || "/";
+  await forwardToHost({ target, path: `${forwardPath}${url.search}`, req, res });
 }
 
 async function handleHostRequest(
@@ -191,7 +218,10 @@ async function handleHostRequest(
   }
   const body = await readJsonBody(req);
   if (action === "register") {
-    const route = broker.register({ route_slug: body.route_slug as string });
+    const route = broker.register({
+      route_slug: body.route_slug as string,
+      ...(typeof body.target === "string" ? { target: body.target } : {})
+    });
     sendJson(res, 200, { ok: true, route });
     return;
   }
@@ -235,6 +265,10 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 }
 
 function sendTunnelError(res: ServerResponse, error: unknown): void {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
   if (error instanceof TunnelError) {
     sendJson(res, error.status, error.body());
     return;

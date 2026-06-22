@@ -41,6 +41,10 @@ export interface RouteMetadata {
 /** Host -> broker: request to register a route for a room slug. */
 export interface HostRegistration {
   route_slug: string;
+  // Local room server URL the broker forwards participant requests to. This is
+  // routing configuration, not room data; the broker stores no room messages,
+  // briefs, tokens, or bodies.
+  target?: string;
 }
 
 /** Broker -> host: route registered, including broker-minted identifiers. */
