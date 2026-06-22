@@ -7,6 +7,7 @@ import { Writable } from "node:stream";
 import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
+import { runTunnelCommand } from "../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 import { createBrokerHttpServer, HostTunnelSession, TunnelBroker, TunnelClient } from "../src/tunnel/index.js";
 
@@ -37,6 +38,14 @@ function delay(ms: number): Promise<void> {
     const timer = setTimeout(resolve, ms);
     timer.unref();
   });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
+    await delay(10);
+  }
 }
 
 interface Fixture {
@@ -179,6 +188,49 @@ test("stopping the session with closeRoute closes the broker route", async () =>
     );
   } finally {
     await fixture.close();
+  }
+});
+
+test("tunnel run installs a signal shutdown that closes the route and prints status", async () => {
+  const stdout = new Capture();
+  const context: CliContext = {
+    home: await mkdtemp(path.join(os.tmpdir(), "telegent-run-signal-")),
+    stdout,
+    stderr: new Capture()
+  };
+  await runRoomCommand(["start", "demo-room", "--alias", "host", "--json"], context);
+  const hostToken = stdout.json<{ token: string }>().token;
+
+  const broker = new TunnelBroker({ routeTtlMs: 60_000, logSink: () => {} });
+  const brokerServer = createBrokerHttpServer(broker);
+  await new Promise<void>((resolve) => brokerServer.listen(0, "127.0.0.1", resolve));
+  const brokerBaseUrl = `http://127.0.0.1:${(brokerServer.address() as AddressInfo).port}`;
+
+  stdout.reset();
+  const runPromise = runTunnelCommand(
+    ["run", "--broker", brokerBaseUrl, "--subdomain", "demo-room", "--target", "http://127.0.0.1:8787"],
+    context
+  );
+  try {
+    await waitFor(() => stdout.chunks.join("").includes("Tunnel running"));
+    await delay(20);
+    assert.equal(broker.resolve("demo-room").status, "active");
+
+    process.emit("SIGINT");
+    const code = await runPromise;
+
+    assert.equal(code, 0);
+    const output = stdout.chunks.join("");
+    assert.match(output, /Tunnel running/);
+    assert.match(output, /Tunnel closed \(signal\)/);
+    assert.throws(
+      () => broker.resolve("demo-room"),
+      (error: unknown) => error instanceof Error && /closed/.test(error.message)
+    );
+    assert.equal(output.includes(hostToken), false);
+    assert.equal(output.includes("Bearer"), false);
+  } finally {
+    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
   }
 });
 
