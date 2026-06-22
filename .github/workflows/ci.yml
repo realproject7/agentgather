@@ -46,4 +46,6 @@ jobs:
         run: pnpm no-stub
 
       - name: Whitespace check
-        run: git -C "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}" diff --check
+        run: |
+          git config --global --add safe.directory '*'
+          git diff --check
