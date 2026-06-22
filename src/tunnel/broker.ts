@@ -27,6 +27,30 @@ export interface BrokerOptions {
 
 const DEFAULT_ROUTE_TTL_MS = 30_000;
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const LOCAL_TARGET_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * Validate a forwarding target before the broker will store and fetch it. This
+ * ticket is local-only, so the target must be a loopback http(s) URL. Rejecting
+ * non-local hosts blocks server-side request forgery to internal-network or
+ * cloud-metadata addresses through the unauthenticated register endpoint.
+ * Authenticated host registration and egress allowlists for non-local targets
+ * are deferred to the #37 hardening ticket.
+ */
+function assertLocalTarget(target: string): void {
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    throw new TunnelError("invalid_registration", 400, "target is not a valid URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new TunnelError("invalid_registration", 400, "target must use http or https");
+  }
+  if (!LOCAL_TARGET_HOSTS.has(url.hostname)) {
+    throw new TunnelError("invalid_registration", 400, "target must be a local address");
+  }
+}
 
 /**
  * In-memory tunnel broker. One active route per slug; routes expire after a TTL
@@ -51,6 +75,7 @@ export class TunnelBroker {
     if (typeof slug !== "string" || !SLUG_PATTERN.test(slug)) {
       throw new TunnelError("invalid_registration", 400, "route slug is missing or malformed");
     }
+    if (registration.target !== undefined) assertLocalTarget(registration.target);
     const existing = this.currentRoute(slug);
     if (existing && existing.status === "active") {
       throw new TunnelError("route_slug_taken", 409, "an active route already exists for this slug");

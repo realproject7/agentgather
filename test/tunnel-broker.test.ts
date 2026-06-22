@@ -62,6 +62,26 @@ test("register rejects a malformed slug with a stable code", () => {
   assert.throws(() => broker.register({ route_slug: "Not A Slug" }), hasCode("invalid_registration"));
 });
 
+test("register rejects a non-local or non-http forwarding target", () => {
+  const broker = new TunnelBroker();
+  assert.throws(
+    () => broker.register({ route_slug: "demo-room", target: "http://169.254.169.254/latest/meta-data/" }),
+    hasCode("invalid_registration")
+  );
+  assert.throws(
+    () => broker.register({ route_slug: "demo-room", target: "file:///etc/passwd" }),
+    hasCode("invalid_registration")
+  );
+  assert.throws(
+    () => broker.register({ route_slug: "demo-room", target: "http://10.0.0.5:8787" }),
+    hasCode("invalid_registration")
+  );
+
+  const route = broker.register({ route_slug: "demo-room", target: "http://127.0.0.1:8787" });
+  assert.equal(route.status, "active");
+  assert.equal(broker.target("demo-room"), "http://127.0.0.1:8787");
+});
+
 test("register rejects a duplicate active slug", () => {
   const broker = new TunnelBroker({ now: makeClock(T0).now });
   broker.register({ route_slug: "demo-room" });
