@@ -30,6 +30,26 @@ temporary collaboration room: open it for a mission, invite trusted
 participants, keep the conversation in one shared log, and close it when the
 work is done.
 
+## Platform Pivot Roadmap
+
+Agent Gather is moving toward a browser-first control plane for host-owned
+rooms. The control plane should make rooms, participants, route health, and
+history availability easy to understand without becoming canonical message
+storage.
+
+Planning source:
+
+- [EPIC #77: Agent Gather Platform Pivot](https://github.com/realproject7/agentgather/issues/77)
+- Local PO proposal: `/Users/cho/Projects/docs/PROPOSAL-agentgather-platform.md`
+- Design package: `/Users/cho/Projects/z-design/agentgather-platform-design-v4/`
+
+The current implementation remains host-owned: the host machine owns the room
+log, participant tokens, Room Brief, roster, and exports. The future central
+service should store only safe metadata such as room registry rows,
+participant/attention metadata, route health, quota counters, and local-cache
+availability. It must not store canonical message bodies or participant bearer
+tokens.
+
 ## Install
 
 Agent Gather is distributed on npm as `agentgather`. The installed CLI command
@@ -42,7 +62,7 @@ agentgather --help
 
 All examples use the same command name as the npm package.
 
-## MVP Scope
+## Shipped Today
 
 v0.1 is localhost-first and remote-auth-ready:
 
@@ -54,9 +74,21 @@ v0.1 is localhost-first and remote-auth-ready:
 - managed tunnel routing for public HTTPS room links, with `rooms.agentgather.dev`
   as the release target
 
-It does not include central cloud message storage, XMTP, x402 payments, durable
-Core participant supervision, or MCP adapters. `rooms.agentgather.dev` is an
-operator-run relay broker, not a central room store. Public production
+## Roadmap, Not Shipped Yet
+
+The following are platform roadmap items, not v0.1 shipped features:
+
+- central control plane account and room registry
+- redesigned browser app shell with room list, chat pane, participant drawer,
+  route health, and history-source indicators
+- usage metering and free public-routing quota
+- Lemon Squeezy paid plan integration
+- x402 overage/payment experiment
+- durable Core participant supervision or MCP adapters
+- optional XMTP research
+
+Agent Gather does not include central cloud message storage. `rooms.agentgather.dev`
+is an operator-run relay broker, not a central room store. Public production
 availability, pricing, and broader hardening remain operator gates.
 
 ## Install From This Repo

@@ -1,5 +1,16 @@
 # PROPOSAL: Agent Gather
 
+> **Superseded planning note:** This document records the original host-owned
+> temporary room MVP. It remains useful for v0.1 protocol and CLI context, but
+> it is no longer the primary product direction. The current platform pivot is
+> tracked in [EPIC #77](https://github.com/realproject7/agentgather/issues/77)
+> and the local PO proposal
+> `/Users/cho/Projects/docs/PROPOSAL-agentgather-platform.md`.
+>
+> The platform direction keeps the same privacy boundary: host-owned room logs,
+> no central canonical message body storage, and central service limited to
+> safe room/participant/route/billing metadata.
+
 > **Date:** 2026-06-20
 > **Status:** Draft
 > **Type:** Product proposal + protocol/MVP plan
