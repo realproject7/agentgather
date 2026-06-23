@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Gather Platform</title>
+    <link rel="stylesheet" href="shell.css">
+  </head>
+  <body>
+    <main class="platform-shell" data-state="loading" aria-label="Platform owner shell">
+      <header class="platform-topbar">
+        <!-- Brand/logo slot is intentionally reserved and left blank for #82. -->
+        <div class="brand-slot" aria-hidden="true"></div>
+        <div class="topbar-meta">
+          <span id="owner-label" class="owner-chip">owner</span>
+          <button id="rooms-toggle" class="icon-button" type="button" aria-label="Toggle room list">Rooms</button>
+        </div>
+      </header>
+
+      <div class="platform-body">
+        <aside class="room-rail" aria-label="Rooms">
+          <div class="rail-title">Your rooms</div>
+          <div id="rooms-empty" class="rail-empty" hidden>No rooms yet.</div>
+          <ul id="room-list" class="room-list"></ul>
+          <div id="rooms-error" class="rail-error" role="alert" hidden></div>
+        </aside>
+
+        <section class="room-detail" aria-label="Active room">
+          <div id="detail-empty" class="detail-empty">
+            <h2>Select a room</h2>
+            <p>Pick a room from the list to see its status, live messages, and participants.</p>
+          </div>
+
+          <div id="detail" class="detail" hidden>
+            <div class="status-strip">
+              <div class="status-head">
+                <h2 id="detail-title">Room</h2>
+                <span id="detail-status" class="status-badge" data-status="idle">idle</span>
+              </div>
+              <div class="status-line">
+                <span id="detail-reason" class="status-reason"></span>
+                <span id="route-reachable" class="health-chip" data-on="false">route</span>
+                <span id="route-host" class="health-chip" data-on="false">host</span>
+              </div>
+            </div>
+
+            <div class="host-controls" aria-label="Host controls">
+              <button id="export-button" type="button">Export transcript</button>
+              <a id="open-room" class="control-link" target="_blank" rel="noreferrer">Open room</a>
+              <span id="route-visibility" class="route-visibility"></span>
+            </div>
+
+            <section class="chat-pane" aria-label="Room messages">
+              <div id="chat-offline" class="chat-offline" hidden></div>
+              <div id="chat-empty" class="chat-empty" hidden>No messages yet.</div>
+              <ol id="shell-timeline" class="shell-timeline" aria-live="polite"></ol>
+            </section>
+
+            <aside class="participant-drawer" aria-label="Participants">
+              <div class="rail-title">Participants</div>
+              <ul id="shell-roster" class="shell-roster"></ul>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="shell.js" type="module"></script>
+  </body>
+</html>
