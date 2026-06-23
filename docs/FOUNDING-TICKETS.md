@@ -9,9 +9,8 @@ These drafts are the founding issue source material for
 truth; amend issue bodies directly when scope changes, then mirror durable
 founding changes back here when useful.
 
-Distribution note: the product name remains Telegent, while repository and
-future domain handles use `tgent`. The npm package is `@project7/tgent` because
-npm blocks the unscoped `telegent` and `tgent` names. The CLI supports both
+Distribution note: the product name remains Telegent, while npm package,
+repository, and future domain handles use `tgent`. The CLI supports both
 `telegent` and `tgent`.
 
 ## Labels

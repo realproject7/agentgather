@@ -1,5 +1,5 @@
 {
-  "name": "@project7/tgent",
+  "name": "tgent",
   "version": "0.1.0",
   "description": "Telegent: lightweight temporary rooms for agent and human collaboration.",
   "license": "MIT",
