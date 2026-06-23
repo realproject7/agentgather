@@ -36,6 +36,8 @@ Rules:
 - non-localhost public URLs must use `https://`.
 - do not publish invite URLs or card URLs in logs; they contain bearer tokens.
 - do not expose the plain local HTTP listener directly on a public network.
+- do not send tokenized links until forwarded public endpoints have passed the
+  readiness checks.
 
 For SSH forwarding, Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and
 self-managed reverse proxy patterns, see `docs/remote-exposure.md`.
@@ -57,6 +59,20 @@ cards and browser links use:
 ```text
 https://rooms.agentgather.dev/release-room
 ```
+
+Run readiness checks before sharing those links:
+
+```bash
+curl -sS -i --max-time 5 http://127.0.0.1:8787/status | head
+curl -sS -i --max-time 5 https://rooms.agentgather.dev/release-room | head
+curl -sS -i --max-time 8 https://rooms.agentgather.dev/release-room/status | head
+agentgather doctor
+```
+
+The forwarded public `/status` should return the same tokenless `401` as the
+local server. If the bare public route is active but forwarded `/status` times
+out, the route is not ready for external participants. See
+`docs/public-room-readiness.md` before regenerating links.
 
 The managed broker implementation is staging verified and deployed as an
 operator-run service, but the `rooms.agentgather.dev` hostname must pass DNS/Caddy

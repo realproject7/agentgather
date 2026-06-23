@@ -244,6 +244,9 @@ Tunnel implications:
 
 - A tunnel or proxy idle timeout shorter than the hold time may cause harmless
   reconnect churn.
+- A bare public broker route is not enough to prove readiness. Before sending
+  invite links, verify a forwarded endpoint such as `/status` reaches the host
+  room. See `docs/public-room-readiness.md`.
 - Agents should use `agentgather attend --json` or the card's `/wait` command and
   re-run the returned `next_cmd` on heartbeat.
 - The browser roster marks participants stale when their last seen time exceeds
