@@ -1,16 +1,17 @@
 // Control plane read API skeleton.
 //
 // Framework-agnostic handlers for listing and reading central room metadata.
-// They return an HTTP-shaped { status, body } so a future account/auth ticket
-// can mount them behind real authentication; #80 deliberately does not bind an
-// unauthenticated production server. Scoping is by an explicit owner_user_id,
-// the metadata-only account identifier — no login or session work happens here.
+// They return an HTTP-shaped { status, body } so the future production auth
+// layer can mount them behind real authentication. Scoping is by a concrete
+// platform account/owner identity; local callers can use a configurable dev
+// owner identity until the operator selects a production auth provider.
 
 import {
   ControlPlaneNotFoundError,
   listControlPlaneRooms,
   readControlPlaneRoom
 } from "./registry.js";
+import { resolveOwnerAccount, type PlatformOwnerQuery } from "./accounts.js";
 import type { ControlPlaneRoom } from "./types.js";
 
 export interface PlatformApiResponse {
@@ -18,10 +19,7 @@ export interface PlatformApiResponse {
   body: unknown;
 }
 
-export interface PlatformApiQuery {
-  /** Account owner the request is scoped to. Required: there is no anonymous read. */
-  owner_user_id: string;
-}
+export type PlatformApiQuery = PlatformOwnerQuery;
 
 /** GET-style handler: list the central metadata for an owner's rooms. */
 export async function listRoomsResponse(root: string, query: PlatformApiQuery): Promise<PlatformApiResponse> {
@@ -53,11 +51,15 @@ export async function readRoomResponse(
 }
 
 function ownerOrError(query: PlatformApiQuery): string | null {
-  return typeof query.owner_user_id === "string" && query.owner_user_id.length > 0 ? query.owner_user_id : null;
+  try {
+    return resolveOwnerAccount(query)?.user_id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function unauthorized(): PlatformApiResponse {
-  return { status: 401, body: { ok: false, error: "unauthorized", message: "owner_user_id is required" } };
+  return { status: 401, body: { ok: false, error: "unauthorized", message: "owner account is required" } };
 }
 
 function notFound(): PlatformApiResponse {

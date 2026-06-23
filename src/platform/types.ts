@@ -79,8 +79,8 @@ export interface RouteHealth {
 export interface ControlPlaneRoom {
   room_id: string;
   title: string;
-  // Owner identity for the future account layer. #80 keeps this an opaque
-  // metadata value only; it does not authenticate or authorize anything.
+  // Concrete PlatformAccount.user_id owner for control-plane scoping. This is
+  // metadata only; production login/session setup remains an operator gate.
   owner_user_id: string;
   route_url: string;
   route_slug: string;

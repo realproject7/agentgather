@@ -4,7 +4,7 @@
 // consumes: room list/status from the #80/#81 control-plane handlers, and a
 // chat read that surfaces the host-owned message log live (never stored
 // centrally). It is bound to localhost and scoped to a single configured owner;
-// real account authentication and multi-owner scoping are #87, not this ticket.
+// production login/provider setup remains an operator gate.
 //
 // The shell's two data sources stay separate here: registry/status comes from
 // the platform handlers, while the chat pane reads the existing host-owned room
@@ -14,13 +14,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
 import { readMessages } from "../storage/index.js";
+import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
 
 export interface PlatformHttpServerOptions {
   /** Home directory holding the control-plane registry and host room logs. */
   root: string;
-  /** Owner the shell is scoped to. A stand-in for the #87 account session. */
-  ownerUserId: string;
+  /** Owner the shell is scoped to. Kept for existing local callers. */
+  ownerUserId?: string;
+  /** Configurable local/dogfood owner identity. Production auth is a later gate. */
+  devOwner?: DevOwnerIdentityConfig;
   /** Allow non-localhost Host headers. Off by default to avoid open exposure. */
   allowInsecureRemote?: boolean;
 }
@@ -55,7 +58,7 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
     return;
   }
 
-  const query = { owner_user_id: options.ownerUserId };
+  const query = ownerQuery(options);
   if (url.pathname === "/rooms") {
     const result = await listRoomsResponse(options.root, query);
     sendJson(res, result.status, result.body);
@@ -87,7 +90,7 @@ async function sendRoomMessages(
   url: URL,
   res: ServerResponse
 ): Promise<void> {
-  const room = await readRoomResponse(options.root, roomId, { owner_user_id: options.ownerUserId });
+  const room = await readRoomResponse(options.root, roomId, ownerQuery(options));
   if (room.status !== 200) {
     sendJson(res, room.status, room.body);
     return;
@@ -130,6 +133,12 @@ function parseSinceId(raw: string | null): number | null {
 function isLocalhost(hostHeader: string | undefined): boolean {
   const host = (hostHeader ?? "").split(":")[0] ?? "";
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}
+
+function ownerQuery(options: PlatformHttpServerOptions): PlatformOwnerQuery {
+  if (options.devOwner !== undefined) return { dev_owner: options.devOwner };
+  if (options.ownerUserId !== undefined) return { owner_user_id: options.ownerUserId };
+  return { dev_owner: devOwnerIdentityFromEnv() };
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
