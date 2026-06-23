@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./accounts.js";
 export * from "./registry.js";
 export * from "./status.js";
 export * from "./metering.js";

@@ -83,6 +83,54 @@ operator gates. Deployment details are in
 `docs/deploy-rooms-agentgather-dev.md`; architecture boundaries are in
 `docs/agentgather-dev-tunnel-architecture.md`.
 
+## Platform Account Boundary
+
+Agent Gather local rooms do not require a central account login. A host can
+start, serve, invite, attend, export, and close a host-owned room entirely from
+local room files.
+
+The browser platform/control-plane surface does need an owner boundary for room
+lists, route health, usage metering, and future billing. The MVP account shape
+is:
+
+- `user_id`
+- `display_name`
+- nullable `email`
+- nullable `external_identity` with `provider` and `subject`
+- `created_at` and `updated_at`
+
+Control-plane room metadata stores `owner_user_id`, which is the
+`PlatformAccount.user_id`. That value scopes room list/read APIs before they are
+safe to expose beyond localhost. A non-owner room read returns `404` rather than
+revealing that the room exists.
+
+For local dogfood and tests, configure the dev owner identity with environment
+variables:
+
+```bash
+export AGENTGATHER_DEV_OWNER_ID="project7"
+export AGENTGATHER_DEV_OWNER_NAME="Project Seven"
+export AGENTGATHER_DEV_OWNER_EMAIL="owner@example.com" # optional
+export AGENTGATHER_DEV_OWNER_PROVIDER="github"         # optional pair
+export AGENTGATHER_DEV_OWNER_SUBJECT="realproject7"    # optional pair
+```
+
+If no dev owner is configured, the platform shell falls back to a local owner
+identity. This is only for local/dev control-plane use. Production login,
+session/cookie strategy, OAuth provider selection, and credentials are an
+operator gate.
+
+Privacy boundary:
+
+- account records must not store room message bodies
+- account records must not store Room Brief bodies
+- account records must not store participant bearer tokens
+- account records must not store tokenized invite URLs or card URLs
+
+Billing and quota follow the same boundary: #84 can meter public routing against
+an owner id, and #85 can attach plan/entitlement to an account id, without
+knowing the future payment or login provider.
+
 ## Invite Participants
 
 Installed participant:
