@@ -320,14 +320,26 @@ function readCache(roomId) {
   }
 }
 
+// Redact secrets that can appear inside a message body before it is persisted.
+// Live rendering stays faithful; only the cached copy is sanitized so a shared
+// browser's localStorage never holds a bearer token or a tokenized invite/card
+// URL. Strips the literal "Bearer", "token=", "#token=", and "tgl_" forms.
+function redactForCache(text) {
+  return String(text)
+    .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+    .replace(/token=[^\s&#"']+/gi, "[redacted-token]")
+    .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]");
+}
+
 function writeCache(roomId, messages) {
-  // Persist only already-received, non-secret fields, scoped to this room.
+  // Persist only already-received, non-secret fields, scoped to this room, with
+  // secrets inside the message body redacted.
   const safe = messages.map((message) => ({
     id: message.id,
     from: message.from,
     ts: message.ts,
     type: message.type,
-    text: message.text
+    text: redactForCache(message.text)
   }));
   try {
     window.localStorage.setItem(

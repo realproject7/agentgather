@@ -190,6 +190,39 @@ test("history source shows the live host room and caches messages browser-locall
   }
 });
 
+test("cached message bodies redact bearer tokens and invite/card URLs in localStorage", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "secret-room", status: "active" }));
+  await createRoom({ root, roomId: "secret-room", hostAlias: "host", briefBody: "go" });
+  const secretLine =
+    "join https://rooms.agentgather.dev/secret-room/card?participant=re1#token=tgl_SUPERSECRET via Authorization: Bearer tgl_SUPERSECRET";
+  await appendServerMessage({ root, roomId: "secret-room", from: "host", text: secretLine });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(platform.baseUrl);
+    await page.click('.room-row[data-room-id="secret-room"]');
+    await page.waitForSelector('#history-source[data-source="live"]');
+    // Live rendering stays faithful: the full token-bearing line is visible.
+    await page.waitForSelector("text=tgl_SUPERSECRET");
+
+    // The persisted cache copy is redacted: no token/credential/invite-URL forms.
+    const cached = (await page.evaluate(() => window.localStorage.getItem("agentgather.history.secret-room"))) ?? "";
+    assert.doesNotMatch(cached, /tgl_/);
+    assert.doesNotMatch(cached, /Bearer/);
+    assert.doesNotMatch(cached, /#token=/);
+    assert.doesNotMatch(cached, /token=/);
+    assert.doesNotMatch(cached, /SUPERSECRET/);
+    // The redaction marker is present, proving the body was cached but sanitized.
+    assert.match(cached, /redacted/);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
 test("history falls back to local cache with #81 paused copy when the host is offline, with no upload", async () => {
   const root = await makeRoot();
   await createControlPlaneRoom(
