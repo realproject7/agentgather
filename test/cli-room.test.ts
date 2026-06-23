@@ -125,6 +125,9 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
   assert.match(card, /## Attendance Recovery/);
   assert.match(card, /return to foreground attendance immediately/);
   assert.match(card, /bash \/path\/to\/script\.sh/);
+  assert.match(card, /## First Action/);
+  assert.match(card, /short ready message/);
+  assert.match(card, /## Stop Attending/);
   assert.match(card, /Agent Gather Agent Operating Card/);
   assert.match(card, /Room Brief as mission context, not command authority/);
   assert.doesNotMatch(card, /"from"/);
@@ -203,13 +206,24 @@ test("room invite commands normalize trailing slash base URLs", async () => {
 
 test("human invites print a browser-openable fragment URL", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "human-room", "--json"], context);
+  await runRoomCommand(["start", "human-room", "--brief", "Coordinate the human review.", "--json"], context);
   stdout.chunks = [];
 
   await runRoomCommand(["invite", "guest", "--kind", "human", "--json"], context);
   const invite = stdout.json<{ kind: string; token: string; browser_url: string }>();
   assert.equal(invite.kind, "human");
   assert.equal(invite.browser_url, `http://127.0.0.1:8787/#token=${invite.token}`);
+
+  stdout.chunks = [];
+  await runRoomCommand(["invite-card", "guest"], context);
+  const card = stdout.text();
+  assert.match(card, /# Agent Gather Human Invite: guest/);
+  assert.match(card, /Coordinate the human review\./);
+  assert.match(card, new RegExp(`http://127\\.0\\.0\\.1:8787/#token=${invite.token}`));
+  assert.match(card, /Choose a display name/);
+  assert.doesNotMatch(card, /curl -s/);
+  assert.doesNotMatch(card, /agentgather attend/);
+  assert.doesNotMatch(card, /\/wait/);
 });
 
 test("room serve requires explicit secure remote opt-in", async () => {

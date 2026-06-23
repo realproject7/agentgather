@@ -14,7 +14,7 @@ import {
 import type { Participant, ParticipantKind, RoomBrief } from "../../../protocol/index.js";
 import { normalizeBaseUrl, parseAttendancePolicy, roomUrl, type AttendancePolicy } from "../../../protocol/index.js";
 import { createToken } from "../../../auth/index.js";
-import { createRoomHttpServer, participantTokenHash, renderAttendCard } from "../../../server/index.js";
+import { createRoomHttpServer, participantTokenHash, renderInviteCard } from "../../../server/index.js";
 import { readPublicBaseUrl } from "../../../tunnel/index.js";
 import { parseArgs, flagBoolean, flagString } from "../../args.js";
 import type { CliContext } from "../../context.js";
@@ -230,8 +230,10 @@ async function roomInviteCard(argv: string[], context: CliContext): Promise<numb
     readBrief(context.home, current.roomId),
     readRoomState(roomPaths(context.home, current.roomId))
   ]);
+  const participant = (await readParticipants(roomPaths(context.home, current.roomId))).find((entry) => entry.alias === alias);
+  if (participant === undefined) throw new Error(`participant not found: ${alias}`);
   const advertised = advertisedBaseUrl(context.home, current.roomId, current.baseUrl);
-  const card = renderAttendCard(advertised, alias, token, brief, state.attendance_policy);
+  const card = renderInviteCard(advertised, participant, token, brief, state.attendance_policy);
   return emit(context, flagBoolean(args, "json"), { ok: true, room: current.roomId, alias, card }, `${card}\n`);
 }
 

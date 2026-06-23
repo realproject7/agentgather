@@ -154,7 +154,7 @@ async function getCard(context: RequestContext): Promise<void> {
   sendPlain(
     context.res,
     200,
-    renderAttendCard(advertisedBaseUrl(context), auth.participant.alias, auth.token, brief, state.attendance_policy)
+    renderInviteCard(advertisedBaseUrl(context), auth.participant, auth.token, brief, state.attendance_policy)
   );
 }
 
@@ -634,7 +634,46 @@ export function renderAttendCard(
     "If a shell command contains pipes, quotes, or `${...}`, ask the host for a script file and run one quote-free command such as `bash /path/to/script.sh`.",
     "If the attend loop stops, Agent Gather v0.1 cannot wake this session automatically; the host will see you as stale until you rejoin or attend again.",
     "",
+    "## First Action",
+    "After joining, send a short ready message so the host and humans can see that you are present.",
+    "",
+    "## Stop Attending",
+    "When the host releases you or the room closes, stop the foreground loop and send a final note if useful.",
+    "",
     renderAgentInstructions()
+  ].join("\n");
+}
+
+export function renderInviteCard(
+  baseUrl: string,
+  participant: Participant,
+  token: string,
+  brief: RoomBrief,
+  attendancePolicy: AttendancePolicy = "manual-ok"
+): string {
+  if (participant.kind === "human") {
+    return renderHumanInviteCard(baseUrl, participant.alias, token, brief);
+  }
+  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy);
+}
+
+function renderHumanInviteCard(baseUrl: string, alias: string, token: string, brief: RoomBrief): string {
+  return [
+    `# Agent Gather Human Invite: ${alias}`,
+    "",
+    "## Room Brief",
+    brief.body || "(empty)",
+    "",
+    "## Browser Link",
+    `${normalizeBaseUrl(baseUrl)}/#token=${token}`,
+    "",
+    "## What To Do",
+    `- Join as @${alias}.`,
+    "- Choose a display name if the browser asks for one.",
+    "- Read the room goal, participant list, and recent messages.",
+    "- Send messages normally from the browser composer.",
+    "- If the bare room URL asks for an invite, reopen the Browser Link above.",
+    "- If the host is offline, the browser may show cached or exported history until the host resumes."
   ].join("\n");
 }
 

@@ -96,10 +96,21 @@ test("HTTP core exposes every non-wait endpoint", async () => {
     assert.equal(updatedBrief.status, 200);
     assert.equal(updatedBrief.body.brief.brief_version, 2);
 
-    const card = await fetch(`${fixture.baseUrl}/card?token=${fixture.agentToken}`);
+    const card = await fetch(`${fixture.baseUrl}/card?participant=agent&token=${fixture.agentToken}`);
     assert.equal(card.status, 200);
     assert.match(card.headers.get("content-type") ?? "", /text\/plain/);
-    assert.match(await card.text(), /Updated room brief/);
+    const agentCard = await card.text();
+    assert.match(agentCard, /# Agent Gather Attend Card: agent/);
+    assert.match(agentCard, /Updated room brief/);
+    assert.match(agentCard, /\/wait\?participant=agent&since_id=0/);
+
+    const humanCard = await fetch(`${fixture.baseUrl}/card?participant=host&token=${fixture.hostToken}`);
+    assert.equal(humanCard.status, 200);
+    const humanCardText = await humanCard.text();
+    assert.match(humanCardText, /# Agent Gather Human Invite: host/);
+    assert.match(humanCardText, /#token=host-/);
+    assert.doesNotMatch(humanCardText, /curl -s/);
+    assert.doesNotMatch(humanCardText, /\/wait/);
 
     const join = await jsonFetch(fixture, "POST", "/join", fixture.agentToken);
     assert.equal(join.status, 200);

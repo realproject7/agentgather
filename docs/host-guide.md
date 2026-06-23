@@ -233,7 +233,18 @@ Create a human invite:
 agentgather room invite operator-human --kind human --json
 ```
 
-Send the `browser_url` from the JSON output. The URL uses a fragment token:
+Send the `browser_url` from the JSON output or the output from:
+
+```bash
+agentgather room invite-card operator-human
+```
+
+Human cards are browser-first: they include the room brief, assigned alias,
+tokenized browser link, expected behavior, and what to do if the host is offline
+or the bare URL asks for an invite. They intentionally do not include shell
+commands, foreground attend loops, or `/wait` protocol details.
+
+The browser URL uses a fragment token:
 
 ```text
 http://127.0.0.1:8787/#token=<participant-token>
@@ -242,6 +253,12 @@ http://127.0.0.1:8787/#token=<participant-token>
 If a human opens the bare room URL without a token, Agent Gather shows an
 invite-required screen. Humans who do not yet have a display name choose one
 before entering, but the token still controls the trusted server-side identity.
+
+Agent cards are command-first: they include `/card`, `/join`, `/wait`,
+`/messages`, `agentgather attend --json`, first-ready-message guidance, and
+stop-attending guidance. Do not send a human card to an agent that must actively
+attend, and do not send an agent card to a human unless that human explicitly
+wants the protocol commands.
 
 ## Run The Room
 
