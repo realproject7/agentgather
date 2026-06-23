@@ -245,13 +245,26 @@ test("read stores cursors, reply records reply metadata, and handoff embeds boun
   }
 });
 
-test("watch performs one attended wait turn and returns a CLI next command on heartbeat", async () => {
+test("watch performs one wait turn and points continuation at attend, not watch", async () => {
   const fixture = await startRoomFixture();
   try {
     await runWatchCommand(["--since", "0", "--json"], fixture.context);
     const watched = fixture.stdout.json<{ keep_waiting: boolean; cli_next_cmd: string | null }>();
     assert.equal(watched.keep_waiting, true);
-    assert.equal(watched.cli_next_cmd, "agentgather watch --since 0 --json");
+    // One-turn watch directs the agent to continuous attend, never back to watch.
+    assert.equal(watched.cli_next_cmd, "agentgather attend --since 0 --json");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("non-JSON watch next line points to attend, not watch", async () => {
+  const fixture = await startRoomFixture();
+  try {
+    await runWatchCommand(["--since", "0"], fixture.context);
+    const output = fixture.stdout.text();
+    assert.match(output, /next: agentgather attend --since 0/);
+    assert.doesNotMatch(output, /next: agentgather watch/);
   } finally {
     await fixture.close();
   }

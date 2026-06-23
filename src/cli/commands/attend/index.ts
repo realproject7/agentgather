@@ -15,12 +15,8 @@ export async function runAttendCommand(argv: string[], context: CliContext): Pro
     sinceId = response.next_since_id;
 
     if (flagBoolean(args, "json")) {
-      context.stdout.write(
-        `${JSON.stringify({
-          ...response,
-          cli_next_cmd: response.keep_waiting ? `agentgather attend --since ${sinceId} --json` : null
-        })}\n`
-      );
+      // waitOnce already points cli_next_cmd back to `agentgather attend`.
+      context.stdout.write(`${JSON.stringify(response)}\n`);
     } else if (response.messages.length > 0) {
       context.stdout.write(formatMessages(response.messages));
     }

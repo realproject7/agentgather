@@ -105,8 +105,10 @@ export async function waitOnce(context: CliContext, sinceId: number): Promise<Wa
   const waitResponse = payload as WaitResponse;
   await writeCursor(context.home, current.roomId, current.alias, waitResponse.next_since_id);
   return {
+    // Continuous attendance points back to `agentgather attend`; `watch` is a
+    // one-turn alias, so it should not instruct agents to loop via watch.
     ...waitResponse,
-    cli_next_cmd: waitResponse.keep_waiting ? `agentgather watch --since ${waitResponse.next_since_id} --json` : null
+    cli_next_cmd: waitResponse.keep_waiting ? `agentgather attend --since ${waitResponse.next_since_id} --json` : null
   };
 }
 
