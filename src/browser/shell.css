@@ -378,6 +378,35 @@ a {
   padding: 16px;
 }
 
+.history-source {
+  width: min(820px, 100%);
+  margin: 0 auto 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.history-source[data-source="live"] {
+  border-color: rgba(234, 76, 137, 0.4);
+  color: var(--accent-strong);
+}
+
+.history-source[data-source="cache"] {
+  border-color: var(--line-strong);
+  color: var(--muted-strong);
+}
+
+.history-source[data-source="exported"],
+.history-source[data-source="empty"] {
+  border-color: rgba(242, 189, 89, 0.5);
+  color: var(--warn);
+}
+
 .chat-offline,
 .chat-empty {
   width: min(420px, 100%);

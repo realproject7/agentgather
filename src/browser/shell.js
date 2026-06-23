@@ -10,8 +10,15 @@ const state = {
   activeRoomId: null,
   chatCursor: 0,
   seen: new Set(),
+  messages: [],
+  cacheRendered: false,
   pollTimer: null
 };
+
+// Browser-local, per-room cache namespaces. Stores only already-received,
+// non-secret message fields — never bearer tokens or invite URLs.
+const HISTORY_PREFIX = "agentgather.history.";
+const EXPORT_PREFIX = "agentgather.exported.";
 
 const shell = document.querySelector(".platform-shell");
 const ownerLabel = document.getElementById("owner-label");
@@ -33,12 +40,16 @@ const chatOffline = document.getElementById("chat-offline");
 const chatEmpty = document.getElementById("chat-empty");
 const timeline = document.getElementById("shell-timeline");
 const roster = document.getElementById("shell-roster");
+const clearCacheButton = document.getElementById("clear-cache-button");
+const historySource = document.getElementById("history-source");
+const historySourceLabel = document.getElementById("history-source-label");
 
 init().catch((error) => showRoomsError(error instanceof Error ? error.message : String(error)));
 
 async function init() {
   roomsToggle.addEventListener("click", () => shell.classList.toggle("rooms-open"));
   exportButton.addEventListener("click", exportTranscript);
+  clearCacheButton.addEventListener("click", clearActiveCache);
   await loadRooms();
   shell.dataset.state = "ready";
   setInterval(() => void loadRooms(), 5000);
@@ -94,10 +105,18 @@ async function selectRoom(roomId) {
   state.activeRoomId = roomId;
   state.chatCursor = 0;
   state.seen = new Set();
+  state.messages = [];
+  state.cacheRendered = false;
   timeline.replaceChildren();
   shell.classList.remove("rooms-open");
   renderRoomList();
   const room = state.rooms.find((entry) => entry.room_id === roomId);
+  // Provisionally show this browser's cached copy until live availability is
+  // known. These entries are not added to seen/messages, so a live fetch
+  // replaces them with the faithful host copy rather than being skipped.
+  const cached = readCache(roomId);
+  for (const message of cached) renderMessage(message);
+  state.cacheRendered = cached.length > 0;
   if (room) renderDetail(room);
   if (state.pollTimer !== null) clearInterval(state.pollTimer);
   await loadChat();
@@ -152,28 +171,105 @@ function renderRoster(entries) {
   }
 }
 
+// Source precedence: live host -> browser-local cache -> exported summary label
+// -> empty/offline. Live vs unavailable is decided by the #81 status the shell
+// already holds (active/idle = reachable host) plus the host-log availability.
 async function loadChat() {
   if (state.activeRoomId === null) return;
-  let payload;
+  const room = state.rooms.find((entry) => entry.room_id === state.activeRoomId);
+
+  // A closed room clears this browser's local copy (shared-browser safety).
+  if (room !== undefined && room.status === "closed") {
+    clearCache(state.activeRoomId);
+    state.messages = [];
+    state.seen = new Set();
+    state.cacheRendered = false;
+    timeline.replaceChildren();
+    updateHistorySource("empty", room);
+    return;
+  }
+
+  let payload = null;
   try {
     payload = await apiFetch(`./rooms/${encodeURIComponent(state.activeRoomId)}/messages?since_id=${state.chatCursor}`);
   } catch {
+    payload = null;
+  }
+  const hostLive =
+    payload !== null &&
+    payload.host_log_available !== false &&
+    room !== undefined &&
+    (room.status === "active" || room.status === "idle");
+
+  if (hostLive) {
+    // Replace any provisional (redacted) cache render with the faithful live
+    // payload, which on first load returns the full history from since_id=0.
+    if (state.cacheRendered) {
+      timeline.replaceChildren();
+      state.seen = new Set();
+      state.messages = [];
+      state.cacheRendered = false;
+    }
+    for (const message of payload.messages || []) {
+      if (state.seen.has(message.id)) continue;
+      state.seen.add(message.id);
+      state.messages.push(message);
+      renderMessage(message);
+    }
+    if (typeof payload.next_since_id === "number") state.chatCursor = payload.next_since_id;
+    writeCache(state.activeRoomId, state.messages);
+    updateHistorySource("live", room);
     return;
   }
-  if (payload.host_log_available === false) {
+
+  // Host not live: fall through cache -> exported summary label -> empty.
+  if (state.cacheRendered || state.messages.length > 0) {
+    updateHistorySource("cache", room);
+  } else if (exportedAt(state.activeRoomId) !== null) {
+    updateHistorySource("exported", room);
+  } else {
+    updateHistorySource("empty", room);
+  }
+}
+
+function updateHistorySource(source, room) {
+  historySource.dataset.source = source;
+  if (source === "live") {
+    historySourceLabel.textContent = "History: live host room";
+    chatOffline.hidden = true;
+    chatEmpty.hidden = state.messages.length > 0;
+    return;
+  }
+  if (source === "cache") {
+    historySourceLabel.textContent = "History: local cache (host offline)";
     chatOffline.hidden = false;
-    chatOffline.textContent = "The host room log is not reachable from here. Open the room to view live messages.";
+    chatOffline.textContent =
+      pausedCopy(room) ||
+      "Host is offline. Showing messages cached in this browser; live updates resume when the host is reachable.";
     chatEmpty.hidden = true;
     return;
   }
-  chatOffline.hidden = true;
-  for (const message of payload.messages || []) {
-    if (state.seen.has(message.id)) continue;
-    state.seen.add(message.id);
-    renderMessage(message);
+  if (source === "exported") {
+    historySourceLabel.textContent = "History: exported summary";
+    chatOffline.hidden = false;
+    chatOffline.textContent = `${pausedCopy(room) || "Host is offline with no cached messages."} An exported summary is saved for this room in this browser.`;
+    chatEmpty.hidden = true;
+    return;
   }
-  if (typeof payload.next_since_id === "number") state.chatCursor = payload.next_since_id;
-  chatEmpty.hidden = state.seen.size > 0;
+  historySourceLabel.textContent = "History: none";
+  chatOffline.hidden = false;
+  chatOffline.textContent = pausedCopy(room) || "Host is offline and no messages are cached in this browser yet.";
+  chatEmpty.hidden = true;
+}
+
+// Paused/offline copy comes from the #81 platform status/reason, never a generic
+// network error.
+function pausedCopy(room) {
+  if (room === undefined) return "";
+  const reason = room.status_reason ? ` (${room.status_reason})` : "";
+  if (room.status === "paused") return `This room is paused${reason}. The host must reopen this room.`;
+  if (room.status === "closed") return `This room is closed${reason}.`;
+  return "";
 }
 
 function renderMessage(message) {
@@ -210,6 +306,88 @@ function exportTranscript() {
   link.download = `agentgather-${state.activeRoomId || "room"}.txt`;
   link.click();
   URL.revokeObjectURL(link.href);
+  if (state.activeRoomId !== null) markExported(state.activeRoomId);
+}
+
+function clearActiveCache() {
+  if (state.activeRoomId === null) return;
+  clearCache(state.activeRoomId);
+  state.messages = [];
+  state.seen = new Set();
+  state.chatCursor = 0;
+  state.cacheRendered = false;
+  timeline.replaceChildren();
+  updateHistorySource("empty", state.rooms.find((entry) => entry.room_id === state.activeRoomId));
+}
+
+function readCache(roomId) {
+  try {
+    const raw = window.localStorage.getItem(HISTORY_PREFIX + roomId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.messages) ? parsed.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+// Redact secrets that can appear inside a message body before it is persisted.
+// Live rendering stays faithful; only the cached copy is sanitized so a shared
+// browser's localStorage never holds a bearer token or a tokenized invite/card
+// URL. Strips the literal "Bearer", "token=", "#token=", and "tgl_" forms.
+function redactForCache(text) {
+  return String(text)
+    // Drop the entire invite/card or tokenized URL, not just the token value, so
+    // no invite-card URL shape survives in the cache.
+    .replace(/https?:\/\/(?=\S*(?:token=|tgl_|\/card))\S+/gi, "[redacted-url]")
+    .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+    .replace(/[#?&]?token=[^\s&#"']+/gi, "[redacted-token]")
+    .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]");
+}
+
+function writeCache(roomId, messages) {
+  // Persist only already-received, non-secret fields, scoped to this room, with
+  // secrets inside the message body redacted.
+  const safe = messages.map((message) => ({
+    id: message.id,
+    from: message.from,
+    ts: message.ts,
+    type: message.type,
+    text: redactForCache(message.text)
+  }));
+  try {
+    window.localStorage.setItem(
+      HISTORY_PREFIX + roomId,
+      JSON.stringify({ messages: safe, updated_at: new Date().toISOString() })
+    );
+  } catch {
+    // Storage may be unavailable or full; the live view still works.
+  }
+}
+
+function clearCache(roomId) {
+  try {
+    window.localStorage.removeItem(HISTORY_PREFIX + roomId);
+    window.localStorage.removeItem(EXPORT_PREFIX + roomId);
+  } catch {
+    // Ignore storage errors on clear.
+  }
+}
+
+function markExported(roomId) {
+  try {
+    window.localStorage.setItem(EXPORT_PREFIX + roomId, new Date().toISOString());
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function exportedAt(roomId) {
+  try {
+    return window.localStorage.getItem(EXPORT_PREFIX + roomId);
+  } catch {
+    return null;
+  }
 }
 
 async function apiFetch(path) {

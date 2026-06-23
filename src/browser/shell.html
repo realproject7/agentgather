@@ -46,11 +46,15 @@
 
             <div class="host-controls" aria-label="Host controls">
               <button id="export-button" type="button">Export transcript</button>
+              <button id="clear-cache-button" type="button">Clear cached history</button>
               <a id="open-room" class="control-link" target="_blank" rel="noreferrer">Open room</a>
               <span id="route-visibility" class="route-visibility"></span>
             </div>
 
             <section class="chat-pane" aria-label="Room messages">
+              <div id="history-source" class="history-source" data-source="live" aria-live="polite">
+                <span id="history-source-label" class="history-source-label">History: live host room</span>
+              </div>
               <div id="chat-offline" class="chat-offline" hidden></div>
               <div id="chat-empty" class="chat-empty" hidden>No messages yet.</div>
               <ol id="shell-timeline" class="shell-timeline" aria-live="polite"></ol>
