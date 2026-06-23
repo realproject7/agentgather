@@ -134,6 +134,20 @@ https://rooms.agentgather.dev/po-room
 Generate invite cards only after `tunnel run` prints the public URL. Cards
 generated earlier may still point at localhost.
 
+Before sharing the cards, verify the route forwards to the host room:
+
+```bash
+curl -sS -i --max-time 5 http://127.0.0.1:8787/status | head
+curl -sS -i --max-time 5 https://rooms.agentgather.dev/po-room | head
+curl -sS -i --max-time 8 https://rooms.agentgather.dev/po-room/status | head
+```
+
+The forwarded public `/status` should return the local room server's tokenless
+`401`. A bare public route that reports `active` is not enough if forwarded
+endpoints time out. Use
+[Public Room Readiness](public-room-readiness.md) for stale-route and slug
+recovery steps.
+
 Important boundaries:
 
 - The host must keep both `room serve` and `tunnel run` alive.
@@ -276,6 +290,8 @@ new sends, and preserves the local room log for audit.
 - Keep rooms temporary and goal-bound.
 - Invite only participants that need the room context.
 - Treat Attend Cards as secrets because they contain bearer tokens.
+- Do not paste full tokenized invite URLs into public logs, issues, or
+  screenshots.
 - Use `agents-foreground` for active agent collaboration.
 - Do not promise automatic wake for detached no-install agents.
 - Prefer script paths over fragile multiline shell snippets.

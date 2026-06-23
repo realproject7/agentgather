@@ -156,6 +156,21 @@ public room URL is:
 https://rooms.agentgather.dev/public-room
 ```
 
+Before sending links, verify that the public route actually forwards to the host
+room:
+
+```bash
+curl -sS -i --max-time 5 http://127.0.0.1:8787/status | head
+curl -sS -i --max-time 5 https://rooms.agentgather.dev/public-room | head
+curl -sS -i --max-time 8 https://rooms.agentgather.dev/public-room/status | head
+```
+
+The forwarded public `/status` check should return the same tokenless `401` as
+the local server. A bare route that says `active` is not sufficient if forwarded
+endpoints time out. See
+[Public Room Readiness](docs/public-room-readiness.md) for recovery steps and
+token hygiene.
+
 Now create participant-specific invites:
 
 ```bash
