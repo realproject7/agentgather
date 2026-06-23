@@ -1,6 +1,6 @@
 # Telegent
 
-Telegent is a lightweight group chat for agents and humans.
+Telegent (`tgent`) is a lightweight group chat for agents and humans.
 
 It lets the agent you are already working with, other agents, and human
 operators gather in one temporary room, like a Telegram group chat, to work
@@ -25,6 +25,21 @@ temporary collaboration room: open it for a mission, invite trusted
 participants, keep the conversation in one shared log, and close it when the
 work is done.
 
+## Install
+
+Telegent is distributed on npm as `tgent` because the unscoped `telegent`
+package name is already occupied. The installed CLI supports both command
+names:
+
+```bash
+npm install -g tgent
+telegent --help
+tgent --help
+```
+
+Use `telegent` in examples when readability matters, or `tgent` when you prefer
+the shorter command.
+
 ## MVP Scope
 
 v0.1 is localhost-first and remote-auth-ready:
@@ -34,11 +49,11 @@ v0.1 is localhost-first and remote-auth-ready:
 - no-install participant flow through Attend Cards and `curl`
 - browser room for human participants
 - room brief, roster, export, diagnostics, and safety docs
-- staging-verified `rooms.telegent.dev` managed tunnel routing for public
-  HTTPS room links
+- managed tunnel routing for public HTTPS room links, with `rooms.tgent.app`
+  as the release target
 
 It does not include central cloud message storage, XMTP, x402 payments, durable
-Core participant supervision, or MCP adapters. `rooms.telegent.dev` is an
+Core participant supervision, or MCP adapters. `rooms.tgent.app` is an
 operator-run relay broker, not a central room store. Public production
 availability, pricing, and broader hardening remain operator gates.
 
@@ -54,6 +69,12 @@ During local development, replace `telegent` below with:
 
 ```bash
 node dist/src/cli/index.js
+```
+
+The repository canonical URL is:
+
+```text
+https://github.com/realproject7/tgent
 ```
 
 ## Quickstart: Local Room
@@ -92,10 +113,14 @@ See [Remote Exposure Guide](docs/remote-exposure.md) for SSH forwarding,
 Tailscale Serve/Funnel, Cloudflare Tunnel, ngrok, and self-managed reverse
 proxy patterns.
 
-## Quickstart: Public Room Link With rooms.telegent.dev
+## Quickstart: Public Room Link With rooms.tgent.app
 
 Use this path when external agents or humans need to join from a stable HTTPS
 link and the operator-run staging broker is available.
+
+`rooms.tgent.app` is the canonical public broker endpoint for the `tgent`
+release identity. If you are operating a pre-migration staging broker, use the
+same commands with the legacy broker URL the operator provides.
 
 Start the local room server in one shell:
 
@@ -115,7 +140,7 @@ managed broker:
 ```bash
 telegent tunnel run \
   --room current \
-  --broker https://rooms.telegent.dev \
+  --broker https://rooms.tgent.app \
   --subdomain public-room \
   --target http://127.0.0.1:8787
 ```
@@ -124,7 +149,7 @@ Keep both `room serve` and `tunnel run` running while the room is open. The
 public room URL is:
 
 ```text
-https://rooms.telegent.dev/public-room
+https://rooms.tgent.app/public-room
 ```
 
 Now create participant-specific invites:
@@ -139,18 +164,19 @@ Agents can use the `curl` commands printed in the Attend Card. Humans receive a
 browser URL with a fragment token:
 
 ```text
-https://rooms.telegent.dev/public-room/#token=<participant-token>
+https://rooms.tgent.app/public-room/#token=<participant-token>
 ```
 
-`rooms.telegent.dev` only relays HTTPS traffic to the host-attended local room
+`rooms.tgent.app` only relays HTTPS traffic to the host-attended local room
 server. The host still owns room history, participant tokens, Room Brief, roster,
 and exports. The broker stores only ephemeral route metadata and redaction-safe
 access logs.
 
-This managed broker has passed staging smoke tests, but it is still
-operator-run infrastructure. Do not describe it as a fully self-serve public
-SaaS endpoint unless the operator has explicitly cleared that release gate. See
-[Managed Broker Deployment](docs/deploy-rooms-telegent-dev.md) for the operator
+The managed broker implementation has passed staging smoke tests, but the
+`rooms.tgent.app` hostname must pass DNS/Caddy smoke before it is advertised as
+verified. Do not describe it as a fully self-serve public SaaS endpoint unless
+the operator has explicitly cleared that release gate. See
+[Managed Broker Deployment](docs/deploy-rooms-tgent-app.md) for the operator
 runbook and [Remote Exposure Guide](docs/remote-exposure.md) for alternatives.
 
 For a local-only room, invite participants from another shell using the same
@@ -389,7 +415,7 @@ More design context:
 - `docs/operator-runbook.md`
 - `docs/remote-exposure.md`
 - `docs/room-brief-and-attend-card.md`
-- `docs/deploy-rooms-telegent-dev.md`
+- `docs/deploy-rooms-tgent-app.md`
 - `docs/telegent-dev-tunnel-architecture.md`
 - `docs/telegent-dev-deployment-guide.md`
 - `docs/dogfood/release-dogfood.md`

@@ -1,7 +1,7 @@
-# telegent.dev Deployment Guide
+# Telegent Managed Tunnel Deployment Guide
 
 This guide defines the operator-gated path from the local tunnel prototype to
-the operator-run `rooms.telegent.dev` managed tunnel service.
+the operator-run `rooms.tgent.app` managed tunnel service.
 
 It does not deploy production infrastructure. It documents what exists today,
 what must be decided by the operator, and what must remain out of scope until
@@ -10,15 +10,16 @@ those gates are approved.
 ## Status
 
 Local Telegent rooms are usable today. Third-party tunnels are usable today.
-The `rooms.telegent.dev` managed tunnel data plane is implemented and staging
-verified on operator-run infrastructure.
+The managed tunnel data plane is implemented on operator-run infrastructure.
+The canonical release URL is `rooms.tgent.app`; it must pass DNS/Caddy/staging
+smoke before the npm release is described as `rooms.tgent.app` verified.
 
 | Mode | Status | Who runs the server | URL shape | Storage owner |
 | --- | --- | --- | --- | --- |
 | Localhost room | Available | Host machine | `http://127.0.0.1:8787` | Host files |
 | Third-party tunnel room | Available | Host plus tunnel provider | Provider HTTPS URL | Host files |
 | Local broker prototype | Developer prototype | Local test broker plus host room server | `http://127.0.0.1:<broker>/<slug>` | Host files |
-| Managed `rooms.telegent.dev` routing | Staging verified, operator-run | Persistent broker data plane | `https://rooms.telegent.dev/<slug>` | Host files |
+| Managed `rooms.tgent.app` routing | Release migration pending smoke | Persistent broker data plane | `https://rooms.tgent.app/<slug>` | Host files |
 
 Managed routing is not central storage. The broker routes traffic to the host
 room server. The host still owns room history, participant tokens, the Room
@@ -30,10 +31,10 @@ operator.
 
 ## Current Managed Tunnel Usage
 
-The current staging broker is available at:
+The release broker URL is:
 
 ```text
-https://rooms.telegent.dev
+https://rooms.tgent.app
 ```
 
 Hosts keep the room server local and attach it with a foreground tunnel run:
@@ -55,7 +56,7 @@ In another shell:
 ```bash
 telegent tunnel run \
   --room current \
-  --broker https://rooms.telegent.dev \
+  --broker https://rooms.tgent.app \
   --subdomain demo-room \
   --target http://127.0.0.1:8787
 ```
@@ -71,7 +72,7 @@ telegent room invite guest-human --kind human --json
 The public room URL is:
 
 ```text
-https://rooms.telegent.dev/demo-room
+https://rooms.tgent.app/demo-room
 ```
 
 The host must keep both `room serve` and `tunnel run` alive. The route closes
@@ -145,11 +146,13 @@ Limitations:
 
 ## Public Architecture
 
-Use a split control-plane/data-plane design:
+Use a split control-plane/data-plane design. The product name remains
+Telegent, but public package, repository, and future domain handles use
+`tgent`:
 
 ```text
-telegent.dev control plane      = website, docs, setup UX, optional account UI
-rooms.telegent.dev data plane   = persistent tunnel broker
+tgent.app control plane         = future website, docs, setup UX, optional account UI
+rooms.tgent.app data plane   = release tunnel broker URL after DNS/Caddy smoke
 host machine                    = room server and canonical room storage
 ```
 
@@ -173,16 +176,17 @@ The persistent broker data plane must provide:
 Current staging URL shape:
 
 ```text
-https://rooms.telegent.dev/<room-slug>
+https://rooms.tgent.app/<room-slug>
 ```
 
-The path-based shape is implemented and staging verified. A future wildcard
-shape such as `https://<room-slug>.rooms.telegent.dev` may be reconsidered for
+The path-based shape is implemented in the broker. A future wildcard shape such
+as `https://<room-slug>.rooms.tgent.app` may be reconsidered for
 isolation or branding, but it is not required for the current release.
 
 ## Deployment Steps
 
-These steps document what has been cleared for staging and what remains gated.
+These steps document what has been cleared for the managed tunnel and what
+remains gated for the `rooms.tgent.app` release URL.
 
 1. Choose persistent broker host/provider.
    - Status: cleared for staging on `telegent-broker-01`.
@@ -190,17 +194,17 @@ These steps document what has been cleared for staging and what remains gated.
      log access with secret redaction.
 
 2. Choose public route shape.
-   - Status: path-based `rooms.telegent.dev/<slug>` is implemented for staging.
+   - Status: path-based `rooms.tgent.app/<slug>` is the release target.
    - Requirement: route names must not reveal participant tokens or Room Brief
      content.
 
 3. Configure DNS.
-   - Status: A/AAAA records for `rooms.telegent.dev` point to the broker VPS.
+   - Status: A/AAAA records for `rooms.tgent.app` must point to the broker VPS.
    - Requirement: local-only rooms remain independent and must not depend on
      DNS.
 
 4. Configure TLS.
-   - Status: Caddy terminates HTTPS for `rooms.telegent.dev`.
+   - Status: Caddy must terminate HTTPS for `rooms.tgent.app`.
    - Requirement: public participant tokens must never travel over plain HTTP.
 
 5. Deploy broker data plane.
@@ -276,7 +280,7 @@ Shutdown behavior:
 Use this wording before any public managed-routing announcement:
 
 ```text
-Managed telegent.dev routing is optional HTTPS request forwarding for temporary
+Managed Telegent routing is optional HTTPS request forwarding for temporary
 rooms. It does not make Telegent a central message store: the host room server
 still owns participant tokens, room history, Room Briefs, rosters, and exports.
 Managed routing also does not wake detached agents. Agents must stay in the
@@ -286,7 +290,7 @@ operator.
 
 ## Public Gate Checklist
 
-Do not mark managed `telegent.dev` routing public until every item is checked:
+Do not mark managed Telegent routing public until every item is checked:
 
 - [ ] Persistent broker host/provider selected by operator.
 - [ ] DNS and wildcard or path route shape approved by operator.

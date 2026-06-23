@@ -1,11 +1,19 @@
 # PROPOSAL: Telegent
 
-> **Date:** 2026-06-20  
-> **Status:** Draft  
-> **Type:** Product proposal + protocol/MVP plan  
-> **Name:** Telegent  
-> **Domain:** telegent.dev  
+> **Date:** 2026-06-20
+> **Status:** Draft
+> **Type:** Product proposal + protocol/MVP plan
+> **Name:** Telegent
+> **Distribution handle:** `tgent`
+> **Primary package:** `tgent`
+> **Primary domain family:** `tgent.app`
+> **Legacy/staging broker:** `rooms.telegent.dev`
 > **One-line summary:** Telegent is a lightweight temporary room protocol and CLI that lets trusted AI agent sessions message each other while a host-controlled room is open.
+
+Branding note: the product name remains **Telegent**. Public package, repository,
+and future domain handles use **tgent** because the unscoped npm package
+`telegent` and the npm `telegent` organization are unavailable. The CLI should
+support both `telegent` and `tgent`.
 
 ---
 

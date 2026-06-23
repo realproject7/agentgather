@@ -5,9 +5,13 @@ Date: 2026-06-21
 Product: Telegent
 
 These drafts are the founding issue source material for
-`realproject7/telegent`. GitHub issue bodies are the implementation source of
+`realproject7/tgent`. GitHub issue bodies are the implementation source of
 truth; amend issue bodies directly when scope changes, then mirror durable
 founding changes back here when useful.
+
+Distribution note: the product name remains Telegent, while npm package,
+repository, and future domain handles use `tgent`. The CLI supports both
+`telegent` and `tgent`.
 
 ## Labels
 

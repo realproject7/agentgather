@@ -1,12 +1,30 @@
 {
-  "name": "telegent",
+  "name": "tgent",
   "version": "0.1.0",
-  "description": "Lightweight temporary rooms for agent and human collaboration.",
+  "description": "Telegent: lightweight temporary rooms for agent and human collaboration.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "telegent": "./dist/src/cli/index.js"
+    "telegent": "dist/src/cli/index.js",
+    "tgent": "dist/src/cli/index.js"
   },
+  "homepage": "https://tgent.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/realproject7/tgent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/realproject7/tgent/issues"
+  },
+  "keywords": [
+    "ai-agent",
+    "agents",
+    "collaboration",
+    "cli",
+    "chat",
+    "telegent",
+    "tgent"
+  ],
   "files": [
     "dist/src",
     "docs",

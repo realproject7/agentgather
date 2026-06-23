@@ -1,7 +1,9 @@
-# telegent.dev Tunnel Routing Architecture
+# Telegent Tunnel Routing Architecture
 
-`telegent.dev` is an optional routing layer for remote rooms. It must not become
-the canonical message server.
+Telegent's managed routing layer is optional request forwarding for remote
+rooms. It must not become the canonical message server. The release broker URL
+is `rooms.tgent.app`; future public control-plane domains should use the
+`tgent.app` family.
 
 The host still owns:
 
@@ -24,8 +26,8 @@ The routing service may own:
 Use a split architecture:
 
 ```text
-telegent.dev control plane      = Vercel-hosted website/API and domain UX
-rooms.telegent.dev data plane   = persistent tunnel broker, not Vercel Functions
+tgent.app control plane         = future Vercel-hosted website/API and domain UX
+rooms.tgent.app data plane      = release broker URL, not Vercel Functions
 host CLI tunnel client          = outbound connection from host to broker
 ```
 
@@ -40,15 +42,16 @@ Implementation order:
 2. Local broker prototype with no public domain. Completed.
 3. Operator deployment guide and public gate checklist. Completed.
 4. Staging broker on persistent infrastructure after operator approval.
-   Completed for `rooms.telegent.dev`.
-5. Optional `telegent.dev` website/control plane after operator approval.
+   Completed on the broker VPS; `rooms.tgent.app` DNS/Caddy migration is the
+   release target.
+5. Optional `tgent.app` website/control plane after operator approval.
 6. Metering and x402 only after product demand is proven.
 
 ## Data Flow
 
 ```text
 remote participant
-  -> https://rooms.telegent.dev/room-slug/messages
+  -> https://rooms.tgent.app/room-slug/messages
   -> tunnel broker
   -> existing outbound host tunnel connection
   -> host Telegent room server on http://127.0.0.1:8787
@@ -75,11 +78,11 @@ telegent room serve --port 8787
 The public URL is supplied by the tunnel client once it is connected:
 
 ```bash
-telegent tunnel run --room current --broker https://rooms.telegent.dev --subdomain room-slug
+telegent tunnel run --room current --broker https://rooms.tgent.app --subdomain room-slug
 ```
 
 The tunnel client updates the local current room URL to
-`https://rooms.telegent.dev/room-slug` only after the broker confirms the route.
+`https://rooms.tgent.app/room-slug` only after the broker confirms the route.
 Invite cards generated before that point may still contain localhost URLs.
 
 ### Host Tunnel Client
@@ -102,7 +105,7 @@ messages. Production host authentication is a later hardening gate.
 
 ### Tunnel Broker
 
-The broker is the data plane for `rooms.telegent.dev`.
+The broker is the data plane for `rooms.tgent.app`.
 
 Responsibilities:
 
@@ -144,7 +147,7 @@ connections.
 
 Responsibilities:
 
-- public landing/docs for `telegent.dev`
+- public landing/docs for `tgent.app`
 - account/project setup later, if needed
 - route reservation UI/API later, if needed
 - billing/metering dashboard later, if needed
@@ -259,7 +262,7 @@ Can be implemented before operator credentials:
 
 Cleared for staging:
 
-- `rooms.telegent.dev` DNS A/AAAA records
+- `rooms.tgent.app` DNS A/AAAA records
 - public TLS through Caddy
 - persistent broker infrastructure on `telegent-broker-01`
 - first-class `telegent broker serve` systemd deployment

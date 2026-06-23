@@ -30,7 +30,7 @@ durable wake, or end-to-end encryption.
 | Same Tailscale tailnet | Tailscale Serve | Tailnet-only HTTPS | Tailnet ACLs apply. Good default for trusted teammates. |
 | Temporary public link | Cloudflare Quick Tunnel, ngrok, or Tailscale Funnel | Yes, HTTPS | Good for short dogfood sessions. Rotate invites after use. |
 | Production reverse proxy | Cloudflare named tunnel or self-managed HTTPS proxy | Yes, HTTPS | Requires operator-owned domain/config and is a separate gate. |
-| Managed Telegent routing | `rooms.telegent.dev` tunnel | Yes, HTTPS | Staging verified through the operator-run broker. Host must keep `tunnel run` active. Production/public availability is still operator-gated. |
+| Managed Telegent routing | `rooms.tgent.app` tunnel | Yes, HTTPS | Broker implementation is staging verified; the `rooms.tgent.app` hostname still needs DNS/Caddy smoke before release. Host must keep `tunnel run` active. |
 
 ## Baseline Local Room
 
@@ -135,9 +135,9 @@ For production or stable team URLs, use a named Cloudflare Tunnel and a
 published application route in the Cloudflare dashboard. That is an operator
 gate because it requires Cloudflare account, DNS, and domain configuration.
 
-## Managed rooms.telegent.dev Routing
+## Managed rooms.tgent.app Routing
 
-Managed `rooms.telegent.dev` routing is Telegent's own optional tunnel path. It
+Managed `rooms.tgent.app` routing is Telegent's own optional tunnel path. It
 is not central storage and it does not mint participant tokens. The host room
 server still owns the room log, Room Brief, roster, attendance policy, and
 exports.
@@ -149,7 +149,7 @@ foreground tunnel session:
 telegent room serve --port 8787
 telegent tunnel run \
   --room current \
-  --broker https://rooms.telegent.dev \
+  --broker https://rooms.tgent.app \
   --subdomain review-room \
   --target http://127.0.0.1:8787
 ```
@@ -157,24 +157,25 @@ telegent tunnel run \
 Generate invite cards after the tunnel is registered. The public room URL is:
 
 ```text
-https://rooms.telegent.dev/review-room
+https://rooms.tgent.app/review-room
 ```
 
 External agents can use the Attend Card's `curl` commands. Human participants
 use browser URLs with fragment tokens:
 
 ```text
-https://rooms.telegent.dev/review-room/#token=<participant-token>
+https://rooms.tgent.app/review-room/#token=<participant-token>
 ```
 
 The broker stores only ephemeral route metadata and redaction-safe access logs.
 It relays requests to the host's local room server over the host-attended tunnel
 connection while `tunnel run` remains alive.
 
-This path has passed staging smoke tests, but it is still operator-run
-infrastructure. Production public availability, abuse response, quota/pricing,
-and npm release wording remain operator gates. The deployment runbook is
-`docs/deploy-rooms-telegent-dev.md`; the architecture boundary is
+The broker implementation has passed staging smoke tests, but the
+`rooms.tgent.app` hostname must pass DNS/Caddy smoke before release. Production
+public availability, abuse response, quota/pricing, and npm release wording
+remain operator gates. The deployment runbook is
+`docs/deploy-rooms-tgent-app.md`; the architecture boundary is
 `docs/telegent-dev-tunnel-architecture.md`.
 
 ## ngrok
