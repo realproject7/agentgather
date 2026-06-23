@@ -25,8 +25,12 @@ const DEFAULT_CONCURRENCY = 16;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 50;
 
-// A poll failure with one of these codes means the route is gone for good.
-const FATAL_POLL_CODES = new Set(["route_closed", "route_expired", "route_not_found"]);
+// A poll or heartbeat failure with one of these codes is a definitive broker
+// response that the route is gone, so the session must stop. Transport failures
+// (broker_unreachable: DNS, connection, TLS, a transient blip) are deliberately
+// excluded — they are retried so a momentary network hiccup never tears down a
+// live tunnel. A genuine lapse still surfaces as route_expired from the broker.
+const FATAL_ROUTE_CODES = new Set(["route_closed", "route_expired", "route_not_found"]);
 
 export class HostTunnelSession {
   private readonly client: TunnelClient;
@@ -92,7 +96,7 @@ export class HostTunnelSession {
       try {
         request = await this.client.poll(this.routeId, this.hostConnectionId);
       } catch (error) {
-        if (error instanceof TunnelError && FATAL_POLL_CODES.has(error.code)) {
+        if (this.isFatalRouteError(error)) {
           this.fail(error);
           return;
         }
@@ -122,8 +126,15 @@ export class HostTunnelSession {
     try {
       await this.client.heartbeat(this.routeId, this.hostConnectionId);
     } catch (error) {
-      this.fail(error);
+      // Only a definitive route-gone response ends the session. A transient
+      // transport failure is tolerated: the next heartbeat or a poll retries,
+      // and a real presence lapse still surfaces later as route_expired.
+      if (this.isFatalRouteError(error)) this.fail(error);
     }
+  }
+
+  private isFatalRouteError(error: unknown): boolean {
+    return error instanceof TunnelError && FATAL_ROUTE_CODES.has(error.code);
   }
 
   private fail(error: unknown): void {

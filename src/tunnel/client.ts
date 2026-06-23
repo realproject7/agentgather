@@ -137,7 +137,10 @@ export class TunnelClient {
         body: JSON.stringify(body)
       });
     } catch {
-      throw new TunnelError("route_not_found", 502, "could not reach the tunnel broker");
+      // A failed fetch is a transport problem, not proof the route is gone.
+      // Mapping it to route_not_found previously made a single transient blip
+      // tear down a live tunnel; broker_unreachable is retried by the session.
+      throw new TunnelError("broker_unreachable", 502, "could not reach the tunnel broker");
     }
     const payload = await readJson(response);
     if (!response.ok || payload.ok === false) {

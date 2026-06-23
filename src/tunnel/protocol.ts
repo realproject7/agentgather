@@ -20,6 +20,11 @@ export type TunnelErrorCode =
   | "route_not_found"
   | "route_expired"
   | "route_closed"
+  // Transport-level failure reaching the broker (DNS, connection, TLS, or a
+  // transient blip). Distinct from route_not_found, which is a definitive broker
+  // response that the route is gone: broker_unreachable says nothing about route
+  // ownership and must be retried, never treated as a fatal route death.
+  | "broker_unreachable"
   | "unsupported_route"
   | "route_request_limit"
   | "wait_limit"

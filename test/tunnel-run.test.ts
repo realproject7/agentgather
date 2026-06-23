@@ -9,7 +9,15 @@ import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runTunnelCommand } from "../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
-import { createBrokerHttpServer, HostTunnelSession, TunnelBroker, TunnelClient } from "../src/tunnel/index.js";
+import {
+  createBrokerHttpServer,
+  type ForwardedRequest,
+  HostTunnelSession,
+  type RouteMetadata,
+  TunnelBroker,
+  TunnelClient,
+  TunnelError
+} from "../src/tunnel/index.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -283,6 +291,127 @@ test("a new host session reclaims the slug after the prior host stops", async ()
   } finally {
     await second.stop();
     await fixture.close();
+  }
+});
+
+function routeMetadata(): RouteMetadata {
+  const ts = "2026-06-23T00:00:00.000Z";
+  return {
+    route_slug: "demo-room",
+    route_id: "rte_scripted",
+    host_connection_id: "conn_scripted",
+    created_at: ts,
+    last_seen_at: ts,
+    last_heartbeat_at: ts,
+    expires_at: ts,
+    status: "active",
+    host_connected: true
+  };
+}
+
+// A TunnelClient whose poll/heartbeat behaviour is scripted in memory, so a run
+// session can be driven through transient transport blips and definitive route
+// deaths without a live broker or network.
+class ScriptedClient extends TunnelClient {
+  polls = 0;
+  heartbeats = 0;
+  private pollTransientLeft: number;
+  private heartbeatTransientLeft: number;
+  private readonly fatalPoll: boolean;
+  private readonly fatalHeartbeat: boolean;
+
+  constructor(behavior: {
+    pollTransientFailures?: number;
+    heartbeatTransientFailures?: number;
+    fatalPoll?: boolean;
+    fatalHeartbeat?: boolean;
+  }) {
+    super("http://127.0.0.1:1");
+    this.pollTransientLeft = behavior.pollTransientFailures ?? 0;
+    this.heartbeatTransientLeft = behavior.heartbeatTransientFailures ?? 0;
+    this.fatalPoll = behavior.fatalPoll ?? false;
+    this.fatalHeartbeat = behavior.fatalHeartbeat ?? false;
+  }
+
+  override async poll(): Promise<ForwardedRequest | null> {
+    this.polls += 1;
+    if (this.fatalPoll) throw new TunnelError("route_not_found", 404, "no route matches these identifiers");
+    if (this.pollTransientLeft > 0) {
+      this.pollTransientLeft -= 1;
+      throw new TunnelError("broker_unreachable", 502, "could not reach the tunnel broker");
+    }
+    return null;
+  }
+
+  override async heartbeat(): Promise<RouteMetadata> {
+    this.heartbeats += 1;
+    if (this.fatalHeartbeat) throw new TunnelError("route_not_found", 404, "no route matches these identifiers");
+    if (this.heartbeatTransientLeft > 0) {
+      this.heartbeatTransientLeft -= 1;
+      throw new TunnelError("broker_unreachable", 502, "could not reach the tunnel broker");
+    }
+    return routeMetadata();
+  }
+}
+
+test("a sustained idle run survives transient broker-unreachable blips without closing", async () => {
+  const client = new ScriptedClient({ pollTransientFailures: 4, heartbeatTransientFailures: 2 });
+  const session = new HostTunnelSession(client, {
+    routeId: "rte_scripted",
+    hostConnectionId: "conn_scripted",
+    target: "http://127.0.0.1:1",
+    pollIntervalMs: 5,
+    heartbeatIntervalMs: 15
+  });
+  session.start();
+  try {
+    // Run well past two heartbeat intervals while transient failures fire.
+    await delay(120);
+    // The blips were tolerated: the session is still alive, and the heartbeat
+    // kept firing past the failures rather than tearing the tunnel down.
+    assert.equal(session.failure, undefined);
+    assert.ok(client.heartbeats >= 3, `expected >= 3 heartbeats, saw ${client.heartbeats}`);
+    assert.ok(client.polls >= 5, `expected >= 5 polls, saw ${client.polls}`);
+  } finally {
+    await session.stop();
+  }
+});
+
+test("a definitive route_not_found from a heartbeat closes the run with that reason", async () => {
+  const client = new ScriptedClient({ fatalHeartbeat: true });
+  const session = new HostTunnelSession(client, {
+    routeId: "rte_scripted",
+    hostConnectionId: "conn_scripted",
+    target: "http://127.0.0.1:1",
+    pollIntervalMs: 10_000,
+    heartbeatIntervalMs: 10
+  });
+  session.start();
+  try {
+    await waitFor(() => session.failure !== undefined);
+    assert.ok(session.failure instanceof TunnelError);
+    assert.equal((session.failure as TunnelError).code, "route_not_found");
+  } finally {
+    await session.stop();
+  }
+});
+
+test("a definitive route_not_found from a poll closes the run with that reason", async () => {
+  const client = new ScriptedClient({ fatalPoll: true });
+  const session = new HostTunnelSession(client, {
+    routeId: "rte_scripted",
+    hostConnectionId: "conn_scripted",
+    target: "http://127.0.0.1:1",
+    pollIntervalMs: 5,
+    heartbeatIntervalMs: 10_000
+  });
+  session.start();
+  try {
+    await waitFor(() => session.failure !== undefined);
+    assert.ok(session.failure instanceof TunnelError);
+    assert.equal((session.failure as TunnelError).code, "route_not_found");
+  } finally {
+    await session.stop();
   }
 });
 
