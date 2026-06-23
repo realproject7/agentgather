@@ -3,6 +3,7 @@ import { flagBoolean, parseArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
 import { currentPath, readCurrent, tokensPath } from "../../state.js";
 import { readRoomState, roomPaths } from "../../../storage/index.js";
+import { roomUrl } from "../../../protocol/index.js";
 
 interface Check {
   name: string;
@@ -80,7 +81,7 @@ async function roomStateCheck(paths: ReturnType<typeof roomPaths>): Promise<Chec
 
 async function serverCheck(baseUrl: string, token: string): Promise<Check> {
   try {
-    const response = await fetch(new URL("/status", baseUrl), {
+    const response = await fetch(roomUrl(baseUrl, "/status"), {
       headers: {
         Authorization: `Bearer ${token}`
       }
@@ -101,7 +102,7 @@ async function waitCheck(baseUrl: string, alias: string, token: string): Promise
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1_500);
   try {
-    const response = await fetch(new URL(`/wait?participant=${alias}&since_id=0`, baseUrl), {
+    const response = await fetch(roomUrl(baseUrl, `/wait?participant=${alias}&since_id=0`), {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal
     });

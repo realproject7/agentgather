@@ -5,6 +5,7 @@ import {
   writeCursor
 } from "../../../storage/index.js";
 import type { ClientMessageInput, Message, WaitResponse } from "../../../protocol/index.js";
+import { roomUrl } from "../../../protocol/index.js";
 import type { CliContext } from "../../context.js";
 import { readCurrent, type CurrentRoom } from "../../state.js";
 
@@ -82,7 +83,7 @@ export async function waitOnce(context: CliContext, sinceId: number): Promise<Wa
   // precise reason (not the old "/watch" wording) and never print the token.
   let response: Response;
   try {
-    response = await fetch(new URL(path, current.baseUrl), {
+    response = await fetch(roomUrl(current.baseUrl, path), {
       method: "GET",
       headers: { Authorization: `Bearer ${current.token}`, "Content-Type": "application/json" }
     });
@@ -132,7 +133,7 @@ async function requestJson<T>(
   body?: unknown
 ): Promise<T | null> {
   try {
-    const response = await fetch(new URL(path, current.baseUrl), {
+    const response = await fetch(roomUrl(current.baseUrl, path), {
       method,
       headers: {
         Authorization: `Bearer ${current.token}`,

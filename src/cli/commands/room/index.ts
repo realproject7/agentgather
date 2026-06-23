@@ -108,7 +108,7 @@ async function postAttendanceToServer(
   policy: AttendancePolicy
 ): Promise<{ attendance_policy: AttendancePolicy } | null> {
   try {
-    const response = await fetch(new URL("/attendance", `${normalizeBaseUrl(baseUrl)}/`), {
+    const response = await fetch(roomUrl(baseUrl, "/attendance"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -151,7 +151,7 @@ async function updateAttendancePolicyDirect(
 
 async function postBriefToServer(baseUrl: string, token: string, body: string): Promise<RoomBrief | null> {
   try {
-    const response = await fetch(new URL("/brief", baseUrl), {
+    const response = await fetch(roomUrl(baseUrl, "/brief"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
