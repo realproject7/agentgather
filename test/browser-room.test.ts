@@ -144,6 +144,66 @@ test("browser room joins with fragment token, sends, receives, and renders safel
   }
 });
 
+test("browser composer dedupes rapid submit and reuses the idempotency key on retry", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    await page.fill("#message-text", "@reviewer duplicate guard");
+    await page.evaluate(() => {
+      const form = document.querySelector("#composer");
+      if (form === null) throw new Error("composer missing");
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await page.waitForSelector("text=@reviewer duplicate guard");
+
+    const raw = await readFile(path.join(fixture.root, "rooms", fixture.roomId, "messages.jsonl"), "utf8");
+    const messages = raw
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { text?: string });
+    assert.equal(messages.filter((message) => message.text === "@reviewer duplicate guard").length, 1);
+
+    await page.evaluate(() => {
+      const originalFetch = window.fetch.bind(window);
+      const capturedIds: string[] = [];
+      let failNextMessagePost = true;
+      Object.assign(window, { __agentGatherClientMsgIds: capturedIds });
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.href);
+        if (url.pathname.endsWith("/messages") && init?.method === "POST" && typeof init.body === "string") {
+          capturedIds.push(JSON.parse(init.body).client_msg_id);
+          if (failNextMessagePost) {
+            failNextMessagePost = false;
+            return new Response(JSON.stringify({ ok: false, message: "forced retry" }), {
+              status: 503,
+              headers: { "content-type": "application/json" }
+            });
+          }
+        }
+        return originalFetch(input, init);
+      };
+    });
+
+    await page.fill("#message-text", "@reviewer retry once");
+    await page.click("#send-button");
+    await page.waitForSelector("text=forced retry");
+    await page.click("#send-button");
+    await page.waitForSelector("text=@reviewer retry once");
+    const ids = await page.evaluate(() => (window as Window & { __agentGatherClientMsgIds?: string[] }).__agentGatherClientMsgIds);
+    assert.equal(ids?.length, 2);
+    assert.equal(ids?.[0], ids?.[1]);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("browser bare URL explains invite requirement and human token claims display name", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();

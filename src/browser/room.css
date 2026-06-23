@@ -177,6 +177,11 @@ h1 {
   transform: translateY(1px);
 }
 
+.composer textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

@@ -8,7 +8,9 @@ const state = {
   roomStatus: "open",
   briefVersion: 0,
   replyTo: null,
-  composing: false
+  composing: false,
+  sendInFlight: false,
+  pendingSend: null
 };
 
 const shell = document.querySelector(".room-shell");
@@ -108,7 +110,10 @@ function bindEvents() {
   systemFilter.addEventListener("change", () => {
     timeline.classList.toggle("hide-system", !systemFilter.checked);
   });
-  messageText.addEventListener("input", autoGrowComposer);
+  messageText.addEventListener("input", () => {
+    clearPendingSendIfTextChanged();
+    autoGrowComposer();
+  });
   messageText.addEventListener("compositionstart", () => {
     state.composing = true;
   });
@@ -169,8 +174,7 @@ async function loadStatus() {
   closeButton.hidden = !payload.is_host;
   exportButton.hidden = !payload.is_host;
   const closed = payload.room_status === "closed";
-  messageText.disabled = closed;
-  sendButton.disabled = closed;
+  setComposerDisabled(closed || state.sendInFlight);
 }
 
 async function pollMessages() {
@@ -186,6 +190,7 @@ async function pollMessages() {
 }
 
 async function submitMessage() {
+  if (state.sendInFlight) return;
   const text = messageText.value.trim();
   if (!text) return;
   sendError.hidden = true;
@@ -194,12 +199,12 @@ async function submitMessage() {
     sendError.hidden = false;
     sendError.textContent = `${unknownMentions.map((alias) => `@${alias}`).join(", ")} not in this room; not delivered as a mention.`;
   }
-  const body = {
-    text,
-    client_msg_id: `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  };
-  if (state.replyTo !== null) body.reply_to = state.replyTo;
+  const pending = ensurePendingSend(text, state.replyTo);
+  const body = { text, client_msg_id: pending.clientMsgId };
+  if (pending.replyTo !== null) body.reply_to = pending.replyTo;
   let payload;
+  state.sendInFlight = true;
+  setComposerDisabled(true);
   try {
     payload = await authFetch("/messages", {
       method: "POST",
@@ -208,10 +213,15 @@ async function submitMessage() {
   } catch (error) {
     sendError.hidden = false;
     sendError.textContent = error instanceof Error ? error.message : String(error);
+    state.sendInFlight = false;
+    setComposerDisabled(state.roomStatus === "closed");
     return;
   }
   messageText.value = "";
   state.replyTo = null;
+  state.pendingSend = null;
+  state.sendInFlight = false;
+  setComposerDisabled(state.roomStatus === "closed");
   replyIndicator.hidden = true;
   autoGrowComposer();
   if (payload.message && !state.seen.has(payload.message.id)) {
@@ -330,9 +340,35 @@ function renderMessage(message) {
 
 function setReply(message) {
   state.replyTo = message.id;
+  clearPendingSendIfTextChanged();
   replyIndicator.hidden = false;
   replyIndicator.textContent = `Replying to ${message.from} #${message.id}`;
   messageText.focus();
+}
+
+function ensurePendingSend(text, replyTo) {
+  if (state.pendingSend && state.pendingSend.text === text && state.pendingSend.replyTo === replyTo) {
+    return state.pendingSend;
+  }
+  state.pendingSend = {
+    text,
+    replyTo,
+    clientMsgId: `browser-${crypto.randomUUID()}`
+  };
+  return state.pendingSend;
+}
+
+function clearPendingSendIfTextChanged() {
+  if (!state.pendingSend) return;
+  if (state.pendingSend.text !== messageText.value.trim() || state.pendingSend.replyTo !== state.replyTo) {
+    state.pendingSend = null;
+  }
+}
+
+function setComposerDisabled(disabled) {
+  messageText.disabled = disabled;
+  sendButton.disabled = disabled;
+  composer.dataset.pending = state.sendInFlight ? "true" : "false";
 }
 
 function appendRichText(parent, text) {
