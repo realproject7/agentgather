@@ -23,6 +23,31 @@ export const PLATFORM_ROOM_STATUSES: readonly PlatformRoomStatus[] = [
   "closed"
 ];
 
+/**
+ * Reason a room holds its current platform status. Reasons that correspond to an
+ * existing relay condition reuse that exact code (`route_closed`,
+ * `host_unavailable`, `route_expired`) so consumers share the tunnel vocabulary.
+ * The status itself remains a PlatformRoomStatus; the reason only explains it.
+ */
+export type PlatformStatusReason =
+  | "foreground_attending"
+  | "foreground_idle"
+  | "no_foreground_required"
+  | "host_unavailable"
+  | "route_expired"
+  | "route_closed"
+  | "room_closed";
+
+export const PLATFORM_STATUS_REASONS: readonly PlatformStatusReason[] = [
+  "foreground_attending",
+  "foreground_idle",
+  "no_foreground_required",
+  "host_unavailable",
+  "route_expired",
+  "route_closed",
+  "room_closed"
+];
+
 /** Coarse role a roster member holds, for central metadata only. */
 export type RosterRole = "host" | "member";
 
@@ -60,6 +85,9 @@ export interface ControlPlaneRoom {
   route_url: string;
   route_slug: string;
   status: PlatformRoomStatus;
+  // Optional explanation of the current status (e.g. host_unavailable). The
+  // status field stays authoritative; this only adds a displayable reason.
+  status_reason?: PlatformStatusReason;
   roster: RosterEntry[];
   route_health: RouteHealth;
   // Integer cursor only: the last host message id the platform has synced. It
@@ -79,6 +107,7 @@ export interface ControlPlaneRoomInput {
   route_url: string;
   route_slug?: string;
   status: PlatformRoomStatus;
+  status_reason?: PlatformStatusReason;
   roster?: RosterEntry[];
   route_health?: RouteHealth;
   last_synced_message_id?: number;

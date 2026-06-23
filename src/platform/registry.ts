@@ -15,8 +15,10 @@ import { assertSafeSlug, type ParticipantKind } from "../protocol/index.js";
 import { ensureSecureDir, withWriterLock, writeSecureFile } from "../storage/index.js";
 import {
   PLATFORM_ROOM_STATUSES,
+  PLATFORM_STATUS_REASONS,
   type ControlPlaneRoom,
   type PlatformRoomStatus,
+  type PlatformStatusReason,
   type RosterEntry,
   type RosterRole,
   type RouteHealth
@@ -166,6 +168,8 @@ function sanitizeInput(input: unknown): Omit<ControlPlaneRoom, "created_at" | "u
     route_health: asRouteHealth(record.route_health),
     last_synced_message_id: asCursor(record.last_synced_message_id)
   };
+  const statusReason = asOptionalStatusReason(record.status_reason);
+  if (statusReason !== undefined) result.status_reason = statusReason;
   const lastSeenAt = asOptionalTimestamp(record.last_seen_at, "last_seen_at");
   if (lastSeenAt !== undefined) result.last_seen_at = lastSeenAt;
   const lastSyncedAt = asOptionalTimestamp(record.last_synced_at, "last_synced_at");
@@ -253,6 +257,14 @@ function asStatus(value: unknown): PlatformRoomStatus {
     );
   }
   return value as PlatformRoomStatus;
+}
+
+function asOptionalStatusReason(value: unknown): PlatformStatusReason | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !PLATFORM_STATUS_REASONS.includes(value as PlatformStatusReason)) {
+    throw new ControlPlaneValidationError(`status_reason must be one of ${PLATFORM_STATUS_REASONS.join(", ")}`);
+  }
+  return value as PlatformStatusReason;
 }
 
 function asCursor(value: unknown): number {

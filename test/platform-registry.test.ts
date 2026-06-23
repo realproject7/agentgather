@@ -173,6 +173,19 @@ test("roster metadata is limited to alias, kind, role/status, and safe timestamp
   ]);
 });
 
+test("an optional status_reason round-trips and is validated", async () => {
+  const root = await makeRoot();
+  const created = await createControlPlaneRoom(root, baseInput({ status: "paused", status_reason: "host_unavailable" }));
+  assert.equal(created.status_reason, "host_unavailable");
+  const read = await readControlPlaneRoom(root, "demo-room");
+  assert.equal(read.status_reason, "host_unavailable");
+
+  await assert.rejects(
+    createControlPlaneRoom(root, baseInput({ room_id: "bad-reason", status_reason: "made_up" })),
+    ControlPlaneValidationError
+  );
+});
+
 test("unknown top-level fields are never persisted", async () => {
   const root = await makeRoot();
   const created = await createControlPlaneRoom(root, baseInput({ secret_extra: "do not store" }));
