@@ -15,7 +15,13 @@ import {
   TunnelClient,
   TunnelError
 } from "../src/tunnel/index.js";
-import { createBrokerMeter, MeteringLedger, type MeteringRecord, type MeteringStore } from "../src/platform/index.js";
+import {
+  createBrokerMeter,
+  type Counters,
+  MeteringLedger,
+  type MeteringRecord,
+  type MeteringStore
+} from "../src/platform/index.js";
 
 const T0 = 1_750_000_000_000;
 
@@ -81,7 +87,12 @@ interface Fixture {
   close: () => Promise<void>;
 }
 
-async function setup(quota: Partial<Record<string, number>> = {}): Promise<Fixture> {
+interface SetupOptions {
+  quota?: Partial<Counters>;
+  clock?: { ms: number };
+}
+
+async function setup(options: SetupOptions = {}): Promise<Fixture> {
   const stdout = new Capture();
   const context: CliContext = {
     home: await mkdtemp(path.join(os.tmpdir(), "agentgather-metering-broker-")),
@@ -92,11 +103,17 @@ async function setup(quota: Partial<Record<string, number>> = {}): Promise<Fixtu
   const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
   await runRoomCommand(["start", "pub-room", "--alias", "host", "--url", hostBaseUrl, "--json"], context);
 
-  const ledger = new MeteringLedger({ store: memoryStore(), now: () => T0, quota });
+  const ledger = new MeteringLedger({
+    store: memoryStore(),
+    now: () => T0,
+    ...(options.quota !== undefined ? { quota: options.quota } : {})
+  });
+  const clock = options.clock;
   const broker = new TunnelBroker({
-    routeTtlMs: 60_000,
+    routeTtlMs: 600_000,
     logSink: () => {},
-    meter: createBrokerMeter(ledger)
+    meter: createBrokerMeter(ledger),
+    ...(clock !== undefined ? { now: () => clock.ms } : {})
   });
   const brokerServer = createBrokerHttpServer(broker);
   await new Promise<void>((resolve) => brokerServer.listen(0, "127.0.0.1", resolve));
@@ -168,7 +185,7 @@ test("real public-route forwards increment relay, bandwidth, and join counters",
 });
 
 test("an exceeded public quota maps to a 429 quota_exceeded on the forward admit path", async () => {
-  const fixture = await setup({ relay_requests: 5 });
+  const fixture = await setup({ quota: { relay_requests: 5 } });
   try {
     // Drive the route's subject over quota before any forward.
     await fixture.ledger.record("pub-room", "relay_requests", 10, { isPublicRoute: true });
@@ -199,19 +216,40 @@ test("a local-target route is forwarded directly and never metered", async () =>
   }
 });
 
-test("closing a public route meters its lifetime as route minutes", async () => {
-  const fixture = await setup();
+test("closing a public route meters its exact lifetime as route minutes", async () => {
+  const clock = { ms: T0 };
+  const fixture = await setup({ clock });
   try {
     const route = fixture.broker.snapshot().find((entry) => entry.route_slug === "pub-room");
     assert.ok(route !== undefined);
+    // Advance the broker clock so the route has a real, non-zero lifetime.
+    clock.ms = T0 + 7 * 60_000;
     fixture.broker.closeRoute({ route_id: route.route_id, host_connection_id: route.host_connection_id });
-    await waitFor(async () => (await fixture.ledger.usage("pub-room")).window.counters.route_minutes >= 0);
-    // The close hook fired for the public route without error.
-    const usage = await fixture.ledger.usage("pub-room");
-    assert.ok(usage.window.counters.route_minutes >= 0);
+    // Asserts an exact positive value, so a never-firing close hook would fail.
+    await waitFor(async () => (await fixture.ledger.usage("pub-room")).window.counters.route_minutes === 7);
+    assert.equal((await fixture.ledger.usage("pub-room")).window.counters.route_minutes, 7);
   } finally {
     await fixture.close();
   }
+});
+
+test("a failing lifecycle meter surfaces a metering_error on the log, not silently", async () => {
+  const events: Array<Record<string, unknown>> = [];
+  const broker = new TunnelBroker({
+    logSink: (record) => events.push(record),
+    meter: {
+      onPublicRouteRegistered: () => {
+        throw new Error("metering backend down");
+      }
+    }
+  });
+  broker.register({ route_slug: "pub-room" });
+  await waitFor(() => events.some((event) => event.event === "metering_error"));
+  const logged = events.find((event) => event.event === "metering_error");
+  assert.equal(logged?.event, "metering_error");
+  assert.equal(typeof logged?.route_hash, "string");
+  // The route hash is non-reversible: it never contains the raw slug.
+  assert.doesNotMatch(String(logged?.route_hash), /pub-room/);
 });
 
 test("the quota_exceeded signal is the existing TunnelError type", () => {

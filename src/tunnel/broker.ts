@@ -169,9 +169,15 @@ export class TunnelBroker {
     } else {
       this.targets.delete(slug);
       // Public (managed relay) route: meter its activation. register() is
-      // synchronous, so this is a best-effort, fire-and-forget observation.
+      // synchronous, so this lifecycle gauge is best-effort; a failure is
+      // surfaced on the structured log (not silently swallowed) rather than
+      // failing registration. The enforcement-critical forward/admit path is
+      // fully awaited instead.
       if (this.meter?.onPublicRouteRegistered !== undefined) {
-        void Promise.resolve(this.meter.onPublicRouteRegistered(slug)).catch(() => {});
+        const hook = this.meter.onPublicRouteRegistered.bind(this.meter);
+        void (async () => hook(slug))().catch((error) =>
+          this.logger.log({ event: "metering_error", route_hash: routeHash(slug), error: errorCode(error) })
+        );
       }
     }
     return { ...route };
@@ -208,10 +214,16 @@ export class TunnelBroker {
     route.status = "closed";
     this.targets.delete(route.route_slug);
     this.relay.closeRoute(route.route_slug);
-    // Meter the public route's lifetime. Best-effort, fire-and-forget.
+    // Meter the public route's lifetime. closeRoute() is synchronous, so this is
+    // best-effort; a failure is surfaced on the structured log rather than
+    // silently dropped.
     if (wasPublic && this.meter?.onPublicRouteClosed !== undefined) {
       const durationMs = Math.max(0, this.now() - Date.parse(route.created_at));
-      void Promise.resolve(this.meter.onPublicRouteClosed(route.route_slug, durationMs)).catch(() => {});
+      const slug = route.route_slug;
+      const hook = this.meter.onPublicRouteClosed.bind(this.meter);
+      void (async () => hook(slug, durationMs))().catch((error) =>
+        this.logger.log({ event: "metering_error", route_hash: routeHash(slug), error: errorCode(error) })
+      );
     }
     return { ok: true, route_slug: route.route_slug, status: "closed" };
   }
