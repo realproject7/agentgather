@@ -43,6 +43,26 @@ export interface BrokerOptions {
    * treated as host-disconnected (reclaimable, and forwards fast-fail).
    */
   hostGraceMs?: number;
+  /**
+   * Optional usage meter for public (managed relay) routing. Local-target
+   * routes are never metered. The broker depends only on this callback shape
+   * (dependency inversion): the platform metering layer provides the concrete
+   * implementation and injects it here, so the broker never imports it.
+   */
+  meter?: BrokerMeter;
+}
+
+/**
+ * Public-routing usage hooks invoked by the broker's relay lifecycle and admit
+ * paths. Every method is optional and may be sync or async. `admitPublicForward`
+ * throws a TunnelError (e.g. quota_exceeded) to deny a forward before it runs.
+ * Local-target (direct) routing never calls these.
+ */
+export interface BrokerMeter {
+  onPublicRouteRegistered?(slug: string): void | Promise<void>;
+  onPublicRouteClosed?(slug: string, durationMs: number): void | Promise<void>;
+  admitPublicForward?(slug: string): void | Promise<void>;
+  onPublicForward?(slug: string, path: string, bytesIn: number, bytesOut: number): void | Promise<void>;
 }
 
 const DEFAULT_CLAIM_TIMEOUT_MS = 10_000;
@@ -93,8 +113,10 @@ export class TunnelBroker {
   // Optional local room server URL per slug for direct-fetch mode (local tests).
   // Managed relay mode registers no target and never stores one.
   private readonly targets = new Map<string, string>();
+  private readonly meter: BrokerMeter | undefined;
 
   constructor(options: BrokerOptions = {}) {
+    this.meter = options.meter;
     this.now = options.now ?? (() => Date.now());
     this.limits = { ...BROKER_LIMITS, ...options.limits };
     this.routeTtlMs = options.routeTtlMs ?? this.limits.idleTimeoutMs;
@@ -146,6 +168,11 @@ export class TunnelBroker {
       this.targets.set(slug, registration.target);
     } else {
       this.targets.delete(slug);
+      // Public (managed relay) route: meter its activation. register() is
+      // synchronous, so this is a best-effort, fire-and-forget observation.
+      if (this.meter?.onPublicRouteRegistered !== undefined) {
+        void Promise.resolve(this.meter.onPublicRouteRegistered(slug)).catch(() => {});
+      }
     }
     return { ...route };
   }
@@ -177,9 +204,15 @@ export class TunnelBroker {
   /** Close a route. Idempotent identifiers must match the registered route. */
   closeRoute(request: RouteCloseRequest): RouteCloseResult {
     const route = this.findByConnection(request.route_id, request.host_connection_id);
+    const wasPublic = !this.targets.has(route.route_slug);
     route.status = "closed";
     this.targets.delete(route.route_slug);
     this.relay.closeRoute(route.route_slug);
+    // Meter the public route's lifetime. Best-effort, fire-and-forget.
+    if (wasPublic && this.meter?.onPublicRouteClosed !== undefined) {
+      const durationMs = Math.max(0, this.now() - Date.parse(route.created_at));
+      void Promise.resolve(this.meter.onPublicRouteClosed(route.route_slug, durationMs)).catch(() => {});
+    }
     return { ok: true, route_slug: route.route_slug, status: "closed" };
   }
 
@@ -255,10 +288,19 @@ export class TunnelBroker {
     this.touch(slug);
     try {
       const target = this.targets.get(slug);
-      const result =
-        target !== undefined
-          ? await this.forwardDirect(target, forwardPath, url, req, res)
-          : await this.forwardViaRelay(slug, forwardPath, url, req, res);
+      let result: { status: number; bytesIn: number; bytesOut: number };
+      if (target !== undefined) {
+        // Local-target (direct) routing is never metered.
+        result = await this.forwardDirect(target, forwardPath, url, req, res);
+      } else {
+        // Public relay routing: admit against the quota before forwarding (this
+        // may throw quota_exceeded), then meter the completed forward's bytes.
+        if (this.meter?.admitPublicForward !== undefined) await this.meter.admitPublicForward(slug);
+        result = await this.forwardViaRelay(slug, forwardPath, url, req, res);
+        if (this.meter?.onPublicForward !== undefined) {
+          await this.meter.onPublicForward(slug, forwardPath, result.bytesIn, result.bytesOut);
+        }
+      }
       this.logger.log({
         event: "forward",
         route_hash: routeHash(slug),

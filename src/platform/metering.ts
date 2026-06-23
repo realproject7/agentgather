@@ -10,7 +10,7 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { ensureSecureDir, withWriterLock, writeSecureFile } from "../storage/index.js";
-import { TunnelError } from "../tunnel/index.js";
+import { TunnelError, type BrokerMeter } from "../tunnel/index.js";
 
 export const METERED_DIMENSIONS = [
   "route_minutes",
@@ -195,6 +195,40 @@ export class MeteringLedger {
       updated_at: new Date(this.now()).toISOString()
     };
   }
+}
+
+export interface BrokerMeterOptions {
+  /** Map a public route slug to its metering subject (owner stand-in). */
+  subjectForSlug?: (slug: string) => string;
+}
+
+/**
+ * Adapt a MeteringLedger to the broker's BrokerMeter hook so the broker's public
+ * relay lifecycle and admit/forward paths record real usage. This is the
+ * dependency-inversion seam: the broker defines BrokerMeter, this maps it onto
+ * the ledger, and the composition root injects the result into the broker.
+ */
+export function createBrokerMeter(ledger: MeteringLedger, options: BrokerMeterOptions = {}): BrokerMeter {
+  const subjectFor = options.subjectForSlug ?? ((slug: string) => slug);
+  return {
+    onPublicRouteRegistered: async (slug) => {
+      await ledger.record(subjectFor(slug), "active_public_rooms", 1, { isPublicRoute: true });
+    },
+    onPublicRouteClosed: async (slug, durationMs) => {
+      await ledger.record(subjectFor(slug), "route_minutes", Math.max(0, Math.round(durationMs / 60_000)), {
+        isPublicRoute: true
+      });
+    },
+    admitPublicForward: (slug) => ledger.assertWithinQuota(subjectFor(slug), { isPublicRoute: true }),
+    onPublicForward: async (slug, forwardPath, bytesIn, bytesOut) => {
+      const subject = subjectFor(slug);
+      await ledger.record(subject, "relay_requests", 1, { isPublicRoute: true });
+      await ledger.record(subject, "bandwidth_bytes", bytesIn + bytesOut, { isPublicRoute: true });
+      if (forwardPath === "/join" || forwardPath.startsWith("/join?")) {
+        await ledger.record(subject, "participant_joins", 1, { isPublicRoute: true });
+      }
+    }
+  };
 }
 
 function zeroCounters(): Counters {
