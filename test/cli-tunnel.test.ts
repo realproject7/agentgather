@@ -206,7 +206,7 @@ test("failed tunnel registration leaves the current room URL unchanged", async (
     // Second registration for the same active slug must fail and not change state.
     await assert.rejects(
       runTunnelCommand(["start", "--broker", broker.baseUrl, "--subdomain", "taken-room", "--json"], context),
-      /route/i
+      /slug/i
     );
 
     stdout.reset();

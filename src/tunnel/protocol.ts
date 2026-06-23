@@ -41,8 +41,15 @@ export interface RouteMetadata {
   host_connection_id: string;
   created_at: string;
   last_seen_at: string;
+  // Last time the host tunnel client proved presence by a heartbeat or a relay
+  // poll. Used to detect a host that exited without closing its route.
+  last_heartbeat_at: string;
   expires_at: string;
   status: RouteStatus;
+  // Derived on read: the route is active and the host has signalled presence
+  // within the grace window. A registered slug with no attending host reports
+  // host_connected: false so participants and re-registration see the truth.
+  host_connected: boolean;
 }
 
 /** Host -> broker: request to register a route for a room slug. */

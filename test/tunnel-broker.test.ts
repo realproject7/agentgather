@@ -82,6 +82,40 @@ test("register rejects a non-local or non-http forwarding target", () => {
   assert.equal(broker.target("demo-room"), "http://127.0.0.1:8787");
 });
 
+test("a disconnected host route reports host_connected false and is reclaimable", () => {
+  const clock = makeClock(T0);
+  const broker = new TunnelBroker({ now: clock.now, hostGraceMs: 1_000, routeTtlMs: 1_000_000 });
+
+  const route = broker.register({ route_slug: "demo-room" });
+  assert.equal(broker.resolve("demo-room").host_connected, true);
+
+  // A genuinely active host still blocks a duplicate registration.
+  assert.throws(() => broker.register({ route_slug: "demo-room" }), hasCode("route_slug_taken"));
+
+  // After the grace window with no heartbeat/poll the route is host-disconnected
+  // (still "active" so the slug is known) and reclaimable.
+  clock.advance(1_001);
+  const stale = broker.resolve("demo-room");
+  assert.equal(stale.status, "active");
+  assert.equal(stale.host_connected, false);
+
+  const reclaimed = broker.register({ route_slug: "demo-room" });
+  assert.equal(reclaimed.host_connected, true);
+  assert.notEqual(reclaimed.route_id, route.route_id);
+});
+
+test("a heartbeat keeps host_connected true within the grace window", () => {
+  const clock = makeClock(T0);
+  const broker = new TunnelBroker({ now: clock.now, hostGraceMs: 1_000, routeTtlMs: 1_000_000 });
+  const route = broker.register({ route_slug: "demo-room" });
+
+  clock.advance(800);
+  broker.heartbeat({ route_id: route.route_id, host_connection_id: route.host_connection_id });
+  clock.advance(800);
+  assert.equal(broker.resolve("demo-room").host_connected, true);
+  assert.throws(() => broker.register({ route_slug: "demo-room" }), hasCode("route_slug_taken"));
+});
+
 test("re-registering a slug clears a previous forwarding target", () => {
   const clock = makeClock(T0);
   const broker = new TunnelBroker({ now: clock.now, routeTtlMs: 1_000 });
@@ -188,7 +222,9 @@ test("the broker stores only ephemeral route metadata", () => {
   assert.deepEqual(Object.keys(route).sort(), [
     "created_at",
     "expires_at",
+    "host_connected",
     "host_connection_id",
+    "last_heartbeat_at",
     "last_seen_at",
     "route_id",
     "route_slug",
@@ -204,7 +240,7 @@ test("listener returns route status for an active slug", async () => {
     const response = await fetch(`${listener.baseUrl}/demo-room`);
     const body = await response.json();
     assert.equal(response.status, 200);
-    assert.deepEqual(body, { ok: true, route_slug: "demo-room", status: "active" });
+    assert.deepEqual(body, { ok: true, route_slug: "demo-room", status: "active", host_connected: true });
   } finally {
     await listener.close();
   }

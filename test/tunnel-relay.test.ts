@@ -178,7 +178,9 @@ test("the broker stores no target and relays requests through a host attendant",
     assert.deepEqual(Object.keys(fixture.broker.snapshot()[0] ?? {}).sort(), [
       "created_at",
       "expires_at",
+      "host_connected",
       "host_connection_id",
+      "last_heartbeat_at",
       "last_seen_at",
       "route_id",
       "route_slug",
@@ -246,6 +248,49 @@ test("a duplicate response for the same request id is rejected", async () => {
     );
   } finally {
     await fixture.close();
+  }
+});
+
+test("a forwarded request fails fast once the host disconnects past the grace window", async () => {
+  const broker = new TunnelBroker({ hostGraceMs: 60, routeTtlMs: 60_000, claimTimeoutMs: 5_000, logSink: () => {} });
+  const server = createBrokerHttpServer(broker);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await new TunnelClient(base).register("demo-room");
+  try {
+    await delay(150);
+    const started = Date.now();
+    const response = await fetch(`${base}/demo-room/status`, { headers: { Authorization: "Bearer reviewer-token" } });
+    assert.equal(response.status, 504);
+    assert.equal(((await response.json()) as { error: string }).error, "host_unavailable");
+    // Resolved well under the 5s claim timeout: it fast-failed, not hung.
+    assert.equal(Date.now() - started < 1_000, true);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("a bare route probe reports host disconnection truthfully", async () => {
+  const broker = new TunnelBroker({ hostGraceMs: 60, routeTtlMs: 60_000, logSink: () => {} });
+  const server = createBrokerHttpServer(broker);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await new TunnelClient(base).register("demo-room");
+  try {
+    const connected = (await (await fetch(`${base}/demo-room`)).json()) as { status: string; host_connected: boolean };
+    assert.equal(connected.status, "active");
+    assert.equal(connected.host_connected, true);
+
+    await delay(150);
+    const disconnected = (await (await fetch(`${base}/demo-room`)).json()) as { status: string; host_connected: boolean };
+    assert.equal(disconnected.status, "active");
+    assert.equal(disconnected.host_connected, false);
+
+    const missing = await fetch(`${base}/never-registered`);
+    assert.equal(missing.status, 404);
+    assert.equal(((await missing.json()) as { error: string }).error, "route_not_found");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 

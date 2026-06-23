@@ -38,10 +38,16 @@ export interface BrokerOptions {
   claimTimeoutMs?: number;
   /** Relay: max ms after a claim before the host response times out. */
   responseTimeoutMs?: number;
+  /**
+   * Grace window after the host's last heartbeat/poll before the route is
+   * treated as host-disconnected (reclaimable, and forwards fast-fail).
+   */
+  hostGraceMs?: number;
 }
 
 const DEFAULT_CLAIM_TIMEOUT_MS = 10_000;
 const DEFAULT_RESPONSE_TIMEOUT_MS = 35_000;
+const DEFAULT_HOST_GRACE_MS = 30_000;
 
 const DEFAULT_ROUTE_TTL_MS = BROKER_LIMITS.idleTimeoutMs;
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -78,6 +84,7 @@ export class TunnelBroker {
   private readonly now: () => number;
   private readonly routeTtlMs: number;
   private readonly maxRouteLifetimeMs: number;
+  private readonly hostGraceMs: number;
   private readonly limits: BrokerLimits;
   private readonly guards: BrokerGuards;
   private readonly logger: BrokerLogger;
@@ -92,6 +99,7 @@ export class TunnelBroker {
     this.limits = { ...BROKER_LIMITS, ...options.limits };
     this.routeTtlMs = options.routeTtlMs ?? this.limits.idleTimeoutMs;
     this.maxRouteLifetimeMs = options.maxRouteLifetimeMs ?? this.limits.maxRouteLifetimeMs;
+    this.hostGraceMs = options.hostGraceMs ?? DEFAULT_HOST_GRACE_MS;
     this.guards = new BrokerGuards(this.now, this.limits);
     this.logger = new BrokerLogger(options.logSink);
     this.relay = new RelayHub(
@@ -112,9 +120,13 @@ export class TunnelBroker {
     }
     if (registration.target !== undefined) assertLocalTarget(registration.target);
     const existing = this.currentRoute(slug);
-    if (existing && existing.status === "active") {
-      throw new TunnelError("route_slug_taken", 409, "an active route already exists for this slug");
+    // Only a genuinely active, host-connected route blocks the slug. A stale
+    // route whose host stopped heartbeating/polling is reclaimable, so the
+    // original host (or a new session) can recover the same slug.
+    if (existing && existing.status === "active" && existing.host_connected) {
+      throw new TunnelError("route_slug_taken", 409, "an active host already holds this slug");
     }
+    if (existing) this.relay.closeRoute(slug);
     const nowMs = this.now();
     const route: RouteMetadata = {
       route_slug: slug,
@@ -122,8 +134,10 @@ export class TunnelBroker {
       host_connection_id: mintId("conn"),
       created_at: isoFrom(nowMs),
       last_seen_at: isoFrom(nowMs),
+      last_heartbeat_at: isoFrom(nowMs),
       expires_at: isoFrom(nowMs + this.routeTtlMs),
-      status: "active"
+      status: "active",
+      host_connected: true
     };
     this.routes.set(slug, route);
     // Always re-sync the target so a re-registration without a target cannot
@@ -156,7 +170,8 @@ export class TunnelBroker {
     const nowMs = this.now();
     route.last_seen_at = isoFrom(nowMs);
     route.expires_at = isoFrom(nowMs + this.routeTtlMs);
-    return { ...route };
+    this.markHostSeen(route);
+    return { ...this.refresh(route) };
   }
 
   /** Close a route. Idempotent identifiers must match the registered route. */
@@ -197,6 +212,9 @@ export class TunnelBroker {
     if (route.status !== "active") {
       throw new TunnelError(route.status === "closed" ? "route_closed" : "route_expired", 410, "route is not active");
     }
+    // A poll proves the host is attending, so it refreshes presence and the
+    // idle timer.
+    this.markHostSeen(route);
     this.touch(route.route_slug);
     return this.relay.claim(route.route_slug);
   }
@@ -284,6 +302,12 @@ export class TunnelBroker {
     req: IncomingMessage,
     res: ServerResponse
   ): Promise<{ status: number; bytesIn: number; bytesOut: number }> {
+    // Fail fast when the host tunnel has disconnected rather than queueing a
+    // request that can only time out.
+    const route = this.currentRoute(slug);
+    if (route === undefined || !route.host_connected) {
+      throw new TunnelError("host_unavailable", 504, "host tunnel is not attending this route");
+    }
     const body = await readBody(req, this.limits.requestBodyBytes);
     const response = await this.relay.enqueue(slug, {
       route_slug: slug,
@@ -317,13 +341,20 @@ export class TunnelBroker {
   }
 
   private refresh(route: RouteMetadata): RouteMetadata {
+    const nowMs = this.now();
     if (route.status === "active") {
-      const nowMs = this.now();
       const idleExpired = Date.parse(route.expires_at) <= nowMs;
       const lifetimeExceeded = Date.parse(route.created_at) + this.maxRouteLifetimeMs <= nowMs;
       if (idleExpired || lifetimeExceeded) route.status = "expired";
     }
+    // host_connected is always recomputed so it never goes stale in storage.
+    route.host_connected =
+      route.status === "active" && nowMs - Date.parse(route.last_heartbeat_at) <= this.hostGraceMs;
     return route;
+  }
+
+  private markHostSeen(route: RouteMetadata): void {
+    route.last_heartbeat_at = isoFrom(this.now());
   }
 
   private findByConnection(routeId: string, connectionId: string): RouteMetadata {
@@ -388,7 +419,12 @@ async function handleParticipantRequest(
   // A bare `/<slug>` with no trailing slash is a route-status probe; anything
   // under `/<slug>/` is forwarded to the host room server.
   if (url.pathname === `/${slug}`) {
-    sendJson(res, 200, { ok: true, route_slug: route.route_slug, status: route.status });
+    sendJson(res, 200, {
+      ok: true,
+      route_slug: route.route_slug,
+      status: route.status,
+      host_connected: route.host_connected
+    });
     return;
   }
   await broker.forward(slug, url, req, res);

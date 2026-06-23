@@ -219,7 +219,9 @@ test("the broker stores no room data while forwarding", async () => {
     assert.deepEqual(Object.keys(stored[0] ?? {}).sort(), [
       "created_at",
       "expires_at",
+      "host_connected",
       "host_connection_id",
+      "last_heartbeat_at",
       "last_seen_at",
       "route_id",
       "route_slug",

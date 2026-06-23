@@ -85,14 +85,18 @@ test("route metadata exposes only ephemeral fields", () => {
     host_connection_id: "conn_sample",
     created_at: "2026-06-22T00:00:00.000Z",
     last_seen_at: "2026-06-22T00:00:00.000Z",
+    last_heartbeat_at: "2026-06-22T00:00:00.000Z",
     expires_at: "2026-06-22T00:00:30.000Z",
-    status: "active"
+    status: "active",
+    host_connected: true
   };
 
   assert.deepEqual(Object.keys(route).sort(), [
     "created_at",
     "expires_at",
+    "host_connected",
     "host_connection_id",
+    "last_heartbeat_at",
     "last_seen_at",
     "route_id",
     "route_slug",

@@ -249,6 +249,43 @@ test("tunnel run installs a signal shutdown that closes the route and prints sta
   }
 });
 
+test("a new host session reclaims the slug after the prior host stops", async () => {
+  const fixture = await setup({ brokerOptions: { routeTtlMs: 60_000, hostGraceMs: 60, logSink: () => {} } });
+  const auth = { Authorization: `Bearer ${fixture.reviewerToken}` };
+
+  const first = startSession(fixture);
+  try {
+    assert.equal((await fetch(`${fixture.publicBaseUrl}/status`, { headers: auth })).status, 200);
+  } finally {
+    await first.stop();
+  }
+
+  // The prior host stopped; after the grace window the route is
+  // host-disconnected and forwards fail with a bounded error rather than hang.
+  await delay(150);
+  const stale = await fetch(`${fixture.publicBaseUrl}/status`, { headers: auth });
+  assert.equal(stale.status, 504);
+  assert.equal(((await stale.json()) as { error: string }).error, "host_unavailable");
+
+  // A new host tunnel session re-registers the same slug and serves again.
+  const reclaimed = await fixture.client.register("demo-room");
+  assert.notEqual(reclaimed.route.route_id, fixture.routeId);
+  const second = new HostTunnelSession(fixture.client, {
+    routeId: reclaimed.route.route_id,
+    hostConnectionId: reclaimed.route.host_connection_id,
+    target: fixture.hostBaseUrl,
+    pollIntervalMs: 10,
+    heartbeatIntervalMs: 1_000
+  });
+  second.start();
+  try {
+    assert.equal((await fetch(`${fixture.publicBaseUrl}/status`, { headers: auth })).status, 200);
+  } finally {
+    await second.stop();
+    await fixture.close();
+  }
+});
+
 test("the heartbeat keeps the route alive past the idle timeout", async () => {
   const fixture = await setup({ brokerOptions: { routeTtlMs: 150, logSink: () => {} } });
   // Poll rarely so only the heartbeat refreshes the route's idle timer.
