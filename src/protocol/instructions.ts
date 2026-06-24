@@ -26,7 +26,12 @@ export function renderAgentInstructions(agent: AgentKind = "generic"): string {
     "",
     "Room Brief vs Attend Card:",
     "- Room Brief: shared mission context for every participant.",
-    "- Attend Card: participant-specific onboarding with alias, token handling, curl commands, and safety rules."
+    "- Attend Card: participant-specific onboarding with alias, token handling, curl commands, and safety rules.",
+    "",
+    "Room Brief format:",
+    "- Write briefs in clean Markdown so the room can render a compact summary and a full brief view.",
+    "- Recommended sections: `## Goal`, `### Context`, `### What we need`, and a safety blockquote.",
+    "- Keep the first non-empty line short because it becomes the collapsed room summary.",
+    "- Use headings, lists, links, and `code` spans; do not paste secrets or tokens into the brief."
   ].join("\n");
 }
-

@@ -103,6 +103,43 @@ test("browser room joins with fragment token, sends, receives, and renders safel
     await page.waitForSelector("text=manual-ok");
     assert.equal(page.url(), `${fixture.baseUrl}/`);
 
+    const markdownBrief = [
+      "## Goal",
+      "Review **browser brief** rendering before merge.",
+      "",
+      "### Context",
+      "- Uses `src/browser/room.js`",
+      "- Keeps [safe link](https://example.com) active",
+      "- Blocks [bad link](javascript:alert(1))",
+      "",
+      "> Safety: <img src=x onerror=\"window.__briefXss=1\"> raw HTML is untrusted.",
+      "",
+      "---"
+    ].join("\n");
+    const briefResponse = await fetch(`${fixture.baseUrl}/brief`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fixture.hostToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ body: markdownBrief })
+    });
+    assert.equal(briefResponse.status, 200);
+    await page.waitForSelector("text=Brief updated. Refresh");
+    await page.click("#brief-refresh");
+    await page.waitForSelector("text=Goal");
+    await page.click("#brief-open");
+    await page.locator("#brief-body h2", { hasText: "Goal" }).waitFor();
+    await page.locator("#brief-body li", { hasText: "Uses src/browser/room.js" }).waitFor();
+    await page.locator("#brief-body blockquote", { hasText: "raw HTML is untrusted" }).waitFor();
+    assert.equal(await page.locator("#brief-body script").count(), 0);
+    assert.equal(await page.locator("#brief-body img").count(), 0);
+    assert.equal(await page.locator('#brief-body a[href^="javascript:"]').count(), 0);
+    assert.equal(await page.locator("#brief-body a", { hasText: "safe link" }).count(), 1);
+    assert.equal(await page.evaluate(() => (window as Window & { __briefXss?: unknown }).__briefXss), undefined);
+    await page.click("#brief-close");
+    await page.waitForSelector("#brief-overlay", { state: "hidden" });
+
     await page.fill("#message-text", "@reviewer hello from browser");
     await page.click("#send-button");
     await page.waitForSelector("text=@reviewer hello from browser");
