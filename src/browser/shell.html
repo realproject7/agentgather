@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="shell.css">
   </head>
   <body>
-    <main class="platform-shell" data-state="loading" aria-label="Platform owner shell">
+    <main class="platform-shell" data-state="loading" data-view="loading" aria-label="Platform owner shell">
       <header class="platform-topbar">
         <div class="brand-slot" aria-label="Agent Gather">
           <img src="agentgather-logo.png" alt="" aria-hidden="true">
@@ -21,12 +21,59 @@
         </div>
       </header>
 
+      <!-- First-run / no-room welcome state -->
+      <section id="welcome" class="welcome" aria-label="Welcome">
+        <img class="welcome-logo" src="agentgather-logo.png" alt="" aria-hidden="true">
+        <h1 class="welcome-title">No rooms yet</h1>
+        <p class="welcome-copy">
+          Open a room and bring people and their <b>current agent sessions</b> into one live
+          space — humans in the browser, agents over a no-install card.
+        </p>
+        <button id="welcome-create" class="welcome-cta" type="button">+&nbsp; Create your first room</button>
+
+        <div class="welcome-templates-label">or start from a template</div>
+        <div class="welcome-templates" role="group" aria-label="Room templates">
+          <button class="welcome-template" type="button" data-template="debug">
+            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-name">Debug</span>
+            <span class="tpl-desc">cross-machine diagnosis</span>
+          </button>
+          <button class="welcome-template" type="button" data-template="review">
+            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-name">Review</span>
+            <span class="tpl-desc">PR &amp; code review</span>
+          </button>
+          <button class="welcome-template" type="button" data-template="planning">
+            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-name">Planning</span>
+            <span class="tpl-desc">scope &amp; sequence work</span>
+          </button>
+          <button class="welcome-template" type="button" data-template="product">
+            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-name">Product</span>
+            <span class="tpl-desc">pressure-test positioning</span>
+          </button>
+        </div>
+      </section>
+
       <div class="platform-body">
         <aside class="room-rail" aria-label="Rooms">
-          <div class="rail-title">Your rooms</div>
-          <div id="rooms-empty" class="rail-empty" hidden>No rooms yet.</div>
+          <div class="rail-head">
+            <div id="rail-title" class="rail-title">Your rooms</div>
+            <button id="new-room" class="new-room" type="button">+&nbsp; new room</button>
+          </div>
           <ul id="room-list" class="room-list"></ul>
           <div id="rooms-error" class="rail-error" role="alert" hidden></div>
+
+          <div class="status-legend" aria-label="Room status legend">
+            <div class="legend-title">room status</div>
+            <ul class="legend-list">
+              <li><span class="status-badge" data-status="active">active</span><span>running &amp; route live; join and chat now.</span></li>
+              <li><span class="status-badge" data-status="idle">idle</span><span>running, but responses may be delayed.</span></li>
+              <li><span class="status-badge" data-status="paused">paused</span><span>stopped; the host can reopen it.</span></li>
+              <li><span class="status-badge" data-status="closed">closed</span><span>permanent; only exported history remains.</span></li>
+            </ul>
+          </div>
         </aside>
 
         <section class="room-detail" aria-label="Active room">
@@ -49,6 +96,7 @@
             </div>
 
             <div class="host-controls" aria-label="Host controls">
+              <button id="invite-button" type="button">Invite cards</button>
               <button id="export-button" type="button">Export transcript</button>
               <button id="clear-cache-button" type="button">Clear cached history</button>
               <a id="open-room" class="control-link" target="_blank" rel="noreferrer">Open room</a>
@@ -70,6 +118,74 @@
             </aside>
           </div>
         </section>
+      </div>
+
+      <!-- Create-room shell. Room creation runs from the host machine (CLI); this
+           composes the exact command rather than calling a non-existent API. -->
+      <div id="create-overlay" class="overlay" hidden>
+        <div class="overlay-card create-card" role="dialog" aria-modal="true" aria-labelledby="create-heading">
+          <div class="overlay-head">
+            <span class="overlay-dot" aria-hidden="true">◆</span>
+            <span id="create-heading" class="overlay-title">Create a room</span>
+            <span class="overlay-spacer"></span>
+            <button id="create-close" class="overlay-x" type="button" aria-label="Close">×</button>
+          </div>
+          <div class="overlay-body">
+            <p class="create-sub">A room runs from your machine. The cloud only tracks status &amp; invites — never your messages.</p>
+
+            <label class="field">
+              <span class="field-label">room name</span>
+              <span class="field-input"><span class="field-pre">rooms.agentgather.dev/</span><input id="create-name" type="text" autocomplete="off" spellcheck="false" placeholder="h402-review"></span>
+            </label>
+
+            <label class="field">
+              <span class="field-label">goal <span class="field-opt">· shown to every participant</span></span>
+              <textarea id="create-goal" rows="2" placeholder="review the h402 pricing edge cases before merge &amp; produce follow-up tickets."></textarea>
+            </label>
+
+            <div class="field">
+              <span class="field-label">attendance policy</span>
+              <div id="create-attendance" class="seg-control" role="group" aria-label="Attendance policy">
+                <button type="button" class="seg" data-policy="agents-foreground" aria-pressed="true">agents foreground</button>
+                <button type="button" class="seg" data-policy="all-foreground" aria-pressed="false">all foreground</button>
+                <button type="button" class="seg" data-policy="manual-ok" aria-pressed="false">manual ok</button>
+              </div>
+            </div>
+
+            <div class="backend-note" role="note">
+              <p>Creating a room from the browser isn't available yet. Run this on the host machine, then invite participants with <code>agentgather room invite</code>:</p>
+              <div class="cmd-block">
+                <code id="create-command">agentgather room start &lt;name&gt; --attendance agents-foreground</code>
+                <button id="create-copy" class="cmd-copy" type="button">copy</button>
+              </div>
+            </div>
+          </div>
+          <div class="overlay-foot">
+            <span class="foot-hint">creates the room &amp; opens the public route from your machine</span>
+            <span class="overlay-spacer"></span>
+            <button id="create-cancel" class="ghost-btn" type="button">close</button>
+            <button class="primary-btn" type="button" disabled aria-disabled="true" title="Run the command above on the host machine">create room ›</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Role-specific invite cards for the selected room's participants. These
+           are token-free previews; the real tokenized card is generated by the
+           host with `agentgather room invite-card`. -->
+      <div id="invite-overlay" class="overlay" hidden>
+        <div class="overlay-card invite-card-sheet" role="dialog" aria-modal="true" aria-labelledby="invite-heading">
+          <div class="overlay-head">
+            <span class="overlay-dot" aria-hidden="true">◆</span>
+            <span id="invite-heading" class="overlay-title">Invite cards</span>
+            <span id="invite-room" class="overlay-room"></span>
+            <span class="overlay-spacer"></span>
+            <button id="invite-close" class="overlay-x" type="button" aria-label="Close">×</button>
+          </div>
+          <div class="overlay-body">
+            <p class="invite-sub">Role-specific cards, one per participant. Tokens are never shown here — generate the real card on the host with <code>agentgather room invite-card &lt;alias&gt;</code>.</p>
+            <div id="invite-cards" class="invite-grid"></div>
+          </div>
+        </div>
       </div>
     </main>
     <script src="shell.js" type="module"></script>

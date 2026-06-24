@@ -146,15 +146,151 @@ test("owner shell renders the room list, status, live chat, and human-vs-agent r
   }
 });
 
-test("owner shell shows an empty state when the owner has no rooms", async () => {
+test("owner shell shows a first-run welcome state when the owner has no rooms", async () => {
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(platform.baseUrl);
-    await page.waitForSelector("text=No rooms yet.");
+    await page.waitForSelector('.platform-shell[data-view="empty"]');
+    await page.waitForSelector("text=No rooms yet");
+    await page.waitForSelector("#welcome-create");
+    // The welcome offers templates to start from and never shows a room row.
+    assert.equal(await page.locator(".welcome-template").count(), 4);
     assert.equal(await page.locator(".room-row").count(), 0);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+test("populated room list renders v5 rows with monogram, subtitle, age, and a status legend", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(
+    root,
+    roomInput({
+      room_id: "h402-review",
+      title: "h402-review",
+      status: "active",
+      roster: [
+        { alias: "host", kind: "human", role: "host", status: "attending" },
+        { alias: "seb-agent", kind: "agent", role: "member", status: "attending" }
+      ]
+    })
+  );
+  await createControlPlaneRoom(
+    root,
+    roomInput({ room_id: "launch-copy", title: "launch-copy", status: "closed" })
+  );
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+
+    // Rich row: monogram, roster-derived subtitle, relative age, action verb.
+    const active = page.locator('.room-row[data-room-id="h402-review"]');
+    assert.equal((await active.locator(".room-ic").textContent())?.trim(), "h4");
+    assert.match((await active.locator(".room-sub").textContent()) ?? "", /1 human · 1 agent · 2 attending/);
+    assert.match((await active.locator(".room-act").textContent()) ?? "", /open/);
+
+    // A closed room dims, summarizes honestly, and offers export.
+    const closed = page.locator('.room-row[data-room-id="launch-copy"]');
+    assert.match((await closed.locator(".room-sub").textContent()) ?? "", /exported summary available/);
+    assert.match((await closed.locator(".room-act").textContent()) ?? "", /export/);
+
+    // The status legend explains all four platform statuses.
+    await page.waitForSelector(".status-legend");
+    assert.equal(await page.locator('.legend-list .status-badge').count(), 4);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+test("create-room shell composes the host CLI command and keeps submit disabled", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+
+    await page.click("#new-room");
+    await page.waitForSelector("#create-overlay:not([hidden])");
+
+    // The composed command reflects the typed name and chosen attendance policy.
+    await page.fill("#create-name", "h402 review");
+    await page.click('.seg[data-policy="all-foreground"]');
+    await page.fill("#create-goal", 'check the "rounding" edge case');
+    const command = (await page.locator("#create-command").textContent()) ?? "";
+    assert.match(command, /agentgather room start h402-review --attendance all-foreground/);
+    // Quotes in the goal are neutralized so the command stays copy-pasteable.
+    assert.match(command, /--brief "check the 'rounding' edge case"/);
+
+    // No fake API: the create button is disabled and creation is via the CLI.
+    assert.equal(await page.locator(".primary-btn[disabled]").count(), 1);
+    await page.waitForSelector("text=Creating a room from the browser isn't available yet");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+test("invite cards split human (browser-first) and agent (command + safety) without tokens", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(
+    root,
+    roomInput({
+      room_id: "h402-review",
+      title: "h402-review",
+      route_url: "https://rooms.agentgather.dev/h402-review",
+      status: "active",
+      roster: [
+        { alias: "project7", kind: "human", role: "host", status: "attending" },
+        { alias: "seb-agent", kind: "agent", role: "member", status: "attending" }
+      ]
+    })
+  );
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+    await page.click('.room-row[data-room-id="h402-review"]');
+    await page.click("#invite-button");
+    await page.waitForSelector("#invite-overlay:not([hidden])");
+
+    const agent = page.locator('.invite-card[data-kind="agent"]');
+    const human = page.locator('.invite-card[data-kind="human"]');
+    assert.equal(await agent.count(), 1);
+    assert.equal(await human.count(), 1);
+
+    // Human card is browser-first: its primary action opens the room in a browser.
+    await human.locator(".join-btn", { hasText: "Open room in browser" }).waitFor();
+    assert.equal(await human.locator(".card-cmd").count(), 0);
+
+    // Agent card is command + safety first, with the exact attend/read/send guidance.
+    await agent.locator(".card-safety", { hasText: "not operator authority" }).waitFor();
+    const agentCmd = (await agent.locator(".card-cmd").textContent()) ?? "";
+    assert.match(agentCmd, /agentgather attend --json/);
+    assert.match(agentCmd, /\/messages\?since_id=0/);
+    assert.match(agentCmd, /-X POST/);
+
+    // Room name and participant display name are kept distinct (#97).
+    await agent.locator(".card-field", { hasText: "room name" }).waitFor();
+    await agent.locator(".card-field", { hasText: "display name" }).waitFor();
+
+    // No real tokens are ever shown — only the literal $TOKEN variable.
+    const overlayText = (await page.locator("#invite-overlay").textContent()) ?? "";
+    assert.match(overlayText, /\$TOKEN/);
+    assert.doesNotMatch(overlayText, /tgl_/);
   } finally {
     await browser.close();
     await platform.close();
