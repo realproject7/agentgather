@@ -625,6 +625,61 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
   }
 });
 
+test("code-block copy writes the raw body only (#120/#117)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // Deterministic clipboard double so the copy path runs headless and we can
+    // observe exactly what gets written. Must be installed before page scripts.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (t: string) => {
+            (window as unknown as { __copied?: string }).__copied = t;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.click(".code-block .code-copy");
+    // Only the raw code body is copied — not the "ts" language label or header.
+    await page.waitForFunction(
+      () => (window as unknown as { __copied?: string }).__copied === "const ok = true;",
+      { timeout: 4000 }
+    );
+    assert.equal(await page.textContent(".code-block .code-copy"), "copied");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("code-block omits the copy button when no clipboard API is available (#120/#117)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // Simulate a context with no Clipboard API: the header still renders, but the
+    // copy affordance is omitted rather than shown as a silently-failing button.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector(".code-block .code-head .code-lang");
+    assert.equal(await page.$$eval(".code-block .code-copy", (els) => els.length), 0);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("last-message rail KV updates on the sender's own send (#121/#123)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
