@@ -13,7 +13,9 @@ async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-wait-test-"));
 }
 
-async function startWaitFixture(options: { expiresAt?: Date; removedAgent?: boolean } = {}): Promise<{
+async function startWaitFixture(
+  options: { expiresAt?: Date; removedAgent?: boolean; waitHoldMs?: number } = {}
+): Promise<{
   root: string;
   roomId: string;
   baseUrl: string;
@@ -45,7 +47,12 @@ async function startWaitFixture(options: { expiresAt?: Date; removedAgent?: bool
     root,
     roomId,
     baseUrl: "http://127.0.0.1:0",
-    waitHoldMs: 100,
+    // Default hold is short so heartbeat tests don't dawdle. Release tests that
+    // race a held /wait against a slower write (close/append) pass a longer hold
+    // so the wake-up notify reliably lands before the hold times out — otherwise
+    // a loaded CI runner can time the hold out before the write commits and the
+    // snapshot reads stale-open state (the #127 flake).
+    waitHoldMs: options.waitHoldMs ?? 100,
     waitHub
   });
   await new Promise<void>((resolve) => {
@@ -107,7 +114,7 @@ test("/wait heartbeat returns keep_waiting and next_cmd", async () => {
 });
 
 test("/wait held request releases when a new message arrives", async () => {
-  const fixture = await startWaitFixture();
+  const fixture = await startWaitFixture({ waitHoldMs: 1_000 });
   try {
     const waitPromise = jsonFetch(fixture, "GET", "/wait?participant=agent&since_id=0", fixture.agentToken);
     setTimeout(() => {
@@ -125,7 +132,7 @@ test("/wait held request releases when a new message arrives", async () => {
 });
 
 test("/wait releases on room close", async () => {
-  const fixture = await startWaitFixture();
+  const fixture = await startWaitFixture({ waitHoldMs: 1_000 });
   try {
     const waitPromise = jsonFetch(fixture, "GET", "/wait?participant=agent&since_id=0", fixture.agentToken);
     setTimeout(() => {

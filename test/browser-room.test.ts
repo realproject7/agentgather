@@ -293,7 +293,7 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
         lastSeenAt: new Date(Date.now() - 120_000).toISOString()
       }
     ]);
-    await page.waitForSelector("text=agent · local · lite · away");
+    await page.waitForSelector(".participant[data-attendance-state='away']");
 
     const attendanceResponse = await fetch(`${fixture.baseUrl}/attendance`, {
       method: "POST",
@@ -313,7 +313,7 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
       }
     ]);
     await page.waitForSelector(".participant[data-attendance-state='stale']");
-    await page.waitForSelector("text=agent · local · lite · stale");
+    await page.waitForSelector(".participant[data-attendance-state='stale'] .participant-status");
 
     const briefResponse = await fetch(`${fixture.baseUrl}/brief`, {
       method: "POST",
@@ -363,7 +363,7 @@ test("composer broadcast mode sends an untargeted status message and resets to d
 
     await page.click("#broadcast-toggle");
     assert.equal(await page.getAttribute("#composer", "data-mode"), "broadcast");
-    await page.waitForSelector("text=untargeted · no @alias needed");
+    await page.waitForSelector("text=untargeted · everyone sees it");
 
     await page.fill("#message-text", "starting the pricing review now — please attend.");
     await page.click("#send-button");
@@ -591,3 +591,118 @@ async function postMessage(fixture: { baseUrl: string }, token: string, text: st
   });
   assert.equal(response.status, 201);
 }
+
+test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, last-message KV (#117/#115/#116/#120)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // #117 — fenced block renders a header with language label + copy affordance.
+    await page.waitForSelector(".code-block .code-head .code-dot");
+    assert.equal(await page.textContent(".code-block .code-head .code-lang"), "ts");
+    await page.waitForSelector(".code-block .code-copy");
+
+    // #115 — participants grouped into humans/agents; last-message KV is populated.
+    await page.waitForSelector(".rail-group");
+    const groups = await page.$$eval(".rail-group", (els) => els.map((e) => e.textContent || ""));
+    assert.ok(groups.some((g) => g.includes("humans")));
+    assert.ok(groups.some((g) => g.includes("agents")));
+    assert.notEqual((await page.textContent("#roster-last-message"))?.trim(), "—");
+
+    // #116 — host sees the control section; idle/pause are disabled (platform-managed),
+    // tickets is disabled (no fabricated data), and the state segment shows "active".
+    assert.equal(await page.isHidden("#host-controls"), false);
+    assert.ok(await page.getAttribute("#rs-active", "class").then((c) => (c || "").includes("on")));
+    assert.equal(await page.$$eval(".rail-state .rs[data-disabled='true']", (e) => e.length), 2);
+    assert.equal(await page.isDisabled("#tickets-button"), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("code-block copy writes the raw body only (#120/#117)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // Deterministic clipboard double so the copy path runs headless and we can
+    // observe exactly what gets written. Must be installed before page scripts.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (t: string) => {
+            (window as unknown as { __copied?: string }).__copied = t;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.click(".code-block .code-copy");
+    // Only the raw code body is copied — not the "ts" language label or header.
+    await page.waitForFunction(
+      () => (window as unknown as { __copied?: string }).__copied === "const ok = true;",
+      { timeout: 4000 }
+    );
+    assert.equal(await page.textContent(".code-block .code-copy"), "copied");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("code-block omits the copy button when no clipboard API is available (#120/#117)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // Simulate a context with no Clipboard API: the header still renders, but the
+    // copy affordance is omitted rather than shown as a silently-failing button.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector(".code-block .code-head .code-lang");
+    assert.equal(await page.$$eval(".code-block .code-copy", (els) => els.length), 0);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("last-message rail KV updates on the sender's own send (#121/#123)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    // No messages yet → the KV shows the empty-state dash.
+    assert.equal((await page.textContent("#roster-last-message"))?.trim(), "—");
+    // The host sends; the own message is added to state.seen and skipped by the
+    // next poll, so only the own-send path can populate the KV. If #121 were
+    // unfixed, this would stay "—" and the test would fail.
+    await page.fill("#message-text", "first message from the host");
+    await page.click("#send-button");
+    await page.waitForFunction(
+      () => {
+        const el = document.getElementById("roster-last-message");
+        return !!el && !!el.textContent && el.textContent.trim() !== "—";
+      },
+      { timeout: 4000 }
+    );
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
