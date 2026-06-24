@@ -624,3 +624,30 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
     await fixture.close();
   }
 });
+
+test("last-message rail KV updates on the sender's own send (#121/#123)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    // No messages yet → the KV shows the empty-state dash.
+    assert.equal((await page.textContent("#roster-last-message"))?.trim(), "—");
+    // The host sends; the own message is added to state.seen and skipped by the
+    // next poll, so only the own-send path can populate the KV. If #121 were
+    // unfixed, this would stay "—" and the test would fail.
+    await page.fill("#message-text", "first message from the host");
+    await page.click("#send-button");
+    await page.waitForFunction(
+      () => {
+        const el = document.getElementById("roster-last-message");
+        return !!el && !!el.textContent && el.textContent.trim() !== "—";
+      },
+      { timeout: 4000 }
+    );
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
