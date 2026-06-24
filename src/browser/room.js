@@ -26,6 +26,11 @@ const attendancePolicy = document.getElementById("attendance-policy");
 const participantCount = document.getElementById("participant-count");
 const rosterRoomStatus = document.getElementById("roster-room-status");
 const rosterAttendancePolicy = document.getElementById("roster-attendance-policy");
+const briefOpen = document.getElementById("brief-open");
+const briefClose = document.getElementById("brief-close");
+const briefOverlay = document.getElementById("brief-overlay");
+const briefSummary = document.getElementById("brief-summary");
+const briefRoomName = document.getElementById("brief-room-name");
 const briefVersion = document.getElementById("brief-version");
 const briefBody = document.getElementById("brief-body");
 const briefRefresh = document.getElementById("brief-refresh");
@@ -110,6 +115,14 @@ async function submitProfile() {
 function bindEvents() {
   rosterToggle.addEventListener("click", () => shell.classList.toggle("roster-open"));
   briefRefresh.addEventListener("click", () => void loadBrief());
+  briefOpen.addEventListener("click", () => openBriefOverlay());
+  briefClose.addEventListener("click", () => closeBriefOverlay());
+  briefOverlay.addEventListener("click", (event) => {
+    if (event.target === briefOverlay) closeBriefOverlay();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !briefOverlay.hidden) closeBriefOverlay();
+  });
   systemFilter.addEventListener("change", () => {
     timeline.classList.toggle("hide-system", !systemFilter.checked);
   });
@@ -153,7 +166,9 @@ async function loadBrief() {
   state.briefVersion = brief.brief_version;
   briefVersion.textContent = changed ? `v${brief.brief_version} updated` : `v${brief.brief_version}`;
   briefRefresh.hidden = true;
-  briefBody.textContent = brief.body || "(empty)";
+  const body = brief.body || "(empty)";
+  briefSummary.textContent = summarizeBrief(body);
+  renderSafeMarkdown(briefBody, body);
 }
 
 async function loadStatus() {
@@ -161,6 +176,7 @@ async function loadStatus() {
   state.roomStatus = payload.room_status;
   shell.dataset.state = payload.room_status;
   roomTitle.textContent = payload.room;
+  briefRoomName.textContent = payload.room;
   roomStatus.textContent = payload.room_status;
   roomStatus.dataset.status = payload.room_status;
   attendancePolicy.textContent = payload.attendance_policy || "manual-ok";
@@ -254,6 +270,16 @@ function exportRoom() {
   URL.revokeObjectURL(link.href);
 }
 
+function openBriefOverlay() {
+  briefOverlay.hidden = false;
+  briefClose.focus();
+}
+
+function closeBriefOverlay() {
+  briefOverlay.hidden = true;
+  briefOpen.focus();
+}
+
 async function authFetch(path, options = {}) {
   // Resolve room API paths relative to the document base so the app works both
   // when served locally at "/" and through a broker at "/<slug>/".
@@ -316,7 +342,7 @@ function renderMessage(message) {
     pill.className = "system-pill";
     const text = document.createElement("span");
     text.className = "message-text";
-    appendRichText(text, message.text);
+    renderSafeMarkdown(text, message.text, { compact: true });
     pill.append(time, text);
     item.append(pill);
     timeline.append(item);
@@ -336,7 +362,7 @@ function renderMessage(message) {
 
   const text = document.createElement("div");
   text.className = "message-text";
-  appendRichText(text, message.text);
+  renderSafeMarkdown(text, message.text);
 
   const meta = document.createElement("div");
   meta.className = "message-meta";
@@ -386,34 +412,132 @@ function setComposerDisabled(disabled) {
   composer.dataset.pending = state.sendInFlight ? "true" : "false";
 }
 
-function appendRichText(parent, text) {
-  const parts = text.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
-  for (const part of parts) {
-    if (!part) continue;
-    if (part.startsWith("```") && part.endsWith("```")) {
-      const pre = document.createElement("pre");
-      const code = document.createElement("code");
-      code.textContent = part.slice(3, -3).trim();
-      pre.append(code);
-      parent.append(pre);
-    } else if (part.startsWith("`") && part.endsWith("`")) {
-      const code = document.createElement("code");
-      code.textContent = part.slice(1, -1);
-      parent.append(code);
+function renderSafeMarkdown(parent, markdown, options = {}) {
+  parent.replaceChildren();
+  const lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
+  if (options.compact) {
+    appendInlineMarkdown(parent, lines.map(stripMarkdownBlockPrefix).join(" "));
+    return;
+  }
+  let cursor = 0;
+  while (cursor < lines.length) {
+    const line = lines[cursor];
+    if (line.trim() === "") {
+      cursor += 1;
+      continue;
+    }
+    if (line.startsWith("```")) {
+      const codeLines = [];
+      cursor += 1;
+      while (cursor < lines.length && !lines[cursor].startsWith("```")) {
+        codeLines.push(lines[cursor]);
+        cursor += 1;
+      }
+      if (cursor < lines.length) cursor += 1;
+      appendCodeBlock(parent, codeLines.join("\n"));
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      const element = document.createElement(`h${Math.min(heading[1].length, 3)}`);
+      appendInlineMarkdown(element, heading[2]);
+      parent.append(element);
+      cursor += 1;
+      continue;
+    }
+    if (/^\s*([-*_]\s*){3,}$/.test(line)) {
+      parent.append(document.createElement("hr"));
+      cursor += 1;
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      const quoteLines = [];
+      while (cursor < lines.length && /^>\s?/.test(lines[cursor])) {
+        quoteLines.push(lines[cursor].replace(/^>\s?/, ""));
+        cursor += 1;
+      }
+      const blockquote = document.createElement("blockquote");
+      appendInlineMarkdown(blockquote, quoteLines.join("\n"));
+      parent.append(blockquote);
+      continue;
+    }
+    const unordered = /^[-*]\s+(.+)$/.exec(line);
+    const ordered = /^\d+\.\s+(.+)$/.exec(line);
+    if (unordered || ordered) {
+      const list = document.createElement(ordered ? "ol" : "ul");
+      const pattern = ordered ? /^\d+\.\s+(.+)$/ : /^[-*]\s+(.+)$/;
+      while (cursor < lines.length) {
+        const match = pattern.exec(lines[cursor]);
+        if (!match) break;
+        const item = document.createElement("li");
+        appendInlineMarkdown(item, match[1]);
+        list.append(item);
+        cursor += 1;
+      }
+      parent.append(list);
+      continue;
+    }
+    const paragraphLines = [];
+    while (cursor < lines.length && lines[cursor].trim() !== "" && !isMarkdownBlockStart(lines[cursor])) {
+      paragraphLines.push(lines[cursor]);
+      cursor += 1;
+    }
+    if (options.compact) {
+      appendInlineMarkdown(parent, paragraphLines.join(" "));
     } else {
-      appendTextWithTokens(parent, part);
+      const paragraph = document.createElement("p");
+      appendInlineMarkdown(paragraph, paragraphLines.join("\n"));
+      parent.append(paragraph);
     }
   }
 }
 
-function appendTextWithTokens(parent, text) {
-  const tokenPattern = /(https?:\/\/[^\s<]+|mailto:[^\s<]+|@[a-z0-9-]+)/g;
+function isMarkdownBlockStart(line) {
+  return (
+    line.startsWith("```") ||
+    /^(#{1,3})\s+/.test(line) ||
+    /^\s*([-*_]\s*){3,}$/.test(line) ||
+    /^>\s?/.test(line) ||
+    /^[-*]\s+/.test(line) ||
+    /^\d+\.\s+/.test(line)
+  );
+}
+
+function stripMarkdownBlockPrefix(line) {
+  return line
+    .replace(/^#{1,3}\s+/, "")
+    .replace(/^>\s?/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .trim();
+}
+
+function appendCodeBlock(parent, text) {
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  code.textContent = text.trim();
+  pre.append(code);
+  parent.append(pre);
+}
+
+function appendInlineMarkdown(parent, text) {
+  const tokenPattern = /(\*\*[^*\n][\s\S]*?\*\*|`[^`\n]+`|\[[^\]\n]+\]\([^) \n]+?\)|https?:\/\/[^\s<]+|mailto:[^\s<]+|@[a-z0-9-]+)/gi;
   let cursor = 0;
   for (const match of text.matchAll(tokenPattern)) {
     const value = match[0];
     const index = match.index || 0;
     appendText(parent, text.slice(cursor, index));
-    if (value.startsWith("@") && state.participants.has(value.slice(1))) {
+    if (value.startsWith("**") && value.endsWith("**")) {
+      const strong = document.createElement("strong");
+      appendInlineMarkdown(strong, value.slice(2, -2));
+      parent.append(strong);
+    } else if (value.startsWith("`") && value.endsWith("`")) {
+      const code = document.createElement("code");
+      code.textContent = value.slice(1, -1);
+      parent.append(code);
+    } else if (value.startsWith("[") && value.includes("](") && value.endsWith(")")) {
+      appendMarkdownLink(parent, value);
+    } else if (value.startsWith("@") && state.participants.has(value.slice(1))) {
       const mention = document.createElement("span");
       mention.className = "mention";
       mention.textContent = value;
@@ -433,8 +557,31 @@ function appendTextWithTokens(parent, text) {
   appendText(parent, text.slice(cursor));
 }
 
+function appendMarkdownLink(parent, value) {
+  const match = /^\[([^\]\n]+)\]\(([^) \n]+)\)$/.exec(value);
+  if (!match || !isSafeHref(match[2])) {
+    appendText(parent, match ? match[1] : value);
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = match[2];
+  link.rel = "noreferrer";
+  link.target = "_blank";
+  link.textContent = match[1];
+  parent.append(link);
+}
+
 function appendText(parent, text) {
   if (text) parent.append(document.createTextNode(text));
+}
+
+function summarizeBrief(body) {
+  const candidate =
+    body
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#{1,6}\s+/, "").replace(/^>\s?/, "").trim())
+      .find((line) => line.length > 0) || "(empty)";
+  return candidate.replace(/\*\*|`|\[|\]\([^)]+\)/g, "");
 }
 
 function findUnknownMentions(text) {

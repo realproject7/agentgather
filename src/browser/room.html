@@ -47,14 +47,15 @@
         </form>
       </section>
 
-      <details class="brief-panel" aria-live="polite" open>
-        <summary class="brief-heading">
-          <span>brief</span>
+      <section class="brief-panel" aria-live="polite">
+        <button id="brief-open" class="brief-heading" type="button">
+          <span class="brief-label">goal</span>
+          <span id="brief-summary">Loading brief...</span>
+          <span class="brief-button-mark">◆ brief</span>
           <span id="brief-version">v0</span>
-        </summary>
+        </button>
         <button id="brief-refresh" class="brief-refresh" type="button" hidden>Brief updated. Refresh</button>
-        <p id="brief-body">Loading brief...</p>
-      </details>
+      </section>
 
       <section class="workspace">
         <section class="timeline-wrap" aria-label="Room messages">
@@ -100,6 +101,23 @@
         <textarea id="message-text" name="text" rows="1" autocomplete="off" placeholder="@participant message"></textarea>
         <button id="send-button" type="submit">Send</button>
       </form>
+
+      <section id="brief-overlay" class="brief-overlay" aria-labelledby="brief-overlay-title" hidden>
+        <div class="brief-card" role="dialog" aria-modal="true" aria-describedby="brief-body">
+          <header class="brief-card-head">
+            <span class="brief-card-glyph">◆</span>
+            <div>
+              <h2 id="brief-overlay-title">Room brief</h2>
+              <p id="brief-room-name">Room</p>
+            </div>
+            <button id="brief-close" class="brief-close" type="button" aria-label="Close room brief">×</button>
+          </header>
+          <div id="brief-body" class="brief-body md">Loading brief...</div>
+          <footer class="brief-card-foot">
+            <span>markdown supported · host-owned · not stored centrally</span>
+          </footer>
+        </div>
+      </section>
     </main>
     <script src="room.js" type="module"></script>
   </body>
