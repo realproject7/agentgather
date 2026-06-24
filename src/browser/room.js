@@ -4,6 +4,7 @@ const state = {
   seen: new Set(),
   participants: new Set(),
   participantLabels: new Map(),
+  participantKinds: new Map(),
   profile: null,
   roomStatus: "open",
   briefVersion: 0,
@@ -23,6 +24,8 @@ const roomTitle = document.getElementById("room-title");
 const roomStatus = document.getElementById("room-status");
 const attendancePolicy = document.getElementById("attendance-policy");
 const participantCount = document.getElementById("participant-count");
+const rosterRoomStatus = document.getElementById("roster-room-status");
+const rosterAttendancePolicy = document.getElementById("roster-attendance-policy");
 const briefVersion = document.getElementById("brief-version");
 const briefBody = document.getElementById("brief-body");
 const briefRefresh = document.getElementById("brief-refresh");
@@ -161,6 +164,8 @@ async function loadStatus() {
   roomStatus.textContent = payload.room_status;
   roomStatus.dataset.status = payload.room_status;
   attendancePolicy.textContent = payload.attendance_policy || "manual-ok";
+  rosterRoomStatus.textContent = payload.room_status;
+  rosterAttendancePolicy.textContent = payload.attendance_policy || "manual-ok";
   if (payload.brief_version > state.briefVersion) {
     briefRefresh.hidden = false;
     briefVersion.textContent = `v${payload.brief_version} available`;
@@ -169,6 +174,7 @@ async function loadStatus() {
   state.participantLabels = new Map(
     payload.participants.map((participant) => [participant.alias, participant.display_name || participant.alias])
   );
+  state.participantKinds = new Map(payload.participants.map((participant) => [participant.alias, participant.kind]));
   participantCount.textContent = `${payload.participants.length} participants`;
   renderParticipants(payload.participants);
   closeButton.hidden = !payload.is_host;
@@ -272,6 +278,8 @@ function renderParticipants(participants) {
     const item = document.createElement("li");
     item.className = "participant";
     item.dataset.attendanceState = participant.attendance_state || participant.attention;
+    item.dataset.kind = participant.kind;
+    item.dataset.host = participant.is_host ? "true" : "false";
     const name = document.createElement("strong");
     name.textContent = participant.display_name || participant.alias;
     const status = document.createElement("span");
@@ -319,6 +327,12 @@ function renderMessage(message) {
   const from = document.createElement("div");
   from.className = "message-from";
   from.textContent = state.participantLabels.get(message.from) || message.from;
+  const senderKind = state.participantKinds.get(message.from) || "human";
+  from.dataset.kind = senderKind;
+
+  const avatar = document.createElement("div");
+  avatar.className = `message-avatar ${senderKind === "agent" ? "agent" : "human"}`;
+  avatar.textContent = initialsFor(state.participantLabels.get(message.from) || message.from);
 
   const text = document.createElement("div");
   text.className = "message-text";
@@ -333,7 +347,8 @@ function renderMessage(message) {
   bubble.append(meta, text);
 
   item.addEventListener("dblclick", () => setReply(message));
-  item.append(bubble);
+  item.dataset.senderKind = senderKind;
+  item.append(avatar, bubble);
   timeline.append(item);
   item.scrollIntoView({ block: "nearest" });
 }
@@ -462,6 +477,13 @@ function formatRelative(value) {
   if (minutes < 60) return `last seen ${minutes}m ago`;
   const hours = Math.round(minutes / 60);
   return `last seen ${hours}h ago`;
+}
+
+function initialsFor(value) {
+  const normalized = value.replace(/^@/, "").trim();
+  const parts = normalized.split(/[\s_-]+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return normalized.slice(0, 2).toUpperCase() || "AG";
 }
 
 function showError(message) {
