@@ -4,7 +4,7 @@ import path from "node:path";
 
 const root = process.cwd();
 const textExtensions = new Set([".ts", ".js", ".mjs", ".json", ".md"]);
-const ignoredDirs = new Set([".git", "node_modules", "dist", "coverage"]);
+const ignoredDirs = new Set([".git", ".agentgather", ".ag-rooms", "node_modules", "dist", "coverage"]);
 const errors = [];
 
 async function walk(dir) {

@@ -80,10 +80,15 @@ async function getFreePort(): Promise<number> {
 test("build copies browser assets into dist", async () => {
   const html = await readFile(new URL("../src/browser/room.html", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/browser/room.css", import.meta.url), "utf8");
+  const theme = await readFile(new URL("../src/browser/theme.css", import.meta.url), "utf8");
   const js = await readFile(new URL("../src/browser/room.js", import.meta.url), "utf8");
   assert.match(html, /room.css/);
+  assert.match(html, /manifest\.webmanifest/);
+  assert.match(html, /favicon\.png/);
+  assert.match(css, /theme\.css/);
   assert.match(css, /room-shell/);
-  assert.match(css, /color-scheme: dark/);
+  assert.match(theme, /color-scheme: dark/);
+  assert.match(theme, /--accent: #ec5c94/);
   assert.match(css, /message-bubble/);
   assert.match(js, /sessionStorage/);
 });

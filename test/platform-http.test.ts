@@ -76,6 +76,16 @@ test("serves the owner shell assets", async () => {
     const js = await fetch(`${fixture.baseUrl}/shell.js`);
     assert.equal(js.status, 200);
     assert.match(await js.text(), /platform-shell|loadRooms/);
+    const theme = await fetch(`${fixture.baseUrl}/theme.css`);
+    assert.equal(theme.status, 200);
+    assert.match(await theme.text(), /--accent: #ec5c94/);
+    const logo = await fetch(`${fixture.baseUrl}/agentgather-logo.png`);
+    assert.equal(logo.status, 200);
+    assert.equal(logo.headers.get("content-type"), "image/png");
+    assert.ok((await logo.arrayBuffer()).byteLength > 1000);
+    const manifest = await fetch(`${fixture.baseUrl}/manifest.webmanifest`);
+    assert.equal(manifest.status, 200);
+    assert.equal((await manifest.json()).short_name, "Agent Gather");
   } finally {
     await fixture.close();
   }

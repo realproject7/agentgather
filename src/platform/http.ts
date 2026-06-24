@@ -31,7 +31,11 @@ export interface PlatformHttpServerOptions {
 const ASSETS: Record<string, { file: string; contentType: string }> = {
   "/": { file: "shell.html", contentType: "text/html; charset=utf-8" },
   "/shell.css": { file: "shell.css", contentType: "text/css; charset=utf-8" },
-  "/shell.js": { file: "shell.js", contentType: "text/javascript; charset=utf-8" }
+  "/theme.css": { file: "theme.css", contentType: "text/css; charset=utf-8" },
+  "/shell.js": { file: "shell.js", contentType: "text/javascript; charset=utf-8" },
+  "/manifest.webmanifest": { file: "manifest.webmanifest", contentType: "application/manifest+json; charset=utf-8" },
+  "/agentgather-logo.png": { file: "agentgather-logo.png", contentType: "image/png" },
+  "/favicon.png": { file: "agentgather-logo.png", contentType: "image/png" }
 };
 
 /** Create the owner control-plane HTTP server. */
@@ -118,8 +122,8 @@ async function sendRoomMessages(
 }
 
 async function sendAsset(res: ServerResponse, file: string, contentType: string): Promise<void> {
-  const body = await readFile(new URL(`../browser/${file}`, import.meta.url), "utf8");
-  res.writeHead(200, { "content-type": contentType, "content-length": Buffer.byteLength(body) });
+  const body = await readFile(new URL(`../browser/${file}`, import.meta.url));
+  res.writeHead(200, { "content-type": contentType, "content-length": body.byteLength });
   res.end(body);
 }
 
