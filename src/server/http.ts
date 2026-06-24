@@ -93,6 +93,11 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "GET" && pathname === "/room.css") return serveBrowserAsset(context, "room.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/theme.css") return serveBrowserAsset(context, "theme.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/room.js") return serveBrowserAsset(context, "room.js", "text/javascript; charset=utf-8");
+  // The room composer imports the shared mention parser so its unknown-mention
+  // warning matches the server exactly (same code-fence masking), instead of a
+  // browser-only reimplementation.
+  if (context.req.method === "GET" && pathname === "/mentions.js") return serveProtocolAsset(context, "mentions.js");
+  if (context.req.method === "GET" && pathname === "/validation.js") return serveProtocolAsset(context, "validation.js");
   if (context.req.method === "GET" && pathname === "/manifest.webmanifest") {
     return serveBrowserAsset(context, "manifest.webmanifest", "application/manifest+json; charset=utf-8");
   }
@@ -125,6 +130,13 @@ async function serveBrowserShell(context: RequestContext): Promise<void> {
 async function serveBrowserAsset(context: RequestContext, asset: string, contentType: string): Promise<void> {
   const body = await readFile(new URL(`../browser/${asset}`, import.meta.url), "utf8");
   sendText(context.res, 200, body, contentType);
+}
+
+// Serve a compiled protocol module the browser imports directly (mention
+// parser). These are pure, dependency-light ES modules with no Node APIs.
+async function serveProtocolAsset(context: RequestContext, asset: string): Promise<void> {
+  const body = await readFile(new URL(`../protocol/${asset}`, import.meta.url), "utf8");
+  sendText(context.res, 200, body, "text/javascript; charset=utf-8");
 }
 
 async function serveBrowserBinaryAsset(context: RequestContext, asset: string, contentType: string): Promise<void> {

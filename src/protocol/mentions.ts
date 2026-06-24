@@ -1,23 +1,52 @@
 import { isSafeSlug } from "./validation.js";
 
-export function parseMentions(text: string, participantAliases: Iterable<string>): string[] {
-  const roster = new Set(
-    [...participantAliases].filter((alias) => isSafeSlug(alias))
-  );
+/**
+ * Result of scanning a message for @mentions: aliases that resolve to a roster
+ * member (`mentions`) and @-tokens that look like a mention but match nobody
+ * (`unknown`). Both lists are deduplicated and ordered by first appearance, and
+ * both ignore @-tokens inside fenced or inline code.
+ */
+export interface MentionAnalysis {
+  mentions: string[];
+  unknown: string[];
+}
+
+/**
+ * Scan `text` for @mentions against a roster, returning both the resolved
+ * aliases and the unknown @-tokens. Code spans are masked first so a mention
+ * inside ``code`` never resolves or warns. This is the single source of truth
+ * for both the server (which stores `mentions`) and the browser composer (which
+ * warns on `unknown`).
+ */
+export function analyzeMentions(text: string, participantAliases: Iterable<string>): MentionAnalysis {
+  const roster = new Set([...participantAliases].filter((alias) => isSafeSlug(alias)));
   const visibleText = maskCode(text);
-  const found: string[] = [];
-  const seen = new Set<string>();
+  const mentions: string[] = [];
+  const unknown: string[] = [];
+  const seenMention = new Set<string>();
+  const seenUnknown = new Set<string>();
   const matcher = /(^|[^\w-])@([a-z0-9-]+)/g;
   let match: RegExpExecArray | null;
 
   while ((match = matcher.exec(visibleText)) !== null) {
     const alias = match[2];
-    if (alias === undefined || !roster.has(alias) || seen.has(alias)) continue;
-    seen.add(alias);
-    found.push(alias);
+    if (alias === undefined) continue;
+    if (roster.has(alias)) {
+      if (seenMention.has(alias)) continue;
+      seenMention.add(alias);
+      mentions.push(alias);
+    } else {
+      if (seenUnknown.has(alias)) continue;
+      seenUnknown.add(alias);
+      unknown.push(alias);
+    }
   }
 
-  return found;
+  return { mentions, unknown };
+}
+
+export function parseMentions(text: string, participantAliases: Iterable<string>): string[] {
+  return analyzeMentions(text, participantAliases).mentions;
 }
 
 function maskCode(text: string): string {

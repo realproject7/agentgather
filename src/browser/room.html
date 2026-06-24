@@ -57,8 +57,20 @@
         <button id="brief-refresh" class="brief-refresh" type="button" hidden>Brief updated. Refresh</button>
       </section>
 
+      <div class="room-main">
+      <div id="room-banner" class="room-banner" role="status" aria-live="polite" hidden>
+        <span class="banner-ic" aria-hidden="true"></span>
+        <span class="banner-text"><b id="banner-title"></b> <span id="banner-detail"></span></span>
+        <a id="banner-action" class="banner-action" href="#" hidden></a>
+      </div>
+
       <section class="workspace">
         <section class="timeline-wrap" aria-label="Room messages">
+          <div id="history-strip" class="history-strip" hidden>
+            <div class="history-source">showing <span id="history-source-tag" class="src-tag">history source · live host room</span> <span id="history-source-note"></span></div>
+            <div id="history-summary" class="history-summary" hidden></div>
+            <div class="history-foot"><span class="di" aria-hidden="true">◆</span> <span id="history-foot-note"></span></div>
+          </div>
           <div id="empty-state" class="empty-state">No messages yet.</div>
           <ol id="timeline" class="timeline" aria-live="polite"></ol>
         </section>
@@ -76,7 +88,7 @@
             </div>
             <div class="rail-kv">
               <span>history</span>
-              <b>host live room</b>
+              <b id="history-kv">host live room</b>
             </div>
             <label class="system-filter">
               <input id="system-filter" type="checkbox" checked>
@@ -93,10 +105,17 @@
           </div>
         </aside>
       </section>
+      </div>
 
-      <form id="composer" class="composer">
+      <form id="composer" class="composer" data-mode="direct">
+        <div class="composer-mode">
+          <button id="broadcast-toggle" class="mode-toggle" type="button" aria-pressed="false">◆ broadcast to room</button>
+          <span id="mode-note" class="mode-note">untargeted · no @alias needed</span>
+        </div>
+        <div id="mention-warning" class="mention-warning" hidden></div>
         <div id="reply-indicator" class="reply-indicator" hidden></div>
         <div id="send-error" class="send-error" role="alert" hidden></div>
+        <ul id="mention-autocomplete" class="mention-autocomplete" role="listbox" hidden></ul>
         <span class="composer-prompt" aria-hidden="true">&gt;</span>
         <textarea id="message-text" name="text" rows="1" autocomplete="off" placeholder="@participant message"></textarea>
         <button id="send-button" type="submit">Send</button>

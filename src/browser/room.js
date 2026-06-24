@@ -1,3 +1,5 @@
+import { analyzeMentions } from "./mentions.js";
+
 const state = {
   token: null,
   cursor: 0,
@@ -5,13 +7,20 @@ const state = {
   participants: new Set(),
   participantLabels: new Map(),
   participantKinds: new Map(),
+  participantHosts: new Map(),
+  attending: new Set(),
   profile: null,
   roomStatus: "open",
   briefVersion: 0,
   replyTo: null,
   composing: false,
   sendInFlight: false,
-  pendingSend: null
+  pendingSend: null,
+  broadcast: false,
+  // Route/relay connection health, distinct from room open/closed lifecycle.
+  // "live" | "degraded" | "quota". Closed is tracked by roomStatus.
+  connection: "live",
+  connectionCode: null
 };
 
 const shell = document.querySelector(".room-shell");
@@ -46,6 +55,20 @@ const sendError = document.getElementById("send-error");
 const replyIndicator = document.getElementById("reply-indicator");
 const closeButton = document.getElementById("close-button");
 const exportButton = document.getElementById("export-button");
+const broadcastToggle = document.getElementById("broadcast-toggle");
+const modeNote = document.getElementById("mode-note");
+const mentionWarning = document.getElementById("mention-warning");
+const mentionAutocomplete = document.getElementById("mention-autocomplete");
+const roomBanner = document.getElementById("room-banner");
+const bannerTitle = document.getElementById("banner-title");
+const bannerDetail = document.getElementById("banner-detail");
+const bannerAction = document.getElementById("banner-action");
+const historyStrip = document.getElementById("history-strip");
+const historySourceTag = document.getElementById("history-source-tag");
+const historySourceNote = document.getElementById("history-source-note");
+const historySummary = document.getElementById("history-summary");
+const historyFootNote = document.getElementById("history-foot-note");
+const historyKv = document.getElementById("history-kv");
 
 init().catch((error) => showError(error instanceof Error ? error.message : String(error)));
 
@@ -129,6 +152,7 @@ function bindEvents() {
   messageText.addEventListener("input", () => {
     clearPendingSendIfTextChanged();
     autoGrowComposer();
+    updateComposerHints();
   });
   messageText.addEventListener("compositionstart", () => {
     state.composing = true;
@@ -137,11 +161,33 @@ function bindEvents() {
     state.composing = false;
   });
   messageText.addEventListener("keydown", (event) => {
+    // While the autocomplete is open, Enter/Tab accepts the top match instead of
+    // sending, and Escape dismisses it.
+    if (!mentionAutocomplete.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        hideAutocomplete();
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.isComposing) {
+        const first = mentionAutocomplete.querySelector(".ac-option");
+        if (first) {
+          event.preventDefault();
+          applyMention(first.dataset.alias);
+          return;
+        }
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !state.composing) {
       event.preventDefault();
       void submitMessage();
     }
   });
+  messageText.addEventListener("blur", () => {
+    // Defer so a click on a suggestion still registers before the list hides.
+    setTimeout(() => hideAutocomplete(), 120);
+  });
+  broadcastToggle.addEventListener("click", () => setBroadcast(!state.broadcast));
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitMessage();
@@ -172,9 +218,15 @@ async function loadBrief() {
 }
 
 async function loadStatus() {
-  const payload = await authFetch("/status");
+  let payload;
+  try {
+    payload = await authFetch("/status");
+  } catch (error) {
+    handlePollError(error);
+    return;
+  }
+  markConnectionLive();
   state.roomStatus = payload.room_status;
-  shell.dataset.state = payload.room_status;
   roomTitle.textContent = payload.room;
   briefRoomName.textContent = payload.room;
   roomStatus.textContent = payload.room_status;
@@ -191,24 +243,41 @@ async function loadStatus() {
     payload.participants.map((participant) => [participant.alias, participant.display_name || participant.alias])
   );
   state.participantKinds = new Map(payload.participants.map((participant) => [participant.alias, participant.kind]));
+  state.participantHosts = new Map(payload.participants.map((participant) => [participant.alias, Boolean(participant.is_host)]));
+  state.attending = new Set(
+    payload.participants
+      .filter((participant) => isForegroundState(participant.attendance_state || participant.attention))
+      .map((participant) => participant.alias)
+  );
   participantCount.textContent = `${payload.participants.length} participants`;
   renderParticipants(payload.participants);
   closeButton.hidden = !payload.is_host;
   exportButton.hidden = !payload.is_host;
-  const closed = payload.room_status === "closed";
-  setComposerDisabled(closed || state.sendInFlight);
+  updateJoinFlips();
+  applyRoomState();
 }
 
 async function pollMessages() {
   if (state.roomStatus === "closed") return;
-  const payload = await authFetch(`/messages?since_id=${state.cursor}`);
+  let payload;
+  try {
+    payload = await authFetch(`/messages?since_id=${state.cursor}`);
+  } catch (error) {
+    handlePollError(error);
+    return;
+  }
+  markConnectionLive();
   for (const message of payload.messages) {
     if (state.seen.has(message.id)) continue;
     state.seen.add(message.id);
     renderMessage(message);
   }
   state.cursor = payload.next_since_id;
-  emptyState.hidden = state.seen.size > 0;
+  emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
+}
+
+function isForegroundState(value) {
+  return value === "attending" || value === "managed";
 }
 
 async function submitMessage() {
@@ -216,14 +285,14 @@ async function submitMessage() {
   const text = messageText.value.trim();
   if (!text) return;
   sendError.hidden = true;
-  const unknownMentions = findUnknownMentions(text);
-  if (unknownMentions.length > 0) {
-    sendError.hidden = false;
-    sendError.textContent = `${unknownMentions.map((alias) => `@${alias}`).join(", ")} not in this room; not delivered as a mention.`;
-  }
+  hideAutocomplete();
+  const broadcast = state.broadcast;
   const pending = ensurePendingSend(text, state.replyTo);
   const body = { text, client_msg_id: pending.clientMsgId };
   if (pending.replyTo !== null) body.reply_to = pending.replyTo;
+  // Broadcast reuses the existing untargeted "status" message type — no new
+  // schema, no @alias required.
+  if (broadcast) body.type = "status";
   let payload;
   state.sendInFlight = true;
   setComposerDisabled(true);
@@ -237,6 +306,9 @@ async function submitMessage() {
     sendError.textContent = error instanceof Error ? error.message : String(error);
     state.sendInFlight = false;
     setComposerDisabled(state.roomStatus === "closed");
+    // Only route/quota/transport failures drive the connection banner; ordinary
+    // send rejections (rate_limited, loop_guard, message_too_large) stay inline.
+    if (isConnectionError(error)) handlePollError(error);
     return;
   }
   messageText.value = "";
@@ -245,6 +317,10 @@ async function submitMessage() {
   state.sendInFlight = false;
   setComposerDisabled(state.roomStatus === "closed");
   replyIndicator.hidden = true;
+  hideMentionWarning();
+  // A broadcast is a deliberate one-shot; return to direct so the next message
+  // is not accidentally sent room-wide.
+  if (broadcast) setBroadcast(false);
   autoGrowComposer();
   if (payload.message && !state.seen.has(payload.message.id)) {
     state.seen.add(payload.message.id);
@@ -294,7 +370,14 @@ async function authFetch(path, options = {}) {
   });
   const text = await response.text();
   const payload = text ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload.message || `HTTP ${response.status}`);
+    // Preserve the machine-readable code (e.g. quota_exceeded, host_unavailable,
+    // route_closed) so banner logic reuses the existing taxonomy.
+    error.code = payload.error;
+    error.status = response.status;
+    throw error;
+  }
   return payload;
 }
 
@@ -329,6 +412,7 @@ function participantStatusText(participant) {
 function renderMessage(message) {
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
+  if (message.type === "status") item.classList.add("broadcast");
   if (state.profile && message.from === state.profile.alias) item.classList.add("own");
   item.dataset.messageId = String(message.id);
 
@@ -344,6 +428,21 @@ function renderMessage(message) {
     text.className = "message-text";
     renderSafeMarkdown(text, message.text, { compact: true });
     pill.append(time, text);
+    // First-join visibility: a "<alias> joined" line gains a live presence flag
+    // that turns to "now attending" once that participant is foreground (#74).
+    const joined = /^(@?[a-z0-9-]+) joined$/.exec(message.text.trim());
+    if (joined) {
+      const alias = joined[1].replace(/^@/, "");
+      const flip = document.createElement("span");
+      flip.className = "joinflip";
+      flip.dataset.alias = alias;
+      flip.hidden = !state.attending.has(alias);
+      const dot = document.createElement("span");
+      dot.className = "joinflip-dot";
+      dot.setAttribute("aria-hidden", "true");
+      flip.append(dot, document.createTextNode("now attending"));
+      pill.append(flip);
+    }
     item.append(pill);
     timeline.append(item);
     item.scrollIntoView({ block: "nearest" });
@@ -366,7 +465,14 @@ function renderMessage(message) {
 
   const meta = document.createElement("div");
   meta.className = "message-meta";
-  meta.append(from, time);
+  meta.append(from);
+  if (message.type === "status") {
+    const chip = document.createElement("span");
+    chip.className = "broadcast-chip";
+    chip.textContent = "◆ broadcast";
+    meta.append(chip);
+  }
+  meta.append(time);
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
@@ -584,16 +690,254 @@ function summarizeBrief(body) {
   return candidate.replace(/\*\*|`|\[|\]\([^)]+\)/g, "");
 }
 
-function findUnknownMentions(text) {
-  const found = [];
-  const seen = new Set();
-  for (const match of text.matchAll(/(^|[^\w-])@([a-z0-9-]+)/g)) {
-    const alias = match[2];
-    if (!alias || state.participants.has(alias) || seen.has(alias)) continue;
-    seen.add(alias);
-    found.push(alias);
+// ---- composer: broadcast mode (#72) ----
+function setBroadcast(on) {
+  state.broadcast = on;
+  // Broadcast vs direct is conveyed by the mode chip, the "untargeted" note, and
+  // the accent composer border (all keyed off data-mode), so the field hint does
+  // not need to change.
+  composer.dataset.mode = on ? "broadcast" : "direct";
+  broadcastToggle.setAttribute("aria-pressed", String(on));
+  if (on) {
+    hideMentionWarning();
+    hideAutocomplete();
+  } else {
+    updateComposerHints();
   }
-  return found;
+}
+
+// ---- composer: unknown-mention warning + autocomplete (#71) ----
+function updateComposerHints() {
+  if (state.broadcast) {
+    hideMentionWarning();
+    hideAutocomplete();
+    return;
+  }
+  updateMentionWarning();
+  updateAutocomplete();
+}
+
+function updateMentionWarning() {
+  const { unknown } = analyzeMentions(messageText.value, state.participants);
+  if (unknown.length === 0) {
+    hideMentionWarning();
+    return;
+  }
+  mentionWarning.replaceChildren();
+  const lead = document.createElement("span");
+  lead.className = "warn-lead";
+  const tokens = unknown.map((alias) => `@${alias}`).join(", ");
+  lead.append(document.createTextNode(`${tokens} ${unknown.length > 1 ? "are" : "is"} not in this room`));
+  mentionWarning.append(lead);
+
+  const suggestions = suggestionsFor(unknown[0]);
+  if (suggestions.length > 0) {
+    mentionWarning.append(document.createTextNode(" — did you mean "));
+    suggestions.forEach((alias, index) => {
+      if (index > 0) mentionWarning.append(document.createTextNode(" "));
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "warn-suggest";
+      chip.dataset.alias = alias;
+      chip.textContent = `@${alias}`;
+      chip.addEventListener("click", () => replaceUnknownToken(unknown[0], alias));
+      mentionWarning.append(chip);
+    });
+    mentionWarning.append(document.createTextNode("?"));
+  } else {
+    mentionWarning.append(document.createTextNode(" — it will not be delivered as a mention."));
+  }
+  mentionWarning.hidden = false;
+}
+
+function hideMentionWarning() {
+  mentionWarning.hidden = true;
+  mentionWarning.replaceChildren();
+}
+
+// Candidate aliases for an unknown @token: prefix matches first, then any alias
+// that shares the prefix, capped to keep the hint compact.
+function suggestionsFor(token) {
+  const aliases = [...state.participants];
+  const prefix = aliases.filter((alias) => alias.startsWith(token) || token.startsWith(alias));
+  const contains = aliases.filter((alias) => !prefix.includes(alias) && alias.includes(token));
+  return [...prefix, ...contains].slice(0, 3);
+}
+
+function replaceUnknownToken(from, to) {
+  const pattern = new RegExp(`(^|[^\\w-])@${from}\\b`);
+  messageText.value = messageText.value.replace(pattern, (_match, lead) => `${lead}@${to}`);
+  messageText.focus();
+  updateComposerHints();
+}
+
+// Live participant autocomplete while typing an @token before the caret.
+function updateAutocomplete() {
+  const caret = messageText.selectionStart ?? messageText.value.length;
+  const before = messageText.value.slice(0, caret);
+  const active = /(^|[^\w-])@([a-z0-9-]*)$/.exec(before);
+  if (active === null) {
+    hideAutocomplete();
+    return;
+  }
+  const partial = active[2].toLowerCase();
+  const matches = [...state.participants]
+    .filter((alias) => alias !== (state.profile && state.profile.alias))
+    .filter((alias) => {
+      const label = (state.participantLabels.get(alias) || alias).toLowerCase();
+      return alias.startsWith(partial) || label.startsWith(partial);
+    })
+    .slice(0, 5);
+  if (matches.length === 0) {
+    hideAutocomplete();
+    return;
+  }
+  mentionAutocomplete.replaceChildren();
+  matches.forEach((alias, index) => {
+    const kind = state.participantKinds.get(alias) || "human";
+    const option = document.createElement("li");
+    option.className = "ac-option";
+    option.dataset.alias = alias;
+    if (index === 0) option.classList.add("sel");
+    const avatar = document.createElement("span");
+    avatar.className = `ac-avatar ${kind === "agent" ? "agent" : "human"}`;
+    avatar.textContent = initialsFor(state.participantLabels.get(alias) || alias);
+    const name = document.createElement("span");
+    name.className = "ac-name";
+    name.textContent = state.participantLabels.get(alias) || alias;
+    const meta = document.createElement("span");
+    meta.className = "ac-meta";
+    meta.textContent = `${kind}${state.participantHosts.get(alias) ? " · host" : ""}`;
+    option.append(avatar, name, meta);
+    option.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      applyMention(alias);
+    });
+    mentionAutocomplete.append(option);
+  });
+  mentionAutocomplete.hidden = false;
+}
+
+function hideAutocomplete() {
+  mentionAutocomplete.hidden = true;
+  mentionAutocomplete.replaceChildren();
+}
+
+// Complete the active @token at the caret with the chosen alias.
+function applyMention(alias) {
+  if (!alias) return;
+  const caret = messageText.selectionStart ?? messageText.value.length;
+  const before = messageText.value.slice(0, caret);
+  const after = messageText.value.slice(caret);
+  const replaced = before.replace(/(^|[^\w-])@([a-z0-9-]*)$/, (_match, lead) => `${lead}@${alias} `);
+  messageText.value = replaced + after;
+  const nextCaret = replaced.length;
+  messageText.setSelectionRange(nextCaret, nextCaret);
+  messageText.focus();
+  hideAutocomplete();
+  updateMentionWarning();
+  autoGrowComposer();
+}
+
+// ---- first-join → attending presence flips (#74) ----
+function updateJoinFlips() {
+  for (const flip of timeline.querySelectorAll(".joinflip")) {
+    flip.hidden = !state.attending.has(flip.dataset.alias);
+  }
+}
+
+// ---- route + quota connection state (#83/#84) ----
+function markConnectionLive() {
+  if (state.connection !== "live") setConnection("live");
+}
+
+const CONNECTION_ERROR_CODES = new Set([
+  "quota_exceeded",
+  "host_unavailable",
+  "route_expired",
+  "route_closed",
+  "route_not_found"
+]);
+
+// A failed request reflects the route/quota only for these codes or for a bare
+// transport failure (no code); everything else is an ordinary request error.
+function isConnectionError(error) {
+  const code = error && error.code;
+  return code === undefined || code === null || CONNECTION_ERROR_CODES.has(code);
+}
+
+function handlePollError(error) {
+  const code = error && error.code;
+  if (code === "quota_exceeded") {
+    setConnection("quota");
+    return;
+  }
+  if (code === "route_closed" || code === "route_not_found") {
+    state.roomStatus = "closed";
+    applyRoomState();
+    return;
+  }
+  // host_unavailable, route_expired, or a transport failure are all recoverable:
+  // the route may come back, so show a degraded "reconnecting" banner.
+  setConnection("degraded", code);
+}
+
+function setConnection(kind, code) {
+  state.connection = kind;
+  state.connectionCode = code || null;
+  applyRoomState();
+}
+
+// Single place that reconciles the composer, banner, and history strip from the
+// room lifecycle (open/closed) and the route connection (live/degraded/quota).
+function applyRoomState() {
+  const closed = state.roomStatus === "closed";
+  shell.dataset.state = closed ? "closed" : "open";
+  composer.hidden = closed;
+  setComposerDisabled(closed || state.sendInFlight);
+  renderBanner(closed);
+  renderHistoryStrip(closed);
+}
+
+function renderBanner(closed) {
+  if (closed || state.connection === "live") {
+    roomBanner.hidden = true;
+    return;
+  }
+  if (state.connection === "degraded") {
+    roomBanner.dataset.kind = "degraded";
+    bannerTitle.textContent = "Reconnecting…";
+    const reason = state.connectionCode ? ` (${state.connectionCode})` : "";
+    bannerDetail.textContent = `the host tunnel isn't responding${reason}. Messages will send once the route recovers.`;
+    bannerAction.hidden = true;
+  } else if (state.connection === "quota") {
+    roomBanner.dataset.kind = "quota";
+    bannerTitle.textContent = "Public route paused";
+    bannerDetail.textContent = "free routing quota reached for this window — local-only rooms keep working; only public routing is metered.";
+    bannerAction.textContent = "upgrade";
+    bannerAction.href = "https://agentgather.dev";
+    bannerAction.target = "_blank";
+    bannerAction.rel = "noreferrer";
+    bannerAction.hidden = false;
+  }
+  roomBanner.hidden = false;
+}
+
+function renderHistoryStrip(closed) {
+  if (!closed) {
+    historyStrip.hidden = true;
+    historyKv.textContent = state.connection === "degraded" ? "reconnecting…" : "host live room";
+    return;
+  }
+  historyKv.textContent = "exported summary";
+  historySourceTag.textContent = "history source · exported summary";
+  historySourceNote.textContent = "— room is closed; live & cache unavailable.";
+  const count = state.seen.size;
+  historySummary.textContent = `${roomTitle.textContent || "room"} · closed · ${count} ${count === 1 ? "message" : "messages"} · read-only summary`;
+  historySummary.hidden = false;
+  historyFootNote.textContent = "no composer · export & tickets remain available";
+  historyStrip.hidden = false;
+  emptyState.hidden = true;
 }
 
 function isSafeHref(value) {

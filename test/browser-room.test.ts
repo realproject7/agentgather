@@ -335,13 +335,174 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
     await page.fill("#message-text", "@reviewer first send");
     await page.click("#send-button");
     await page.waitForSelector("text=@reviewer first send");
+    // An unknown @mention warns live in the composer but does not block sending.
     await page.fill("#message-text", "@gpt typo mention");
+    await page.waitForSelector("#mention-warning:not([hidden])");
+    await page.waitForSelector("text=@gpt is not in this room");
     await page.click("#send-button");
-    await page.waitForSelector("text=@gpt not in this room; not delivered as a mention.");
     await page.waitForSelector("text=@gpt typo mention");
+    assert.equal(await page.locator("#mention-warning").isHidden(), true);
     await page.fill("#message-text", "@reviewer second send");
     await page.click("#send-button");
     await page.waitForSelector("text=rate limit exceeded");
+    // A rate-limit rejection stays an inline send error — no route banner.
+    assert.equal(await page.locator("#room-banner").isHidden(), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("composer broadcast mode sends an untargeted status message and resets to direct", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    await page.click("#broadcast-toggle");
+    assert.equal(await page.getAttribute("#composer", "data-mode"), "broadcast");
+    await page.waitForSelector("text=untargeted · no @alias needed");
+
+    await page.fill("#message-text", "starting the pricing review now — please attend.");
+    await page.click("#send-button");
+    // The broadcast renders as a status message with its accent treatment...
+    await page.waitForSelector(".message.broadcast .broadcast-chip");
+    await page.waitForSelector("text=starting the pricing review now");
+    // ...and the composer returns to direct so the next message is not room-wide.
+    assert.equal(await page.getAttribute("#composer", "data-mode"), "direct");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("composer autocompletes a partial @mention and warns on an unknown one with a suggestion", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // Typing a partial @token offers matching participants; accepting completes it.
+    await page.click("#message-text");
+    await page.type("#message-text", "ping @rev");
+    await page.waitForSelector('#mention-autocomplete .ac-option[data-alias="reviewer"]');
+    await page.press("#message-text", "Enter");
+    assert.match(await page.inputValue("#message-text"), /@reviewer\s$/);
+    assert.equal(await page.locator("#mention-autocomplete").isHidden(), true);
+
+    // An unknown @mention warns with a recoverable suggestion and does not block.
+    await page.fill("#message-text", "thanks @review please");
+    await page.waitForSelector("#mention-warning:not([hidden])");
+    await page.waitForSelector("text=@review is not in this room");
+    await page.click('.warn-suggest[data-alias="reviewer"]');
+    assert.match(await page.inputValue("#message-text"), /@reviewer/);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a join system line flips to 'now attending' once the participant is foreground (#74)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // The reviewer joins → server emits "reviewer joined" and marks them attending.
+    const joined = await fetch(`${fixture.baseUrl}/join`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.reviewerToken}`, "Content-Type": "application/json" }
+    });
+    assert.equal(joined.status, 200);
+
+    await page.waitForSelector("text=reviewer joined");
+    await page.waitForSelector(".joinflip:not([hidden])");
+    await page.waitForSelector("text=now attending");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("route failures show a degraded reconnecting banner and recover to live", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // Simulate the broker reporting the host tunnel as unavailable on later polls.
+    await page.route(/\/(messages|status)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host tunnel did not respond" })
+      })
+    );
+    await page.waitForSelector('#room-banner[data-kind="degraded"]');
+    await page.waitForSelector("text=Reconnecting…");
+    await page.waitForSelector("text=host_unavailable");
+
+    // When the route recovers, the banner clears on the next successful poll.
+    await page.unroute(/\/(messages|status)(\?|$)/);
+    await page.waitForSelector("#room-banner", { state: "hidden" });
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a quota_exceeded response shows the public-route-paused banner (#84)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    await page.route(/\/(messages|status)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 429,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "quota_exceeded", message: "public routing free quota exceeded" })
+      })
+    );
+    await page.waitForSelector('#room-banner[data-kind="quota"]');
+    await page.waitForSelector("text=Public route paused");
+    await page.waitForSelector("text=local-only rooms keep working");
+    await page.waitForSelector(".banner-action:not([hidden])");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a closed room shows the exported-summary history state and hides the composer (#83)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    await fetch(`${fixture.baseUrl}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.hostToken}`, "Content-Type": "application/json" }
+    });
+
+    await page.waitForSelector("#history-strip:not([hidden])");
+    await page.waitForSelector("text=history source · exported summary");
+    await page.waitForSelector("text=read-only summary");
+    await page.waitForSelector("text=export & tickets remain available");
+    // No composer in a closed room.
+    assert.equal(await page.locator("#composer").isHidden(), true);
   } finally {
     await browser.close();
     await fixture.close();
