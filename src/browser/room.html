@@ -9,10 +9,16 @@
     <link rel="stylesheet" href="room.css">
   </head>
   <body>
-    <main class="room-shell" data-state="loading">
+    <main class="room-shell app h" data-state="loading">
       <header class="topbar">
+        <div class="traffic-lights" aria-hidden="true">
+          <span class="red"></span>
+          <span class="yellow"></span>
+          <span class="green"></span>
+        </div>
         <div class="room-heading">
-          <div class="eyebrow">Agent Gather</div>
+          <img class="brand-mark" src="agentgather-logo.png" alt="" width="24" height="24">
+          <div class="eyebrow">agentgather</div>
           <h1 id="room-title">Room</h1>
         </div>
         <div class="topbar-meta">
@@ -43,7 +49,7 @@
 
       <details class="brief-panel" aria-live="polite" open>
         <summary class="brief-heading">
-          <span>Room Brief</span>
+          <span>brief</span>
           <span id="brief-version">v0</span>
         </summary>
         <button id="brief-refresh" class="brief-refresh" type="button" hidden>Brief updated. Refresh</button>
@@ -52,17 +58,34 @@
 
       <section class="workspace">
         <section class="timeline-wrap" aria-label="Room messages">
-          <label class="system-filter">
-            <input id="system-filter" type="checkbox" checked>
-            Show system messages
-          </label>
           <div id="empty-state" class="empty-state">No messages yet.</div>
           <ol id="timeline" class="timeline" aria-live="polite"></ol>
         </section>
 
         <aside id="roster" class="roster" aria-label="Participants">
-          <div class="rail-title">Participants</div>
+          <section class="rail-section">
+            <div class="rail-title">room</div>
+            <div class="rail-kv">
+              <span>status</span>
+              <b id="roster-room-status">loading</b>
+            </div>
+            <div class="rail-kv">
+              <span>attendance</span>
+              <b id="roster-attendance-policy">manual-ok</b>
+            </div>
+            <div class="rail-kv">
+              <span>history</span>
+              <b>host live room</b>
+            </div>
+            <label class="system-filter">
+              <input id="system-filter" type="checkbox" checked>
+              Show system messages
+            </label>
+          </section>
+          <section class="rail-section participants-section">
+            <div class="rail-title">Participants</div>
           <ul id="participant-list"></ul>
+          </section>
           <div class="rail-actions">
             <button id="export-button" type="button">Export</button>
             <button id="close-button" type="button">Close Room</button>
@@ -73,6 +96,7 @@
       <form id="composer" class="composer">
         <div id="reply-indicator" class="reply-indicator" hidden></div>
         <div id="send-error" class="send-error" role="alert" hidden></div>
+        <span class="composer-prompt" aria-hidden="true">&gt;</span>
         <textarea id="message-text" name="text" rows="1" autocomplete="off" placeholder="@participant message"></textarea>
         <button id="send-button" type="submit">Send</button>
       </form>
