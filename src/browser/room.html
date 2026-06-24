@@ -85,13 +85,17 @@
               <span>history</span>
               <b id="history-kv">host live room</b>
             </div>
+            <div class="rail-kv">
+              <span>last message</span>
+              <b id="roster-last-message">—</b>
+            </div>
             <label class="system-filter">
               <input id="system-filter" type="checkbox" checked>
               Show system messages
             </label>
           </section>
           <section class="rail-section participants-section">
-            <div class="rail-title">Participants</div>
+            <div class="rail-title">participants</div>
           <ul id="participant-list"></ul>
           </section>
           <div class="rail-actions">
@@ -103,17 +107,21 @@
       </div>
 
       <form id="composer" class="composer" data-mode="direct">
-        <div class="composer-mode">
-          <button id="broadcast-toggle" class="mode-toggle" type="button" aria-pressed="false">◆ broadcast to room</button>
-          <span id="mode-note" class="mode-note">untargeted · no @alias needed</span>
-        </div>
         <div id="mention-warning" class="mention-warning" hidden></div>
         <div id="reply-indicator" class="reply-indicator" hidden></div>
         <div id="send-error" class="send-error" role="alert" hidden></div>
         <ul id="mention-autocomplete" class="mention-autocomplete" role="listbox" hidden></ul>
         <span class="composer-prompt" aria-hidden="true">&gt;</span>
-        <textarea id="message-text" name="text" rows="1" autocomplete="off" placeholder="@participant message"></textarea>
+        <textarea id="message-text" name="text" rows="1" autocomplete="off" placeholder="message — @ to mention"></textarea>
         <button id="send-button" type="submit">Send</button>
+        <div class="composer-footer">
+          <span id="composer-identity" class="cf-id"></span>
+          <button id="broadcast-toggle" class="mode-toggle" type="button" aria-pressed="false"
+            title="Broadcast: post an untargeted announcement everyone sees, instead of an @-targeted message.">↯ broadcast</button>
+          <span id="mode-note" class="mode-note">untargeted · everyone sees it</span>
+          <span class="cf-spacer"></span>
+          <span class="cf-hint">@ to mention · Enter to send</span>
+        </div>
       </form>
 
       <section id="brief-overlay" class="brief-overlay" aria-labelledby="brief-overlay-title" hidden>

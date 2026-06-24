@@ -24,7 +24,8 @@ const state = {
   // Whether GET /messages reached the host log (true) or failed (false), used to
   // tell a closed room's read-only host history apart from "unavailable".
   historyAvailable: true,
-  closedHistoryLoaded: false
+  closedHistoryLoaded: false,
+  lastMessageTs: null
 };
 
 const shell = document.querySelector(".room-shell");
@@ -39,6 +40,7 @@ const attendancePolicy = document.getElementById("attendance-policy");
 const participantCount = document.getElementById("participant-count");
 const rosterRoomStatus = document.getElementById("roster-room-status");
 const rosterAttendancePolicy = document.getElementById("roster-attendance-policy");
+const rosterLastMessage = document.getElementById("roster-last-message");
 const briefOpen = document.getElementById("brief-open");
 const briefClose = document.getElementById("brief-close");
 const briefOverlay = document.getElementById("brief-overlay");
@@ -61,6 +63,7 @@ const closeButton = document.getElementById("close-button");
 const exportButton = document.getElementById("export-button");
 const broadcastToggle = document.getElementById("broadcast-toggle");
 const modeNote = document.getElementById("mode-note");
+const composerIdentity = document.getElementById("composer-identity");
 const mentionWarning = document.getElementById("mention-warning");
 const mentionAutocomplete = document.getElementById("mention-autocomplete");
 const roomBanner = document.getElementById("room-banner");
@@ -255,6 +258,8 @@ async function loadStatus() {
   );
   participantCount.textContent = `${payload.participants.length} participants`;
   renderParticipants(payload.participants);
+  updateComposerIdentity(payload.participants);
+  updateLastMessage();
   closeButton.hidden = !payload.is_host;
   exportButton.hidden = !payload.is_host;
   updateJoinFlips();
@@ -284,7 +289,9 @@ async function pollMessages() {
     if (state.seen.has(message.id)) continue;
     state.seen.add(message.id);
     renderMessage(message);
+    if (message.ts) state.lastMessageTs = message.ts;
   }
+  updateLastMessage();
   state.cursor = payload.next_since_id;
   emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
   if (state.roomStatus === "closed") {
@@ -400,7 +407,24 @@ async function authFetch(path, options = {}) {
 
 function renderParticipants(participants) {
   participantList.replaceChildren();
-  for (const participant of participants) {
+  // Group humans and agents with counts (#115); kind is then implied by the
+  // group header so each card can drop the noisy kind/location/install meta.
+  renderParticipantGroup("humans", participants.filter((p) => p.kind !== "agent"));
+  renderParticipantGroup("agents", participants.filter((p) => p.kind === "agent"));
+}
+
+function renderParticipantGroup(label, group) {
+  if (group.length === 0) return;
+  const header = document.createElement("li");
+  header.className = "rail-group";
+  const title = document.createElement("span");
+  title.textContent = label;
+  const count = document.createElement("span");
+  count.className = "rail-group-count";
+  count.textContent = String(group.length);
+  header.append(title, count);
+  participantList.append(header);
+  for (const participant of group) {
     const item = document.createElement("li");
     item.className = "participant";
     item.dataset.attendanceState = participant.attendance_state || participant.attention;
@@ -412,11 +436,26 @@ function renderParticipants(participants) {
     status.className = "participant-status";
     status.textContent = participantStatusText(participant);
     const meta = document.createElement("span");
-    const alias = participant.display_name ? `@${participant.alias} · ` : "";
-    meta.textContent = `${alias}${participant.kind} · ${participant.location} · ${participant.install} · ${participant.attendance_state || participant.attention} · ${formatRelative(participant.lastSeenAt)}`;
+    const aliasPart =
+      participant.display_name && participant.display_name !== participant.alias ? `@${participant.alias} · ` : "";
+    const hostPart = participant.is_host ? "host · " : "";
+    meta.textContent = `${aliasPart}${hostPart}${formatRelative(participant.lastSeenAt)}`;
     item.append(name, status, meta);
     participantList.append(item);
   }
+}
+
+function updateComposerIdentity(participants) {
+  if (!state.profile || !composerIdentity) return;
+  const me = participants.find((participant) => participant.alias === state.profile.alias);
+  const name = (me && (me.display_name || me.alias)) || state.profile.display_name || state.profile.alias;
+  const presence = me ? me.attendance_state || me.attention : null;
+  composerIdentity.textContent = presence ? `${name} · ${presence}` : name;
+}
+
+function updateLastMessage() {
+  if (!rosterLastMessage) return;
+  rosterLastMessage.textContent = state.lastMessageTs ? formatAgo(state.lastMessageTs) : "—";
 }
 
 function participantStatusText(participant) {
@@ -1051,13 +1090,17 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
-function formatRelative(value) {
+function formatAgo(value) {
   const deltaSeconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
-  if (deltaSeconds < 60) return "last seen now";
+  if (deltaSeconds < 60) return "just now";
   const minutes = Math.round(deltaSeconds / 60);
-  if (minutes < 60) return `last seen ${minutes}m ago`;
+  if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.round(minutes / 60);
-  return `last seen ${hours}h ago`;
+  return `${hours}h ago`;
+}
+
+function formatRelative(value) {
+  return `last seen ${formatAgo(value)}`;
 }
 
 function initialsFor(value) {

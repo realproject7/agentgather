@@ -687,6 +687,64 @@ pre {
   line-height: 1.7;
 }
 
+/* fenced code block with header (dot + language + copy) — #117 */
+.code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg-code);
+}
+
+.code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-codehd);
+}
+
+.code-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 7px rgba(236, 92, 148, 0.6);
+}
+
+.code-lang {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.code-copy {
+  margin-left: auto;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--chip);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.code-copy:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.code-copy.done {
+  border-color: rgba(63, 185, 80, 0.4);
+  color: var(--ok);
+}
+
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .roster {
   min-height: 0;
   overflow: auto;
@@ -732,7 +790,35 @@ pre {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 7px;
+  gap: 6px;
+}
+
+/* human/agent group header with count chip (#115) */
+.rail-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.rail-group:first-child {
+  margin-top: 0;
+}
+
+.rail-group-count {
+  margin-left: auto;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0;
 }
 
 .participant {
@@ -832,7 +918,6 @@ pre {
   font-weight: 800;
 }
 
-.composer-mode,
 .mention-warning,
 .reply-indicator,
 .send-error {
@@ -840,24 +925,45 @@ pre {
   margin: 10px 12px 0;
 }
 
-/* ---- broadcast / status compose mode (#72) ---- */
-.composer-mode {
+/* ---- composer footer: identity · broadcast mode · hints (#118 / #112) ---- */
+.composer-footer {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+  margin-top: 2px;
+  padding: 8px 13px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--faint);
+  font-size: var(--fs-sm);
 }
 
-.mode-toggle {
+.cf-id {
+  color: var(--muted);
+}
+
+.cf-spacer {
+  flex: 1;
+}
+
+/* ---- broadcast / status compose mode (#72) — footer toggle, low-key by default ---- */
+/* Scoped to .composer-footer so it overrides the accent .composer button (Send) rule. */
+.composer-footer .mode-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 3px 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--chip);
   color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.composer-footer .mode-toggle:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
 }
 
 .composer[data-mode="broadcast"] .mode-toggle {
@@ -1294,9 +1400,13 @@ button:disabled {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .composer button {
+  #send-button {
     grid-column: 1 / -1;
     width: calc(100% - 16px);
     margin: 0 8px 8px;
+  }
+
+  .cf-hint {
+    display: none;
   }
 }

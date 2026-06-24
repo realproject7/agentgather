@@ -293,7 +293,7 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
         lastSeenAt: new Date(Date.now() - 120_000).toISOString()
       }
     ]);
-    await page.waitForSelector("text=agent · local · lite · away");
+    await page.waitForSelector(".participant[data-attendance-state='away']");
 
     const attendanceResponse = await fetch(`${fixture.baseUrl}/attendance`, {
       method: "POST",
@@ -313,7 +313,7 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
       }
     ]);
     await page.waitForSelector(".participant[data-attendance-state='stale']");
-    await page.waitForSelector("text=agent · local · lite · stale");
+    await page.waitForSelector(".participant[data-attendance-state='stale'] .participant-status");
 
     const briefResponse = await fetch(`${fixture.baseUrl}/brief`, {
       method: "POST",
@@ -363,7 +363,7 @@ test("composer broadcast mode sends an untargeted status message and resets to d
 
     await page.click("#broadcast-toggle");
     assert.equal(await page.getAttribute("#composer", "data-mode"), "broadcast");
-    await page.waitForSelector("text=untargeted · no @alias needed");
+    await page.waitForSelector("text=untargeted · everyone sees it");
 
     await page.fill("#message-text", "starting the pricing review now — please attend.");
     await page.click("#send-button");
