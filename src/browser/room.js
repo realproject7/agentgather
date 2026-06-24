@@ -699,12 +699,26 @@ function appendText(parent, text) {
 }
 
 function summarizeBrief(body) {
-  const candidate =
-    body
-      .split(/\r?\n/)
-      .map((line) => line.replace(/^#{1,6}\s+/, "").replace(/^>\s?/, "").trim())
-      .find((line) => line.length > 0) || "(empty)";
-  return candidate.replace(/\*\*|`|\[|\]\([^)]+\)/g, "");
+  const lines = String(body || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const isHeading = (line) => /^#{1,6}\s+/.test(line);
+  const strip = (line) =>
+    line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^>\s?/, "")
+      .replace(/^[-*]\s+/, "")
+      .replace(/\*\*|`|\[|\]\([^)]+\)/g, "")
+      .trim();
+  // Prefer the first prose line so a leading "## Goal" heading does not become
+  // the whole summary; fall back to the first heading, then "(empty)".
+  const pick = lines.find((line) => !isHeading(line)) || lines[0] || "";
+  const clean = strip(pick) || "(empty)";
+  // Keep the collapsed bar to a short lead-in even when the brief is one long
+  // line; the full text lives in the brief overlay (CSS also ellipsis-clips).
+  return clean.length > 120 ? `${clean.slice(0, 117).trimEnd()}…` : clean;
 }
 
 // ---- composer: broadcast mode (#72) ----
