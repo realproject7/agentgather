@@ -74,6 +74,8 @@ test("routeHash hides the slug and classifyPath drops query strings", () => {
   assert.equal(classifyPath("/messages"), "messages");
   assert.equal(classifyPath("/"), "shell");
   assert.equal(classifyPath("/room.css"), "asset");
+  assert.equal(classifyPath("/theme.css"), "asset");
+  assert.equal(classifyPath("/agentgather-logo.png"), "asset");
   assert.equal(classifyPath("/secret/path?x=y"), "other");
 });
 

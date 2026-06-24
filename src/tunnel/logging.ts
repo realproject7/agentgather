@@ -66,6 +66,10 @@ export function routeHash(slug: string): string {
 const PATH_CLASSES = new Set([
   "room.css",
   "room.js",
+  "theme.css",
+  "agentgather-logo.png",
+  "favicon.png",
+  "manifest.webmanifest",
   "brief",
   "attendance",
   "status",
@@ -86,6 +90,15 @@ export function classifyPath(pathname: string): string {
   const withoutQuery = pathname.split("?", 1)[0] ?? "/";
   const first = withoutQuery.split("/").filter(Boolean)[0];
   if (first === undefined) return "shell";
-  if (first === "room.css" || first === "room.js") return "asset";
+  if (
+    first === "room.css" ||
+    first === "room.js" ||
+    first === "theme.css" ||
+    first === "agentgather-logo.png" ||
+    first === "favicon.png" ||
+    first === "manifest.webmanifest"
+  ) {
+    return "asset";
+  }
   return PATH_CLASSES.has(first) ? first : "other";
 }

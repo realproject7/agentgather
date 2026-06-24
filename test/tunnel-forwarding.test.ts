@@ -117,6 +117,15 @@ test("broker forwards browser shell and assets", async () => {
     assert.equal(css.status, 200);
     assert.match(css.headers.get("content-type") ?? "", /text\/css/);
 
+    const theme = await fixture.fetchThroughBroker("/theme.css");
+    assert.equal(theme.status, 200);
+    assert.match(await theme.text(), /--accent: #ec5c94/);
+
+    const logo = await fixture.fetchThroughBroker("/agentgather-logo.png");
+    assert.equal(logo.status, 200);
+    assert.equal(logo.headers.get("content-type"), "image/png");
+    assert.ok((await logo.arrayBuffer()).byteLength > 1000);
+
     const js = await fixture.fetchThroughBroker("/room.js");
     assert.equal(js.status, 200);
     assert.match(js.headers.get("content-type") ?? "", /javascript/);

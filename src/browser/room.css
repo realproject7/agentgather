@@ -1,67 +1,9 @@
-:root {
-  color-scheme: dark;
-  --bg: #0e1110;
-  --bg-elevated: #151918;
-  --panel: #1a1f1d;
-  --panel-strong: #202722;
-  --bubble: #202622;
-  --bubble-own: #0f4f48;
-  --bubble-system: #242017;
-  --text: #eef5f1;
-  --muted: #9aa7a1;
-  --muted-strong: #c3d0ca;
-  --line: #2d3632;
-  --line-strong: #40504a;
-  --accent: #35d0ba;
-  --accent-strong: #78f3df;
-  --accent-soft: #123d39;
-  --warn: #f2bd59;
-  --warn-soft: #3b2c13;
-  --danger: #ff7a7a;
-  --danger-soft: #3a1c1f;
-  --code-bg: #101413;
-  --focus: #7dd3fc;
-  --radius: 8px;
-  --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  height: 100%;
-}
+@import url("theme.css");
 
 body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
   background:
-    radial-gradient(circle at 12% 0%, rgba(53, 208, 186, 0.08), transparent 26rem),
-    linear-gradient(180deg, #101412 0%, var(--bg) 42%, #0a0c0b 100%);
-  color: var(--text);
-  font-family: var(--font);
-}
-
-button,
-input,
-textarea {
-  font: inherit;
-}
-
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-button {
-  cursor: pointer;
+    radial-gradient(circle at 12% 0%, rgba(236, 92, 148, 0.07), transparent 26rem),
+    linear-gradient(180deg, #101013 0%, var(--bg) 42%, #08080a 100%);
 }
 
 .room-shell {
@@ -297,7 +239,7 @@ button:disabled {
 .composer textarea {
   color: var(--text);
   border: 1px solid var(--line-strong);
-  background: #101413;
+  background: var(--bg-code);
 }
 
 .join-form input {
@@ -310,7 +252,7 @@ button:disabled {
   min-height: 40px;
   background: var(--accent);
   border-color: var(--accent);
-  color: #071210;
+  color: var(--accent-text);
   font-weight: 700;
 }
 
@@ -376,7 +318,7 @@ button:disabled {
 }
 
 .message.own .message-bubble {
-  background: linear-gradient(180deg, #115e55 0%, var(--bubble-own) 100%);
+  background: linear-gradient(180deg, rgba(236, 92, 148, 0.2) 0%, var(--bubble-own) 100%);
 }
 
 .message-meta {
@@ -522,7 +464,7 @@ pre {
 
 .participant[data-attendance-state="attending"] .participant-status,
 .participant[data-attendance-state="managed"] .participant-status {
-  border-color: rgba(53, 208, 186, 0.4);
+  border-color: rgba(236, 92, 148, 0.4);
   background: var(--accent-soft);
   color: var(--accent-strong);
 }
@@ -581,7 +523,7 @@ pre {
   min-height: 44px;
   background: var(--accent);
   border-color: var(--accent);
-  color: #06110f;
+  color: var(--accent-text);
   font-weight: 800;
 }
 

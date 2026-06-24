@@ -62,10 +62,15 @@ async function listen(server: Server): Promise<{ baseUrl: string; close: () => P
 test("build copies platform shell assets into dist", async () => {
   const html = await readFile(new URL("../src/browser/shell.html", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/browser/shell.css", import.meta.url), "utf8");
+  const theme = await readFile(new URL("../src/browser/theme.css", import.meta.url), "utf8");
   const js = await readFile(new URL("../src/browser/shell.js", import.meta.url), "utf8");
   assert.match(html, /shell.css/);
+  assert.match(html, /agentgather-logo\.png/);
+  assert.match(html, /manifest\.webmanifest/);
   assert.match(css, /platform-shell/);
-  assert.match(css, /color-scheme: dark/);
+  assert.match(css, /theme\.css/);
+  assert.match(theme, /color-scheme: dark/);
+  assert.match(theme, /--accent: #ec5c94/);
   assert.match(js, /loadRooms/);
 });
 

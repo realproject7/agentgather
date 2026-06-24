@@ -1,72 +1,9 @@
-/*
- * Mirrors the accepted #78 v4 design tokens
- * (agentgather-platform-design-v4/system/tokens.css): pink primary accent,
- * dark neutral panels, and a monospace primary typeface. Not the older green
- * room.css palette.
- */
-:root {
-  color-scheme: dark;
-  --bg: #0d0d10;
-  --bg-elevated: #141418;
-  --panel: #17171c;
-  --panel-strong: #1e1e25;
-  --bubble: #1b1b21;
-  --text: #f4f4f6;
-  --muted: #9b9ba6;
-  --muted-strong: #c8c8d2;
-  --line: #2a2a31;
-  --line-strong: #3a3a44;
-  --accent: #ea4c89;
-  --accent-strong: #f478a8;
-  --accent-soft: #2a121d;
-  --warn: #f2bd59;
-  --warn-soft: #332615;
-  --danger: #ff6b6b;
-  --danger-soft: #331a1c;
-  --focus: #7dd3fc;
-  --radius: 8px;
-  --font: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  height: 100%;
-}
+@import url("theme.css");
 
 body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
   background:
     radial-gradient(circle at 12% 0%, rgba(234, 76, 137, 0.07), transparent 26rem),
     linear-gradient(180deg, #101013 0%, var(--bg) 42%, #08080a 100%);
-  color: var(--text);
-  font-family: var(--font);
-}
-
-button,
-input,
-textarea {
-  font: inherit;
-}
-
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-button {
-  cursor: pointer;
-}
-
-a {
-  color: var(--accent-strong);
 }
 
 .platform-shell {
@@ -88,11 +25,25 @@ a {
   backdrop-filter: blur(16px);
 }
 
-/* Reserved, intentionally empty brand/logo slot for #82. No mark/wordmark. */
 .brand-slot {
   min-width: 0;
   flex: 1 1 auto;
   min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.brand-slot img {
+  width: 26px;
+  height: 26px;
+  display: block;
+  border-radius: 7px;
 }
 
 .topbar-meta {

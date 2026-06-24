@@ -1,0 +1,20 @@
+{
+  "name": "Agent Gather",
+  "short_name": "Agent Gather",
+  "description": "Private host-owned rooms where humans and agents gather for focused collaboration.",
+  "display": "standalone",
+  "background_color": "#0b0b0d",
+  "theme_color": "#ec5c94",
+  "icons": [
+    {
+      "src": "/agentgather-logo.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
+}

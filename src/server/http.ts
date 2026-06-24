@@ -91,7 +91,14 @@ async function handleRequest(context: RequestContext): Promise<void> {
   const { pathname } = context.url;
   if (context.req.method === "GET" && pathname === "/") return serveBrowserShell(context);
   if (context.req.method === "GET" && pathname === "/room.css") return serveBrowserAsset(context, "room.css", "text/css; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/theme.css") return serveBrowserAsset(context, "theme.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/room.js") return serveBrowserAsset(context, "room.js", "text/javascript; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/manifest.webmanifest") {
+    return serveBrowserAsset(context, "manifest.webmanifest", "application/manifest+json; charset=utf-8");
+  }
+  if (context.req.method === "GET" && (pathname === "/agentgather-logo.png" || pathname === "/favicon.png")) {
+    return serveBrowserBinaryAsset(context, "agentgather-logo.png", "image/png");
+  }
   if (context.req.method === "GET" && pathname === "/brief") return getBrief(context);
   if (context.req.method === "POST" && pathname === "/brief") return postBrief(context);
   if (context.req.method === "POST" && pathname === "/attendance") return postAttendance(context);
@@ -118,6 +125,12 @@ async function serveBrowserShell(context: RequestContext): Promise<void> {
 async function serveBrowserAsset(context: RequestContext, asset: string, contentType: string): Promise<void> {
   const body = await readFile(new URL(`../browser/${asset}`, import.meta.url), "utf8");
   sendText(context.res, 200, body, contentType);
+}
+
+async function serveBrowserBinaryAsset(context: RequestContext, asset: string, contentType: string): Promise<void> {
+  const body = await readFile(new URL(`../browser/${asset}`, import.meta.url));
+  context.res.writeHead(200, { "content-type": contentType, "content-length": body.byteLength });
+  context.res.end(body);
 }
 
 async function getBrief(context: RequestContext): Promise<void> {
