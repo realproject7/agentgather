@@ -484,7 +484,7 @@ test("a quota_exceeded response shows the public-route-paused banner (#84)", asy
   }
 });
 
-test("a closed room shows the exported-summary history state and hides the composer (#83)", async () => {
+test("a closed room shows the host read-only history source and hides the composer (#83)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
   try {
@@ -498,10 +498,43 @@ test("a closed room shows the exported-summary history state and hides the compo
     });
 
     await page.waitForSelector("#history-strip:not([hidden])");
-    await page.waitForSelector("text=history source · exported summary");
-    await page.waitForSelector("text=read-only summary");
-    await page.waitForSelector("text=export & tickets remain available");
+    // The host log is still reachable, so the source is named honestly (not an
+    // exported summary) and the closed-room messages remain visible (#83).
+    await page.waitForSelector("text=history source · host room (read-only)");
+    await page.waitForSelector("text=· read-only");
+    await page.waitForSelector(".message.system", { state: "attached" });
+    await page.waitForSelector("text=room closed");
     // No composer in a closed room.
+    assert.equal(await page.locator("#composer").isHidden(), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a closed room with an unreachable host log shows an explicit unavailable source (#83)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // The host room ended remotely: /status reports closed and /messages fails
+    // with route_closed, so there is no live, cache, or export source to show.
+    await page.route(/\/status(\?|$)/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, room: fixture.roomId, me: "host", is_host: true, room_status: "closed", attendance_policy: "manual-ok", brief_version: 1, participants: [] })
+      })
+    );
+    await page.route(/\/messages(\?|$)/, (route) =>
+      route.fulfill({ status: 410, contentType: "application/json", body: JSON.stringify({ ok: false, error: "route_closed", message: "this route has been closed" }) })
+    );
+
+    await page.waitForSelector("text=history source · unavailable");
+    await page.waitForSelector("text=live, cached & exported history are unavailable");
     assert.equal(await page.locator("#composer").isHidden(), true);
   } finally {
     await browser.close();

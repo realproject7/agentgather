@@ -20,7 +20,11 @@ const state = {
   // Route/relay connection health, distinct from room open/closed lifecycle.
   // "live" | "degraded" | "quota". Closed is tracked by roomStatus.
   connection: "live",
-  connectionCode: null
+  connectionCode: null,
+  // Whether GET /messages reached the host log (true) or failed (false), used to
+  // tell a closed room's read-only host history apart from "unavailable".
+  historyAvailable: true,
+  closedHistoryLoaded: false
 };
 
 const shell = document.querySelector(".room-shell");
@@ -258,15 +262,24 @@ async function loadStatus() {
 }
 
 async function pollMessages() {
-  if (state.roomStatus === "closed") return;
+  // A closed room is loaded exactly once: GET /messages still serves the host's
+  // read-only history (it never required the room to be open), but there is
+  // nothing further to poll for.
+  if (state.roomStatus === "closed" && state.closedHistoryLoaded) return;
   let payload;
   try {
     payload = await authFetch(`/messages?since_id=${state.cursor}`);
   } catch (error) {
+    state.historyAvailable = false;
     handlePollError(error);
+    if (state.roomStatus === "closed") {
+      state.closedHistoryLoaded = true;
+      applyRoomState();
+    }
     return;
   }
   markConnectionLive();
+  state.historyAvailable = true;
   for (const message of payload.messages) {
     if (state.seen.has(message.id)) continue;
     state.seen.add(message.id);
@@ -274,6 +287,10 @@ async function pollMessages() {
   }
   state.cursor = payload.next_since_id;
   emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
+  if (state.roomStatus === "closed") {
+    state.closedHistoryLoaded = true;
+    applyRoomState();
+  }
 }
 
 function isForegroundState(value) {
@@ -765,7 +782,9 @@ function suggestionsFor(token) {
 }
 
 function replaceUnknownToken(from, to) {
-  const pattern = new RegExp(`(^|[^\\w-])@${from}\\b`);
+  // A negative lookahead (not \b) so a token ending in "-" still matches: \b
+  // would not fire between "-" and the following character.
+  const pattern = new RegExp(`(^|[^\\w-])@${from}(?![a-z0-9-])`);
   messageText.value = messageText.value.replace(pattern, (_match, lead) => `${lead}@${to}`);
   messageText.focus();
   updateComposerHints();
@@ -923,19 +942,36 @@ function renderBanner(closed) {
   roomBanner.hidden = false;
 }
 
+// Closed-room history must name its real source (#83): the host log is still
+// served read-only after close, so show that when reachable, and only fall back
+// to an explicit "unavailable" when no source can be loaded. The participant
+// room keeps no browser cache or export marker, so it never claims either.
 function renderHistoryStrip(closed) {
   if (!closed) {
     historyStrip.hidden = true;
     historyKv.textContent = state.connection === "degraded" ? "reconnecting…" : "host live room";
     return;
   }
-  historyKv.textContent = "exported summary";
-  historySourceTag.textContent = "history source · exported summary";
-  historySourceNote.textContent = "— room is closed; live & cache unavailable.";
+  const room = roomTitle.textContent || "room";
   const count = state.seen.size;
-  historySummary.textContent = `${roomTitle.textContent || "room"} · closed · ${count} ${count === 1 ? "message" : "messages"} · read-only summary`;
-  historySummary.hidden = false;
-  historyFootNote.textContent = "no composer · export & tickets remain available";
+  if (state.historyAvailable) {
+    historyKv.textContent = "host room · read-only";
+    historySourceTag.textContent = "history source · host room (read-only)";
+    historySourceNote.textContent = "— room is closed; showing the host's read-only history.";
+    if (count > 0) {
+      historySummary.textContent = `${room} · closed · ${count} ${count === 1 ? "message" : "messages"} · read-only`;
+      historySummary.hidden = false;
+    } else {
+      historySummary.hidden = true;
+    }
+    historyFootNote.textContent = "no composer · export the transcript before you leave";
+  } else {
+    historyKv.textContent = "unavailable";
+    historySourceTag.textContent = "history source · unavailable";
+    historySourceNote.textContent = "— room is closed; live, cached & exported history are unavailable here.";
+    historySummary.hidden = true;
+    historyFootNote.textContent = "no composer";
+  }
   historyStrip.hidden = false;
   emptyState.hidden = true;
 }
