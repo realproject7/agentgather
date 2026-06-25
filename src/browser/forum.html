@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Gather Forum</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="stylesheet" href="forum.css">
+  </head>
+  <body>
+    <main class="forum-shell k-frame" data-view="list">
+      <header class="topbar">
+        <div class="forum-heading">
+          <button id="forum-back" class="icon-button k-pill" type="button" aria-label="Back to posts">←</button>
+          <img class="brand-mark" src="agentgather-logo.png" alt="" width="22" height="22">
+          <div class="eyebrow">agentgather</div>
+          <h1 id="forum-channel-title">forum</h1>
+        </div>
+      </header>
+
+      <div class="forum">
+        <section class="flist k-rail" aria-label="Forum posts">
+          <div class="fhead">
+            <span class="ftitle"><span class="hsh">◆</span> <span id="forum-channel-name">forum</span></span>
+            <span id="post-count" class="fcount"></span>
+            <span class="fspacer"></span>
+            <button id="new-post" class="newbtn" type="button">＋ new post</button>
+          </div>
+          <div id="filters" class="filters" role="group" aria-label="Status filter">
+            <button class="fchip on" type="button" data-filter="all">all</button>
+            <button class="fchip" type="button" data-filter="open">open</button>
+            <button class="fchip" type="button" data-filter="answered">answered</button>
+            <button class="fchip" type="button" data-filter="resolved">resolved</button>
+            <button class="fchip" type="button" data-filter="closed">closed</button>
+          </div>
+          <form id="new-post-form" class="new-post-form k-card" hidden>
+            <input id="new-post-title" type="text" maxlength="200" placeholder="post title" autocomplete="off">
+            <textarea id="new-post-body" rows="3" placeholder="post body — markdown supported"></textarea>
+            <input id="new-post-tags" type="text" placeholder="tags (comma-separated, optional)" autocomplete="off">
+            <div class="np-row">
+              <span id="new-post-error" class="np-error" role="alert" hidden></span>
+              <span class="fspacer"></span>
+              <button id="new-post-cancel" class="ghostbtn" type="button">cancel</button>
+              <button class="sendbtn" type="submit">create post</button>
+            </div>
+          </form>
+          <ul id="post-list" class="posts" aria-live="polite"></ul>
+          <div id="list-state" class="pane-state">Loading posts…</div>
+        </section>
+
+        <section class="fdetail k-pane" aria-label="Post detail">
+          <div id="detail" hidden>
+            <div class="dhead">
+              <div class="r1">
+                <h1 id="detail-title"></h1>
+                <span id="detail-status"></span>
+              </div>
+              <div id="detail-tags" class="tags"></div>
+              <div id="detail-by" class="by"></div>
+            </div>
+            <div class="dbody">
+              <div id="detail-body" class="md"></div>
+              <div class="cmts">
+                <div id="comments-label" class="lbl"></div>
+                <div id="comments"></div>
+              </div>
+            </div>
+            <div class="sys"><span class="mono">◆ host-owned · live from host · comments append-only</span></div>
+            <form id="comment-form" class="ccompose k-composer">
+              <div class="cprompt">
+                <span class="gt" aria-hidden="true">&gt;</span>
+                <textarea id="comment-text" rows="1" placeholder="add a comment — markdown supported"></textarea>
+              </div>
+              <div class="crow">
+                <span id="comment-error" class="hint" role="alert"></span>
+                <span class="cf-hint">markdown supported · comments are host-owned and append-only</span>
+                <span class="fspacer"></span>
+                <button class="sendbtn" type="submit">comment</button>
+              </div>
+            </form>
+          </div>
+          <div id="detail-state" class="pane-state">Select a post to read the thread.</div>
+        </section>
+      </div>
+    </main>
+    <script src="forum.js" type="module"></script>
+  </body>
+</html>

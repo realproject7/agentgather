@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 // Pane stylesheets held to the no-raw-hex/font rule. Raw values live only in
 // the kit (kit.css) and the token layer (theme.css); panes consume tokens.
-export const PANE_FILES = ["src/browser/room.css", "src/browser/shell.css"];
+export const PANE_FILES = ["src/browser/room.css", "src/browser/shell.css", "src/browser/forum.css"];
 
 // Blank out /* ... */ comments (keeping newlines) so issue refs like `#112`
 // inside comments are never flagged.

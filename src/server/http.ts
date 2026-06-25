@@ -3,10 +3,14 @@ import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
 import { hashToken, verifyToken } from "../auth/index.js";
 import {
+  addForumComment,
   appendMessageResult,
   appendServerMessage,
   closeRoom,
+  createForumPost,
+  listForumPosts,
   readBrief,
+  readForumPost,
   readMessages,
   readParticipants,
   readRoomState,
@@ -26,10 +30,12 @@ import {
   normalizeBaseUrl,
   normalizeSupportedModes,
   parseAttendancePolicy,
+  parseForumStatus,
   renderAgentInstructions,
   renderAttentionGuidance,
   roomUrl,
-  type AttentionCardInfo
+  type AttentionCardInfo,
+  type ForumPostStatus
 } from "../protocol/index.js";
 import { errorBody, HttpError } from "./errors.js";
 import { buildWaitResponse, defaultWaitHub, type WaitHub } from "./wait.js";
@@ -99,6 +105,15 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "GET" && pathname === "/theme.css") return serveBrowserAsset(context, "theme.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/kit.css") return serveBrowserAsset(context, "kit.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/room.js") return serveBrowserAsset(context, "room.js", "text/javascript; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/markdown.js") return serveBrowserAsset(context, "markdown.js", "text/javascript; charset=utf-8");
+  // Forum UI (T8): static assets + a small HTTP surface over the frozen T6 store.
+  if (context.req.method === "GET" && pathname === "/forum.html") return serveBrowserAsset(context, "forum.html", "text/html; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/forum.css") return serveBrowserAsset(context, "forum.css", "text/css; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/forum.js") return serveBrowserAsset(context, "forum.js", "text/javascript; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/forum/posts") return getForumPosts(context);
+  if (context.req.method === "GET" && pathname === "/forum/post") return getForumPost(context);
+  if (context.req.method === "POST" && pathname === "/forum/posts") return postForumPost(context);
+  if (context.req.method === "POST" && pathname === "/forum/comment") return postForumComment(context);
   // The room composer imports the shared mention parser so its unknown-mention
   // warning matches the server exactly (same code-fence masking), instead of a
   // browser-only reimplementation.
@@ -268,6 +283,88 @@ async function postJoin(context: RequestContext): Promise<void> {
   await appendSystem(context, `${auth.participant.alias} joined`);
   context.options.waitHub.notify(context.options.roomId);
   sendJson(context.res, 200, { ok: true, participant: auth.participant.alias });
+}
+
+// ---- Forum HTTP surface (T8) over the frozen T6 store ----
+async function getForumPosts(context: RequestContext): Promise<void> {
+  await requireParticipant(context);
+  const channel = requireForumChannelParam(context);
+  const posts = await forumGuard(() => listForumPosts(context.options.root, context.options.roomId, channel));
+  // comment_count is a derived, response-only field (NOT part of the frozen
+  // ForumPost on disk) so the list row can show it without an extra round-trip.
+  const withCounts = await Promise.all(
+    posts.map(async (post) => {
+      const thread = await readForumPost(context.options.root, context.options.roomId, channel, post.id);
+      return { ...post, comment_count: thread.comments.length };
+    })
+  );
+  sendJson(context.res, 200, { ok: true, channel, posts: withCounts });
+}
+
+async function getForumPost(context: RequestContext): Promise<void> {
+  await requireParticipant(context);
+  const channel = requireForumChannelParam(context);
+  const post = requireParam(context, "post");
+  const thread = await forumGuard(() => readForumPost(context.options.root, context.options.roomId, channel, post));
+  sendJson(context.res, 200, { ok: true, ...thread });
+}
+
+async function postForumPost(context: RequestContext): Promise<void> {
+  const auth = await requireParticipant(context);
+  await requireRoomOpen(context);
+  const body = await readJsonBody<{ channel?: unknown; title?: unknown; body?: unknown; tags?: unknown; status?: unknown }>(context);
+  if (typeof body.channel !== "string" || typeof body.title !== "string" || typeof body.body !== "string") {
+    throw new HttpError(400, "invalid_forum_post", "channel, title, and body are required");
+  }
+  const input: { author: string; title: string; body: string; tags?: string[]; status?: ForumPostStatus } = {
+    author: auth.participant.alias,
+    title: body.title,
+    body: body.body
+  };
+  if (Array.isArray(body.tags)) input.tags = body.tags.filter((t): t is string => typeof t === "string");
+  if (typeof body.status === "string") input.status = parseForumStatus(body.status);
+  const post = await forumGuard(() => createForumPost(context.options.root, context.options.roomId, body.channel as string, input));
+  sendJson(context.res, 201, { ok: true, post });
+}
+
+async function postForumComment(context: RequestContext): Promise<void> {
+  const auth = await requireParticipant(context);
+  await requireRoomOpen(context);
+  const body = await readJsonBody<{ channel?: unknown; post?: unknown; body?: unknown }>(context);
+  if (typeof body.channel !== "string" || typeof body.post !== "string" || typeof body.body !== "string") {
+    throw new HttpError(400, "invalid_forum_comment", "channel, post, and body are required");
+  }
+  if (body.body.trim().length === 0) throw new HttpError(400, "invalid_forum_comment", "comment body is required");
+  const comment = await forumGuard(() =>
+    addForumComment(context.options.root, context.options.roomId, body.channel as string, body.post as string, {
+      author: auth.participant.alias,
+      body: body.body as string
+    })
+  );
+  sendJson(context.res, 201, { ok: true, comment });
+}
+
+function requireParam(context: RequestContext, name: string): string {
+  const value = context.url.searchParams.get(name);
+  if (value === null || value.length === 0) throw new HttpError(400, "missing_param", `${name} is required`);
+  return value;
+}
+
+function requireForumChannelParam(context: RequestContext): string {
+  return requireParam(context, "channel");
+}
+
+// Map forum-store validation/not-found errors to HTTP errors instead of 500.
+async function forumGuard<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    const message = error instanceof Error ? error.message : "forum error";
+    const notFound = /not found/i.test(message) || (error instanceof Error && "code" in error && error.code === "ENOENT");
+    if (notFound) throw new HttpError(404, "forum_not_found", "forum post not found");
+    throw new HttpError(400, "forum_error", message);
+  }
 }
 
 // Apply the negotiated supported/requested/effective attention modes (9A).

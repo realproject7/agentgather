@@ -66,6 +66,10 @@ export function routeHash(slug: string): string {
 const PATH_CLASSES = new Set([
   "room.css",
   "room.js",
+  "markdown.js",
+  "forum.html",
+  "forum.css",
+  "forum.js",
   "theme.css",
   "kit.css",
   "agentgather-logo.png",
@@ -94,6 +98,10 @@ export function classifyPath(pathname: string): string {
   if (
     first === "room.css" ||
     first === "room.js" ||
+    first === "markdown.js" ||
+    first === "forum.html" ||
+    first === "forum.css" ||
+    first === "forum.js" ||
     first === "theme.css" ||
     first === "kit.css" ||
     first === "agentgather-logo.png" ||

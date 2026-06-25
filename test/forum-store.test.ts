@@ -79,6 +79,14 @@ test("creating a post on a non-forum channel is rejected", async () => {
   );
 });
 
+test("adding a comment on a non-forum channel is rejected (boundary on the append path)", async () => {
+  const root = await seedForum();
+  await assert.rejects(
+    addForumComment(root, "demo", "general", "rfc-1", { author: "host", body: "nope" }),
+    /not a forum channel/
+  );
+});
+
 test("comments are append-only and sequentially numbered", async () => {
   const root = await seedForum();
   await createForumPost(root, "demo", "design-forum", { id: "p1", author: "host", title: "T", body: "B" });

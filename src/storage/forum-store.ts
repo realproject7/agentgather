@@ -88,6 +88,7 @@ export async function readForumPost(
 ): Promise<ForumPostThread> {
   assertSafeSlug(channelId, "channel id");
   assertSafeSlug(postId, "forum post id");
+  await assertForumChannel(root, roomId, channelId);
   const post = await readJson<ForumPost>(postFile(root, roomId, channelId, postId));
   assertValidForumPost(post); // enforce the frozen schema (incl. schema_version) on read
   const comments = await readCommentsLog(root, roomId, channelId, postId);
@@ -96,6 +97,9 @@ export async function readForumPost(
 
 export async function listForumPosts(root: string, roomId: string, channelId: string): Promise<ForumPost[]> {
   assertSafeSlug(channelId, "channel id");
+  // Enforce the forum-channel boundary on every read path (a chat channel is not
+  // an empty forum — it is rejected), matching create/comment.
+  await assertForumChannel(root, roomId, channelId);
   const dir = channelDir(root, roomId, channelId);
   let entries: string[];
   try {
@@ -129,6 +133,9 @@ export async function addForumComment(
   assertSafeSlug(postId, "forum post id");
   assertSafeSlug(input.author, "forum comment author");
   assertForumBody(input.body);
+  // Enforce the forum-channel boundary on the comment-append path too (matching
+  // create/read/list), before any read or append.
+  await assertForumChannel(root, roomId, channelId);
   const paths = roomPaths(root, roomId);
   return withWriterLock(paths.lock, async () => {
     // Post must exist and satisfy the frozen schema (also confirms the path).
