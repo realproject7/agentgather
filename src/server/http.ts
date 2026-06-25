@@ -33,6 +33,7 @@ import {
   parseForumStatus,
   renderAgentInstructions,
   renderAttentionGuidance,
+  renderForumReviewGuidance,
   roomUrl,
   type AttentionCardInfo,
   type ForumPostStatus
@@ -783,7 +784,8 @@ export function renderAttendCard(
   token: string,
   brief: RoomBrief,
   attendancePolicy: AttendancePolicy = "manual-ok",
-  attention: AttentionCardInfo = {}
+  attention: AttentionCardInfo = {},
+  forumReviewChannel?: string
 ): string {
   return [
     `# Agent Gather Attend Card: ${alias}`,
@@ -805,6 +807,7 @@ export function renderAttendCard(
     `curl -s "${roomUrl(baseUrl, "/messages?since_id=0")}" -H "Authorization: Bearer ${token}"`,
     `curl -s -X POST "${roomUrl(baseUrl, "/messages")}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
     "",
+    ...(forumReviewChannel === undefined ? [] : forumReviewSection(baseUrl, token, forumReviewChannel)),
     "## Attendance Recovery",
     "If you run a tool command or shell script, return to foreground attendance immediately after it finishes:",
     "agentgather attend --json",
@@ -819,6 +822,27 @@ export function renderAttendCard(
     "",
     renderAgentInstructions()
   ].join("\n");
+}
+
+// Forum review task block (T10): the 9B wake-on-event guidance + copy-pastable
+// commands against the real T6 forum endpoints. The token appears exactly once
+// (in the env export); the curls reference $AG_TOKEN so it is not repeated.
+function forumReviewSection(baseUrl: string, token: string, channel: string): string[] {
+  const base = normalizeBaseUrl(baseUrl);
+  return [
+    renderForumReviewGuidance(channel),
+    "",
+    "Forum commands (set these once; the token appears only here):",
+    `export AG_BASE='${base}' AG_TOKEN='${token}'`,
+    "# check assigned/updated forum posts",
+    `curl -s "$AG_BASE/forum/posts?channel=${channel}" -H "Authorization: Bearer $AG_TOKEN"`,
+    "# read a post + its comments (replace POST_ID)",
+    `curl -s "$AG_BASE/forum/post?channel=${channel}&post=POST_ID" -H "Authorization: Bearer $AG_TOKEN"`,
+    "# post a comment / reply (replace POST_ID and the body)",
+    `curl -s -X POST "$AG_BASE/forum/comment" -H "Authorization: Bearer $AG_TOKEN" -H "Content-Type: application/json" --data '{"channel":"${channel}","post":"POST_ID","body":"your reply"}'`,
+    "Then go idle — wake on the next assigned/updated post; no foreground loop required.",
+    ""
+  ];
 }
 
 export function renderInviteCard(
@@ -836,7 +860,7 @@ export function renderInviteCard(
   if (participant.effective_mode !== undefined) attention.effective_mode = participant.effective_mode;
   if (participant.poll_cadence_s !== undefined) attention.poll_cadence_s = participant.poll_cadence_s;
   if (participant.safety_wake_s !== undefined) attention.safety_wake_s = participant.safety_wake_s;
-  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy, attention);
+  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy, attention, participant.forum_review_channel);
 }
 
 function renderHumanInviteCard(baseUrl: string, alias: string, token: string, brief: RoomBrief): string {

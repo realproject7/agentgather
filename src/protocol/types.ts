@@ -60,6 +60,9 @@ export interface Participant {
   effective_mode?: AttentionMode;
   poll_cadence_s?: number;
   safety_wake_s?: number;
+  // Forum review task (V2 T10): the forum channel this agent was invited to
+  // review/respond on. Drives the Attend Card's forum-review section.
+  forum_review_channel?: string;
 }
 
 export interface Invite {

@@ -26,6 +26,7 @@ import {
 } from "../../../storage/index.js";
 import type { Channel, Participant, ParticipantKind, RoomBrief } from "../../../protocol/index.js";
 import {
+  assertSafeSlug,
   normalizeBaseUrl,
   parseAttendancePolicy,
   parseAttentionMode,
@@ -446,6 +447,13 @@ async function roomInvite(argv: string[], context: CliContext): Promise<number> 
   const invited = participant(alias, kind, false, token);
   const requestedMode = flagString(args, "mode");
   if (requestedMode !== undefined) invited.requested_mode = parseAttentionMode(requestedMode);
+  // T10: designate a forum-review task so the Attend Card renders the forum
+  // review section + commands for this channel.
+  const forumChannel = flagString(args, "forum");
+  if (forumChannel !== undefined) {
+    assertSafeSlug(forumChannel, "forum channel");
+    invited.forum_review_channel = forumChannel;
+  }
   await upsertParticipant(context.home, current.roomId, invited);
   await writeToken(context.home, current.roomId, alias, token);
   const advertised = advertisedBaseUrl(context.home, current.roomId, current.baseUrl);
