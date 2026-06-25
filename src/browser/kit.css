@@ -1,0 +1,67 @@
+/*
+ * v5 shell primitive kit — reusable structural components for the agentgather
+ * surface: app frame, channel rail, content pane, right rail, composer, cards,
+ * and status pills. Boardroom / chat / forum panes (T4/T8) import this same kit
+ * instead of copy-pasting CSS.
+ *
+ * Every primitive consumes the #130 token layer (theme.css) and never hardcodes
+ * a raw hex colour or font. Panes that consume the kit are held to the same rule
+ * by scripts/check-kit-drift.mjs (the anti-drift guard).
+ *
+ * Loaded via theme.css (`@import url("kit.css")`) so it travels with the token
+ * layer; it is therefore cascaded *before* pane stylesheets, letting a pane add
+ * its own layout/overrides on top of a primitive without specificity fights.
+ */
+
+/* app frame — full-viewport application shell (a pane sets its own grid/flow) */
+.k-frame {
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-term);
+}
+
+/* channel rail — vertical nav rail for boardroom channels (consumed by T4) */
+.k-rail-nav {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg-band);
+}
+
+/* content pane — scrollable primary content region */
+.k-pane {
+  min-height: 0;
+  overflow: auto;
+}
+
+/* right rail — bordered side column with a subtle vertical wash */
+.k-rail {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0.012));
+}
+
+/* composer — bordered message-input shell (a pane sets its own grid/padding) */
+.k-composer {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-input);
+}
+
+/* card — bordered, rounded, elevated panel (a pane sets size/shadow) */
+.k-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-term);
+}
+
+/* status pill — pill skin (shape + neutral surface); a pane sets display/padding */
+.k-pill {
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--chip);
+}

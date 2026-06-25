@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="room.css">
   </head>
   <body>
-    <main class="room-shell app h" data-state="loading">
+    <main class="room-shell k-frame" data-state="loading">
       <header class="topbar">
         <div class="room-heading">
           <img class="brand-mark" src="agentgather-logo.png" alt="" width="24" height="24">
@@ -17,19 +17,19 @@
           <h1 id="room-title">Room</h1>
         </div>
         <div class="topbar-meta">
-          <span id="room-status" class="status-dot">loading</span>
-          <span id="attendance-policy">manual-ok</span>
-          <span id="participant-count">0 participants</span>
-          <button id="roster-toggle" class="icon-button" type="button" aria-label="Toggle roster">Menu</button>
+          <span id="room-status" class="status-dot k-pill">loading</span>
+          <span id="attendance-policy" class="k-pill">manual-ok</span>
+          <span id="participant-count" class="k-pill">0 participants</span>
+          <button id="roster-toggle" class="icon-button k-pill" type="button" aria-label="Toggle roster">Menu</button>
         </div>
       </header>
 
-      <section id="auth-error" class="auth-error" hidden>
+      <section id="auth-error" class="auth-error k-card" hidden>
         <h2>Invite link required</h2>
         <p>This room needs an invite link or Attend Card from the host. Ask the host for a browser invite URL.</p>
       </section>
 
-      <section id="join-panel" class="auth-error" hidden>
+      <section id="join-panel" class="auth-error k-card" hidden>
         <h2>Choose your room name</h2>
         <p>This name is shown in the roster and message timeline. The server still derives your account from the invite token.</p>
         <form id="join-form" class="join-form">
@@ -60,7 +60,7 @@
       </div>
 
       <section class="workspace">
-        <section class="timeline-wrap" aria-label="Room messages">
+        <section class="timeline-wrap k-pane" aria-label="Room messages">
           <div id="history-strip" class="history-strip" hidden>
             <div class="history-source">showing <span id="history-source-tag" class="src-tag">history source · live host room</span> <span id="history-source-note"></span></div>
             <div id="history-summary" class="history-summary" hidden></div>
@@ -70,7 +70,7 @@
           <ol id="timeline" class="timeline" aria-live="polite"></ol>
         </section>
 
-        <aside id="roster" class="roster" aria-label="Participants">
+        <aside id="roster" class="roster k-rail" aria-label="Participants">
           <section class="rail-section">
             <div class="rail-title">room</div>
             <div class="rail-kv">
@@ -118,7 +118,7 @@
       </section>
       </div>
 
-      <form id="composer" class="composer" data-mode="direct">
+      <form id="composer" class="composer k-composer" data-mode="direct">
         <div id="mention-warning" class="mention-warning" hidden></div>
         <div id="reply-indicator" class="reply-indicator" hidden></div>
         <div id="send-error" class="send-error" role="alert" hidden></div>
@@ -137,7 +137,7 @@
       </form>
 
       <section id="brief-overlay" class="brief-overlay" aria-labelledby="brief-overlay-title" hidden>
-        <div class="brief-card" role="dialog" aria-modal="true" aria-describedby="brief-body">
+        <div class="brief-card k-card" role="dialog" aria-modal="true" aria-describedby="brief-body">
           <header class="brief-card-head">
             <span class="brief-card-glyph">◆</span>
             <div>

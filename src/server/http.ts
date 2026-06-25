@@ -92,6 +92,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "GET" && pathname === "/") return serveBrowserShell(context);
   if (context.req.method === "GET" && pathname === "/room.css") return serveBrowserAsset(context, "room.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/theme.css") return serveBrowserAsset(context, "theme.css", "text/css; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/kit.css") return serveBrowserAsset(context, "kit.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/room.js") return serveBrowserAsset(context, "room.js", "text/javascript; charset=utf-8");
   // The room composer imports the shared mention parser so its unknown-mention
   // warning matches the server exactly (same code-fence masking), instead of a

@@ -34,6 +34,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "lint": "node scripts/lint.mjs",
+    "kit-guard": "node scripts/check-kit-drift.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build && node --test \"dist/test/**/*.js\"",
     "no-stub": "node scripts/no-stub.mjs"

@@ -67,6 +67,7 @@ const PATH_CLASSES = new Set([
   "room.css",
   "room.js",
   "theme.css",
+  "kit.css",
   "agentgather-logo.png",
   "favicon.png",
   "manifest.webmanifest",
@@ -94,6 +95,7 @@ export function classifyPath(pathname: string): string {
     first === "room.css" ||
     first === "room.js" ||
     first === "theme.css" ||
+    first === "kit.css" ||
     first === "agentgather-logo.png" ||
     first === "favicon.png" ||
     first === "manifest.webmanifest"

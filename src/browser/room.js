@@ -458,7 +458,7 @@ function renderParticipantGroup(label, group) {
     const name = document.createElement("strong");
     name.textContent = participant.display_name || participant.alias;
     const status = document.createElement("span");
-    status.className = "participant-status";
+    status.className = "participant-status k-pill";
     status.textContent = participantStatusText(participant);
     const meta = document.createElement("span");
     const aliasPart =

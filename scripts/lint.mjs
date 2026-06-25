@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { checkPanes } from "./check-kit-drift.mjs";
 
 const root = process.cwd();
 const textExtensions = new Set([".ts", ".js", ".mjs", ".json", ".md"]);
@@ -32,6 +33,11 @@ async function walk(dir) {
 }
 
 await walk(root);
+
+// Anti-drift guard (#133): panes must not reintroduce raw hex/font outside the kit.
+for (const v of await checkPanes(root)) {
+  errors.push(`${v.file}:${v.line}: kit-drift (${v.kind}) — ${v.text}; use a kit primitive or a theme token`);
+}
 
 if (errors.length > 0) {
   for (const error of errors) console.error(error);
