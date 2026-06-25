@@ -2,11 +2,16 @@
 
 :root {
   color-scheme: dark;
+  /* Single #EC5C94 brand accent. --accent-rgb mirrors it as RGB components so
+     every translucent accent shade derives from one source instead of repeating
+     the literal rgba(236, 92, 148, …) across the surface. */
   --accent: #ec5c94;
+  --accent-rgb: 236, 92, 148;
   --accent-hover: #f07aab;
-  --accent-weak: rgba(236, 92, 148, 0.1);
-  --accent-line: rgba(236, 92, 148, 0.5);
+  --accent-weak: rgba(var(--accent-rgb), 0.1);
+  --accent-line: rgba(var(--accent-rgb), 0.5);
   --accent-text: #2a0d18;
+  --text-on-danger: #2a0d0d;
   --bg-page: #0b0b0d;
   --bg-term: #19191c;
   --bg-elev: #202024;
@@ -17,9 +22,14 @@
   --chip: rgba(255, 255, 255, 0.05);
   --text: #d8d9dd;
   --text-soft: #b7b9bf;
+  --text-strong: #fff;
   --muted: #7c7e86;
   --faint: #54565d;
   --muted-strong: var(--text-soft);
+  /* accent-tinted foregrounds for sender names and roster avatars */
+  --name-fg: #e2c0ce;
+  --avatar-agent-fg: #f0a9c6;
+  --avatar-human-fg: #d9c4cf;
   --border: rgba(255, 255, 255, 0.07);
   --border-soft: rgba(255, 255, 255, 0.045);
   --line: var(--border);
@@ -49,7 +59,7 @@
   --r-lg: 12px;
   --r-pill: 20px;
   --radius: var(--r-md);
-  --glow-accent: 0 0 8px rgba(236, 92, 148, 0.5);
+  --glow-accent: 0 0 8px rgba(var(--accent-rgb), 0.5);
   --bg: var(--bg-page);
   --bg-elevated: var(--bg-term);
   --panel: var(--bg-term);
