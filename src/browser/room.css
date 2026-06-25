@@ -3,7 +3,7 @@
 body {
   min-height: 100vh;
   background:
-    radial-gradient(1200px 640px at 12% -10%, rgba(236, 92, 148, 0.05), transparent 60%),
+    radial-gradient(1200px 640px at 12% -10%, rgba(var(--accent-rgb), 0.05), transparent 60%),
     var(--bg-page);
 }
 
@@ -248,7 +248,7 @@ h1::before {
 
 .auth-error h2 {
   margin: 0 0 8px;
-  color: #fff;
+  color: var(--text-strong);
   font-size: var(--fs-lg);
 }
 
@@ -409,7 +409,7 @@ h1::before {
 .md h2,
 .md h3 {
   margin: 16px 0 8px;
-  color: #fff;
+  color: var(--text-strong);
   font-weight: 700;
 }
 
@@ -439,7 +439,7 @@ h1::before {
 }
 
 .md strong {
-  color: #fff;
+  color: var(--text-strong);
   font-weight: 700;
 }
 
@@ -545,15 +545,15 @@ h1::before {
 }
 
 .message-avatar.agent {
-  border: 1px solid rgba(236, 92, 148, 0.34);
+  border: 1px solid rgba(var(--accent-rgb), 0.34);
   background: var(--accent-weak);
-  color: #f0a9c6;
+  color: var(--avatar-agent-fg);
 }
 
 .message-avatar.human {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.06);
-  color: #d9c4cf;
+  color: var(--avatar-human-fg);
 }
 
 .message-bubble {
@@ -586,7 +586,7 @@ h1::before {
 }
 
 .message-from {
-  color: #e2c0ce;
+  color: var(--name-fg);
   font-size: var(--fs-md);
   font-weight: 700;
   overflow-wrap: anywhere;
@@ -709,7 +709,7 @@ pre {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 7px rgba(236, 92, 148, 0.6);
+  box-shadow: 0 0 7px rgba(var(--accent-rgb), 0.6);
 }
 
 .code-lang {
@@ -928,7 +928,7 @@ pre {
 
 .rail-state .rs-close.on {
   background: var(--danger);
-  color: #2a0d0d;
+  color: var(--text-on-danger);
 }
 
 .rail-ctl {
@@ -987,7 +987,7 @@ pre {
 
 .composer[data-mode="broadcast"] {
   border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px rgba(236, 92, 148, 0.08);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
 }
 
 .composer-prompt {
@@ -1046,7 +1046,7 @@ pre {
 }
 
 .composer[data-mode="broadcast"] .mode-toggle {
-  border-color: rgba(236, 92, 148, 0.3);
+  border-color: rgba(var(--accent-rgb), 0.3);
   background: var(--accent-weak);
   color: var(--accent);
 }
@@ -1082,7 +1082,7 @@ pre {
 
 .warn-suggest {
   padding: 1px 7px;
-  border: 1px solid rgba(236, 92, 148, 0.3);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
   border-radius: 6px;
   background: var(--accent-weak);
   color: var(--accent);
@@ -1091,7 +1091,7 @@ pre {
 }
 
 .warn-suggest:hover {
-  background: rgba(236, 92, 148, 0.18);
+  background: rgba(var(--accent-rgb), 0.18);
 }
 
 .mention-autocomplete {
@@ -1141,15 +1141,15 @@ pre {
 }
 
 .ac-avatar.agent {
-  border: 1px solid rgba(236, 92, 148, 0.34);
+  border: 1px solid rgba(var(--accent-rgb), 0.34);
   background: var(--accent-weak);
-  color: #f0a9c6;
+  color: var(--avatar-agent-fg);
 }
 
 .ac-avatar.human {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.06);
-  color: #d9c4cf;
+  color: var(--avatar-human-fg);
 }
 
 .ac-meta {
@@ -1286,12 +1286,12 @@ button:disabled {
 }
 
 .room-banner[data-kind="quota"] {
-  border: 1px solid rgba(236, 92, 148, 0.32);
+  border: 1px solid rgba(var(--accent-rgb), 0.32);
   background: var(--accent-weak);
 }
 
 .room-banner[data-kind="quota"] .banner-ic {
-  background: rgba(236, 92, 148, 0.16);
+  background: rgba(var(--accent-rgb), 0.16);
   color: var(--accent);
 }
 
@@ -1363,7 +1363,7 @@ button:disabled {
 
 .broadcast-chip {
   padding: 1px 7px;
-  border: 1px solid rgba(236, 92, 148, 0.3);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
   border-radius: 5px;
   background: var(--accent-weak);
   color: var(--accent);
