@@ -25,8 +25,18 @@ function stripComments(css) {
 
 /**
  * Find raw-hex / raw-font drift in a pane stylesheet.
- * @returns {{line: number, kind: "raw-hex"|"raw-font", text: string}[]}
+ * @returns {{line: number, kind: "raw-hex"|"raw-font"|"raw-color", text: string}[]}
  */
+// Near-grayscale UI surface tints (e.g. rgba(20,20,24,…)) are allowed; only
+// chromatic literals — brand/status colours, the real drift risk — are flagged.
+// A literal is "neutral" when its RGB channel spread is within this tolerance.
+const NEUTRAL_SPREAD = 16;
+// numeric rgb()/rgba() — a token-backed rgba(var(--…),α) never matches (no digit
+// after the paren). Captures the three leading channels.
+const RGB_LITERAL = /\b(rgba?)\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g;
+// any numeric hsl()/hsla() literal is chromatic enough to flag.
+const HSL_LITERAL = /\bhsla?\(\s*\d/;
+
 export function findKitDrift(css) {
   const violations = [];
   const lines = stripComments(css).split("\n");
@@ -36,6 +46,17 @@ export function findKitDrift(css) {
     const hex = line.match(/[:\s(,]#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/);
     if (hex) {
       violations.push({ line: index + 1, kind: "raw-hex", text: hex[0].trim() });
+    }
+    // Chromatic raw rgb()/rgba() literals (neutral grayscale tints are fine).
+    for (const m of line.matchAll(RGB_LITERAL)) {
+      const [r, g, b] = [Number(m[2]), Number(m[3]), Number(m[4])];
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (spread > NEUTRAL_SPREAD) {
+        violations.push({ line: index + 1, kind: "raw-color", text: m[0] + ")" });
+      }
+    }
+    if (HSL_LITERAL.test(line)) {
+      violations.push({ line: index + 1, kind: "raw-color", text: line.trim() });
     }
     // Literal font declarations (a token-backed `font-family: var(--…)` is fine).
     if (/font-family\s*:/.test(line) && !/var\(--/.test(line)) {

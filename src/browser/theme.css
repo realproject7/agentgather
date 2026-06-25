@@ -36,12 +36,18 @@
   --line: var(--border);
   --line-strong: rgba(255, 255, 255, 0.13);
   --ok: #3fb950;
+  --ok-rgb: 63, 185, 80;
   --warn: #d8a33a;
+  --warn-rgb: 216, 163, 58;
   --paused: #7c7e86;
   --off: #6b6d74;
   --danger: #ff5f57;
-  --warn-soft: rgba(216, 163, 58, 0.12);
-  --danger-soft: rgba(255, 95, 87, 0.12);
+  --danger-rgb: 255, 95, 87;
+  /* shell status palette (distinct from room ok/warn/danger; values unchanged) */
+  --shell-amber-rgb: 242, 189, 89;
+  --shell-red-rgb: 255, 122, 122;
+  --warn-soft: rgba(var(--warn-rgb), 0.12);
+  --danger-soft: rgba(var(--danger-rgb), 0.12);
   --kw: #c9a6e8;
   --str: #9ccf8f;
   --fn: #7fb6e6;

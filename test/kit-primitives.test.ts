@@ -65,8 +65,16 @@ test("the anti-drift guard catches a raw hex and a literal font", async () => {
   assert.equal(fontHit.length, 1);
   assert.equal(fontHit[0]?.kind, "raw-font");
 
-  // Tokenised values and hex inside comments are NOT flagged.
+  // The #132 drift class: a chromatic rgba literal (e.g. the divergent accent).
+  const rgbaHit = findKitDrift(".x { border-color: rgba(234, 76, 137, 0.4); }");
+  assert.equal(rgbaHit.length, 1);
+  assert.equal(rgbaHit[0]?.kind, "raw-color");
+
+  // Tokenised values, neutral grayscale tints, and hex inside comments are NOT flagged.
   assert.equal(findKitDrift(".x { color: var(--accent); font-family: var(--mono); }").length, 0);
+  assert.equal(findKitDrift(".x { border-color: rgba(var(--accent-rgb), 0.4); }").length, 0);
+  assert.equal(findKitDrift(".x { background: rgba(255, 255, 255, 0.06); box-shadow: 0 0 0 rgba(0,0,0,0.5); }").length, 0);
+  assert.equal(findKitDrift(".x { background: rgba(20, 20, 24, 0.96); }").length, 0); // near-neutral surface
   assert.equal(findKitDrift("/* see #abc123 */ .x { color: var(--text); }").length, 0);
 
   // The live panes are clean through the real guard entrypoint.
