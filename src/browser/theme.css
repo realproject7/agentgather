@@ -72,6 +72,12 @@
   --accent-soft: var(--accent-weak);
   --code-bg: var(--bg-code);
   --focus: #7dd3fc;
+  /* platform-shell surfaces (formalized from shell.css, values unchanged) */
+  --bg-shell-top: #101013;
+  --bg-shell-bottom: #08080a;
+  --bg-badge: #17171c;
+  --bg-badge-strong: #1e1e25;
+  --badge-human-fg: #cfd1d6;
 }
 
 * {

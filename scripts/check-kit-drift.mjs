@@ -13,10 +13,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Pane stylesheets held to the no-raw-hex/font rule.
-// shell.css is a known pre-kit pane (existing raw hex + a divergent accent,
-// tracked by #132); it joins this list once it consumes the kit.
-export const PANE_FILES = ["src/browser/room.css"];
+// Pane stylesheets held to the no-raw-hex/font rule. Raw values live only in
+// the kit (kit.css) and the token layer (theme.css); panes consume tokens.
+export const PANE_FILES = ["src/browser/room.css", "src/browser/shell.css"];
 
 // Blank out /* ... */ comments (keeping newlines) so issue refs like `#112`
 // inside comments are never flagged.
