@@ -70,7 +70,12 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
     root: host.context.home,
     roomId: "dogfood-room",
     baseUrl,
-    waitHoldMs: 40,
+    // #142: the held-wait/close step below races a long-poll against POST /close.
+    // The other waits in this dogfood return immediately on messages, so only the
+    // held wait is timeout-bound. A 40ms hold could expire before close commits
+    // under CI load (heartbeating back room_status "open"); 1000ms gives ample
+    // margin while the held wait still wakes event-driven the moment close lands.
+    waitHoldMs: 1_000,
     rateLimitPerMinute: 1_000
   });
   await new Promise<void>((resolve) => {
