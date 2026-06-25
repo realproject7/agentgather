@@ -179,7 +179,11 @@ test("room runtime-status reports a valid runtime state without a server", async
   await runRoomCommand(["create-boardroom", "demo", "--url", "http://127.0.0.1:8798", "--json"], context);
   stdout.chunks.length = 0;
   await runRoomCommand(["runtime-status", "--json"], context);
-  const out = stdout.json<{ ok: true; runtime_state: string }>();
+  const out = stdout.json<{ ok: true; runtime_state: string; cli_source: string; cli_resolved: boolean }>();
   // No server is listening on the test port → not running.
   assert.ok(["runtime-unreachable", "manual-run-required"].includes(out.runtime_state));
+  // Status surfaces the host CLI source too (directive: command/status output).
+  assert.equal(out.cli_resolved, true);
+  assert.ok(out.cli_source.includes(process.execPath));
+  assert.equal(stdout.text().includes("tgl_"), false);
 });

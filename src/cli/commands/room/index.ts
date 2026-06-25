@@ -468,11 +468,21 @@ async function roomRuntimeStatus(argv: string[], context: CliContext): Promise<n
   const publicUrl = sanitizePublicUrl(normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl));
   const [tmuxAvailable, runtimeReachable] = await Promise.all([hasCommand("tmux"), probeRuntime(publicUrl)]);
   const runtimeState = resolveRuntimeState(tmuxAvailable, runtimeReachable);
+  // Surface the host CLI source here too (directive: "command/status output"),
+  // so a relaunch uses the host's own CLI rather than a global one.
+  const cli = resolveHostCli();
   return emit(
     context,
     flagBoolean(args, "json"),
-    { ok: true, room: current.roomId, runtime_state: runtimeState, tmux_available: tmuxAvailable },
-    `runtime: ${runtimeState}\n`
+    {
+      ok: true,
+      room: current.roomId,
+      runtime_state: runtimeState,
+      tmux_available: tmuxAvailable,
+      cli_source: cli.invocation,
+      cli_resolved: cli.resolved
+    },
+    `runtime: ${runtimeState}\ncli: ${cli.invocation}\n`
   );
 }
 
