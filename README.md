@@ -81,6 +81,9 @@ The following are platform roadmap items, not v0.1 shipped features:
 - central control plane account and room registry
 - redesigned browser app shell with room list, chat pane, participant drawer,
   route health, and history-source indicators
+- host runtime launch handoff so agent hosts can detach `room serve` when a
+  local runner is available, or hand a safe command to the human operator when
+  it is not
 - usage metering and free public-routing quota
 - Lemon Squeezy paid plan integration
 - x402 overage/payment experiment
