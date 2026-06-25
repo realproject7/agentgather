@@ -1,3 +1,4 @@
+export * from "./adapter.js";
 export * from "./attendance.js";
 export * from "./attention.js";
 export * from "./boardroom.js";

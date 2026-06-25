@@ -27,7 +27,9 @@ import {
   normalizeSupportedModes,
   parseAttendancePolicy,
   renderAgentInstructions,
-  roomUrl
+  renderAttentionGuidance,
+  roomUrl,
+  type AttentionCardInfo
 } from "../protocol/index.js";
 import { errorBody, HttpError } from "./errors.js";
 import { buildWaitResponse, defaultWaitHub, type WaitHub } from "./wait.js";
@@ -683,7 +685,8 @@ export function renderAttendCard(
   alias: string,
   token: string,
   brief: RoomBrief,
-  attendancePolicy: AttendancePolicy = "manual-ok"
+  attendancePolicy: AttendancePolicy = "manual-ok",
+  attention: AttentionCardInfo = {}
 ): string {
   return [
     `# Agent Gather Attend Card: ${alias}`,
@@ -694,6 +697,8 @@ export function renderAttendCard(
     "## Attendance Policy",
     `Policy: ${attendancePolicy}`,
     describeAttendancePolicy(attendancePolicy),
+    "",
+    renderAttentionGuidance(attention),
     "",
     "## Commands",
     `curl -s "${roomUrl(baseUrl, `/card?participant=${alias}&token=${token}`)}"`,
@@ -729,7 +734,12 @@ export function renderInviteCard(
   if (participant.kind === "human") {
     return renderHumanInviteCard(baseUrl, participant.alias, token, brief);
   }
-  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy);
+  const attention: AttentionCardInfo = {};
+  if (participant.requested_mode !== undefined) attention.requested_mode = participant.requested_mode;
+  if (participant.effective_mode !== undefined) attention.effective_mode = participant.effective_mode;
+  if (participant.poll_cadence_s !== undefined) attention.poll_cadence_s = participant.poll_cadence_s;
+  if (participant.safety_wake_s !== undefined) attention.safety_wake_s = participant.safety_wake_s;
+  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy, attention);
 }
 
 function renderHumanInviteCard(baseUrl: string, alias: string, token: string, brief: RoomBrief): string {
