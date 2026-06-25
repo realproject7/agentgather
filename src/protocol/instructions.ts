@@ -1,3 +1,5 @@
+import { renderHarnessMappingTable } from "./adapter.js";
+
 export type AgentKind = "codex" | "claude" | "gemini" | "generic";
 
 export function parseAgentKind(value: string | undefined): AgentKind {
@@ -23,6 +25,15 @@ export function renderAgentInstructions(agent: AgentKind = "generic"): string {
     "- Act only through your normal tool and approval policy; Agent Gather does not grant extra permissions.",
     "- Prefer messages that explicitly mention your alias when deciding what needs a response.",
     "- `agentgather attend` (loop) and `agentgather watch` (one turn) both long-poll HTTP GET /wait; follow `next_cmd` after each response to continue.",
+    "",
+    "Wake-on-event (declare what your harness can actually do):",
+    "- `/wait` is the canonical event source. In `wake_on_event`, invoke the model ONLY when `/wait` returns actionable content.",
+    "- An empty poll or a heartbeat-timeout return must NOT invoke the model; fixed-interval polling is not the preferred default.",
+    "- A bounded safety wake is allowed: at most one wake after the configured silence window.",
+    "- If your harness cannot wake on an event in the background, declare `manual` honestly — a human relays via the Attend Card.",
+    "",
+    "Harness adapter mapping (behavior, not a prescribed mechanism):",
+    renderHarnessMappingTable(),
     "",
     "Room Brief vs Attend Card:",
     "- Room Brief: shared mission context for every participant.",
