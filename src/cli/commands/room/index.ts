@@ -32,6 +32,7 @@ import {
   participantTokenHash,
   renderInviteCard,
   resolveRuntimeState,
+  sanitizePublicUrl,
   shellSingleQuote,
   type RuntimeLaunchPlan
 } from "../../../server/index.js";
@@ -422,7 +423,7 @@ async function roomLaunch(argv: string[], context: CliContext): Promise<number> 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error("port must be an integer between 1 and 65535");
   }
-  const publicUrl = normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl);
+  const publicUrl = sanitizePublicUrl(normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl));
   const sessionName = flagString(args, "session") ?? `agentgather-${current.roomId}`;
   const logPath = flagString(args, "log") ?? path.join(context.home, "rooms", current.roomId, "serve.log");
   const tmuxAvailable = await hasCommand("tmux");
@@ -461,7 +462,7 @@ async function roomLaunch(argv: string[], context: CliContext): Promise<number> 
 async function roomRuntimeStatus(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
   const current = await readCurrent(context.home);
-  const publicUrl = normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl);
+  const publicUrl = sanitizePublicUrl(normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl));
   const [tmuxAvailable, runtimeReachable] = await Promise.all([hasCommand("tmux"), probeRuntime(publicUrl)]);
   const runtimeState = resolveRuntimeState(tmuxAvailable, runtimeReachable);
   return emit(
@@ -499,7 +500,7 @@ async function probeRuntime(publicUrl: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 800);
   try {
-    await fetch(new URL("/", publicUrl), { signal: controller.signal });
+    await fetch(publicUrl, { signal: controller.signal });
     return true;
   } catch {
     return false;

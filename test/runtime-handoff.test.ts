@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
-import { buildRuntimeLaunchPlan, resolveRuntimeState } from "../src/server/index.js";
+import { buildRuntimeLaunchPlan, resolveRuntimeState, sanitizePublicUrl } from "../src/server/index.js";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 
@@ -62,6 +62,24 @@ test("no plan command leaks a raw token or invite URL", () => {
   }
 });
 
+test("a token-bearing invite URL is stripped from every generated command (no leak)", () => {
+  const tokenUrl = "http://127.0.0.1:8787/slug/?token=tgl_SECRET#token=tgl_SECRET";
+  // sanitizePublicUrl drops query/fragment/userinfo, keeps scheme/host/port/path.
+  const clean = sanitizePublicUrl(tokenUrl);
+  assert.equal(clean.includes("tgl_SECRET"), false);
+  assert.match(clean, /\/slug\//);
+
+  for (const tmux of [true, false]) {
+    const plan = buildRuntimeLaunchPlan({ ...baseInput, publicUrl: tokenUrl, tmuxAvailable: tmux, runtimeReachable: false });
+    const blob = JSON.stringify(plan);
+    assert.equal(blob.includes("tgl_SECRET"), false, "no command/status may carry the token");
+    assert.equal(blob.includes("#token="), false);
+    assert.equal(blob.includes("?token="), false);
+  }
+  // sanitize is idempotent and leaves credential-free URLs untouched.
+  assert.equal(sanitizePublicUrl("http://127.0.0.1:8787"), "http://127.0.0.1:8787/");
+});
+
 test("port validation rejects out-of-range values", () => {
   assert.throws(() => buildRuntimeLaunchPlan({ ...baseInput, port: 0, tmuxAvailable: true, runtimeReachable: false }));
   assert.throws(() => buildRuntimeLaunchPlan({ ...baseInput, port: 70_000, tmuxAvailable: false, runtimeReachable: false }));
@@ -107,6 +125,16 @@ test("room launch (plan mode) prints a token-free runtime plan and does not spaw
   assert.match(out.serveCommand, /AGENTGATHER_HOME=/);
   assert.equal(out.serveCommand.includes("tgl_"), false);
   assert.equal(stdout.text().includes("tgl_"), false);
+});
+
+test("room launch --url with a token fragment never echoes the token", async () => {
+  const { context, stdout } = await makeContext();
+  await runRoomCommand(["create-boardroom", "demo", "--json"], context);
+  stdout.chunks.length = 0;
+  await runRoomCommand(["launch", "--url", "http://127.0.0.1:8797/#token=tgl_SECRET", "--json"], context);
+  const text = stdout.text();
+  assert.equal(text.includes("tgl_SECRET"), false, "launch output must not echo a token-bearing URL");
+  assert.equal(text.includes("#token="), false);
 });
 
 test("room runtime-status reports a valid runtime state without a server", async () => {

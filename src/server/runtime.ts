@@ -47,6 +47,23 @@ export function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+// Strip credential-bearing parts of a public URL before it lands in a command or
+// status surface: drop any `?token=`/query, `#token=`/fragment, and userinfo,
+// while preserving scheme/host/port/path (e.g. a broker slug path). Defends the
+// no-raw-token / no-full-invite-URL invariant regardless of caller input.
+export function sanitizePublicUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.search = "";
+    url.hash = "";
+    url.username = "";
+    url.password = "";
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 export function resolveRuntimeState(tmuxAvailable: boolean, runtimeReachable: boolean): RuntimeState {
   if (runtimeReachable) return "runtime-running";
   return tmuxAvailable ? "runtime-unreachable" : "manual-run-required";
@@ -56,14 +73,16 @@ export function buildRuntimeLaunchPlan(input: RuntimeLaunchInput): RuntimeLaunch
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65_535) {
     throw new Error("port must be an integer between 1 and 65535");
   }
+  // Never embed a credential-bearing URL in a generated command/status surface.
+  const publicUrl = sanitizePublicUrl(input.publicUrl);
   const serveCommand =
     `AGENTGATHER_HOME=${shellSingleQuote(input.home)} agentgather room serve` +
-    ` --port ${input.port} --url ${shellSingleQuote(input.publicUrl)}`;
+    ` --port ${input.port} --url ${shellSingleQuote(publicUrl)}`;
   const strategy: RuntimeStrategy = input.tmuxAvailable ? "detached-tmux" : "manual-operator";
   const runtimeState = resolveRuntimeState(input.tmuxAvailable, input.runtimeReachable);
-  // A token-free liveness probe: the room shell at "/" needs no auth, so any
-  // HTTP response means the runtime is up.
-  const httpProbe = `curl -sS -o /dev/null -w '%{http_code}\\n' ${shellSingleQuote(rootUrl(input.publicUrl))}`;
+  // A token-free liveness probe: the room shell needs no auth, so any HTTP
+  // response means the runtime is up.
+  const httpProbe = `curl -sS -o /dev/null -w '%{http_code}\\n' ${shellSingleQuote(publicUrl)}`;
 
   if (input.tmuxAvailable) {
     const detachedCommand =
@@ -97,12 +116,4 @@ export function buildRuntimeLaunchPlan(input: RuntimeLaunchInput): RuntimeLaunch
       `No detachable runner (tmux) was found, so a human operator must run the serve command ` +
       `for ${input.roomId} and keep that terminal open to keep the room live.`
   };
-}
-
-function rootUrl(publicUrl: string): string {
-  try {
-    return new URL("/", publicUrl).toString();
-  } catch {
-    return publicUrl;
-  }
 }
