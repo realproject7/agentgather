@@ -1,4 +1,5 @@
 export * from "./attendance.js";
+export * from "./boardroom.js";
 export * from "./mentions.js";
 export * from "./messages.js";
 export * from "./instructions.js";

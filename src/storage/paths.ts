@@ -10,6 +10,8 @@ export interface RoomPaths {
   brief: string;
   messages: string;
   cursors: string;
+  boardroom: string;
+  channelCursors: string;
   lock: string;
 }
 
@@ -26,6 +28,8 @@ export function roomPaths(root: string, roomId: string): RoomPaths {
     brief: path.join(room, "brief.md"),
     messages: path.join(room, "messages.jsonl"),
     cursors: path.join(room, "cursors"),
+    boardroom: path.join(room, "boardroom.json"),
+    channelCursors: path.join(room, "channel-cursors"),
     lock: path.join(room, "write.lock")
   };
 }
