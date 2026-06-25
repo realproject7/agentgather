@@ -33,6 +33,7 @@ import {
   parseForumStatus,
   renderAgentInstructions,
   renderAttentionGuidance,
+  renderForumReviewGuidance,
   roomUrl,
   type AttentionCardInfo,
   type ForumPostStatus
@@ -783,7 +784,8 @@ export function renderAttendCard(
   token: string,
   brief: RoomBrief,
   attendancePolicy: AttendancePolicy = "manual-ok",
-  attention: AttentionCardInfo = {}
+  attention: AttentionCardInfo = {},
+  forumReviewChannel?: string
 ): string {
   return [
     `# Agent Gather Attend Card: ${alias}`,
@@ -805,20 +807,62 @@ export function renderAttendCard(
     `curl -s "${roomUrl(baseUrl, "/messages?since_id=0")}" -H "Authorization: Bearer ${token}"`,
     `curl -s -X POST "${roomUrl(baseUrl, "/messages")}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
     "",
-    "## Attendance Recovery",
-    "If you run a tool command or shell script, return to foreground attendance immediately after it finishes:",
-    "agentgather attend --json",
-    "If a shell command contains pipes, quotes, or `${...}`, ask the host for a script file and run one quote-free command such as `bash /path/to/script.sh`.",
-    "If the attend loop stops, Agent Gather v0.1 cannot wake this session automatically; the host will see you as stale until you rejoin or attend again.",
+    ...(forumReviewChannel === undefined ? [] : forumReviewSection(baseUrl, token, forumReviewChannel)),
+    ...attendanceRecovery(forumReviewChannel !== undefined),
     "",
     "## First Action",
     "After joining, send a short ready message so the host and humans can see that you are present.",
     "",
     "## Stop Attending",
-    "When the host releases you or the room closes, stop the foreground loop and send a final note if useful.",
+    forumReviewChannel === undefined
+      ? "When the host releases you or the room closes, stop the foreground loop and send a final note if useful."
+      : "When the host marks the task resolved or the room closes, stop watching and send a final note if useful.",
     "",
     renderAgentInstructions()
   ].join("\n");
+}
+
+// Recovery guidance. A forum-review (async) card must NOT force a foreground loop
+// or deny wake-on-event; it returns to the agent's declared mode and reflects the
+// 9B contract (honest manual fallback) instead.
+function attendanceRecovery(forumReview: boolean): string[] {
+  if (forumReview) {
+    return [
+      "## Attendance Recovery",
+      "This is an async forum-review task — you do NOT need to hold a foreground attend loop.",
+      "After running a command, return to your declared attention mode: wake-on-event / cheap watching if your harness supports it, otherwise `manual`.",
+      "If a shell command contains pipes, quotes, or `${...}`, ask the host for a script file and run one quote-free command such as `bash /path/to/script.sh`.",
+      "Per your declared mode, the next assigned/updated post reaches you as an actionable `/wait` return; empty polls do not invoke the model. If you declared `manual`, a human relays — Agent Gather does not wake a detached session on its own."
+    ];
+  }
+  return [
+    "## Attendance Recovery",
+    "If you run a tool command or shell script, return to foreground attendance immediately after it finishes:",
+    "agentgather attend --json",
+    "If a shell command contains pipes, quotes, or `${...}`, ask the host for a script file and run one quote-free command such as `bash /path/to/script.sh`.",
+    "If the attend loop stops, Agent Gather v0.1 cannot wake this session automatically; the host will see you as stale until you rejoin or attend again."
+  ];
+}
+
+// Forum review task block (T10): the 9B wake-on-event guidance + copy-pastable
+// commands against the real T6 forum endpoints. The token appears exactly once
+// (in the env export); the curls reference $AG_TOKEN so it is not repeated.
+function forumReviewSection(baseUrl: string, token: string, channel: string): string[] {
+  const base = normalizeBaseUrl(baseUrl);
+  return [
+    renderForumReviewGuidance(channel),
+    "",
+    "Forum commands (set these once; the token appears only here):",
+    `export AG_BASE='${base}' AG_TOKEN='${token}'`,
+    "# check assigned/updated forum posts",
+    `curl -s "$AG_BASE/forum/posts?channel=${channel}" -H "Authorization: Bearer $AG_TOKEN"`,
+    "# read a post + its comments (replace POST_ID)",
+    `curl -s "$AG_BASE/forum/post?channel=${channel}&post=POST_ID" -H "Authorization: Bearer $AG_TOKEN"`,
+    "# post a comment / reply (replace POST_ID and the body)",
+    `curl -s -X POST "$AG_BASE/forum/comment" -H "Authorization: Bearer $AG_TOKEN" -H "Content-Type: application/json" --data '{"channel":"${channel}","post":"POST_ID","body":"your reply"}'`,
+    "Then go idle — wake on the next assigned/updated post; no foreground loop required.",
+    ""
+  ];
 }
 
 export function renderInviteCard(
@@ -836,7 +880,7 @@ export function renderInviteCard(
   if (participant.effective_mode !== undefined) attention.effective_mode = participant.effective_mode;
   if (participant.poll_cadence_s !== undefined) attention.poll_cadence_s = participant.poll_cadence_s;
   if (participant.safety_wake_s !== undefined) attention.safety_wake_s = participant.safety_wake_s;
-  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy, attention);
+  return renderAttendCard(baseUrl, participant.alias, token, brief, attendancePolicy, attention, participant.forum_review_channel);
 }
 
 function renderHumanInviteCard(baseUrl: string, alias: string, token: string, brief: RoomBrief): string {
