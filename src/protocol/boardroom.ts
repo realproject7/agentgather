@@ -6,7 +6,7 @@
 // nothing new is written for it. This module is the vocabulary + pure
 // projections; host-owned files remain the single source of truth and no
 // message bodies or raw tokens live in this model.
-import type { Participant } from "./types.js";
+import type { Message, Participant } from "./types.js";
 import { assertSafeSlug } from "./validation.js";
 
 export type ChannelType = "chat" | "forum";
@@ -66,6 +66,38 @@ export interface ChannelReadCursor {
   channelId: string;
   sinceId: number;
   updatedAt: string;
+}
+
+// A read-only projection of a chat channel over the existing message log
+// (T5). #general is the existing room's log surfaced as the default channel —
+// no chat storage is duplicated. `unread`/`lastReadId` come from the T3
+// per-channel read cursor so an idle participant can inspect history/unread
+// without entering foreground attended mode.
+export interface ChannelView {
+  channelId: string;
+  type: ChannelType;
+  messages: Message[];
+  unread: number;
+  lastReadId: number;
+  latestId: number;
+}
+
+// A status message is an untargeted broadcast; a message with mentions is
+// directed. Pure classifier so broadcast-vs-directed visibility is consistent
+// wherever the channel projection is consumed.
+export function isBroadcast(message: Pick<Message, "type">): boolean {
+  return message.type === "status";
+}
+
+// Messages with an id beyond the participant's last-read cursor are unread.
+export function summarizeUnread(messages: Pick<Message, "id">[], lastReadId: number): { unread: number; latestId: number } {
+  let unread = 0;
+  let latestId = lastReadId;
+  for (const message of messages) {
+    if (message.id > lastReadId) unread += 1;
+    if (message.id > latestId) latestId = message.id;
+  }
+  return { unread, latestId };
 }
 
 export function roleFromKind(kind: Participant["kind"]): ParticipantRole {

@@ -13,15 +13,17 @@ import {
   type Boardroom,
   type Channel,
   type ChannelReadCursor,
+  type ChannelView,
   DEFAULT_CHANNEL_ID,
   assertValidBoardroom,
   defaultChannel,
-  deriveDefaultBoardroom
+  deriveDefaultBoardroom,
+  summarizeUnread
 } from "../protocol/boardroom.js";
 import { assertSafeSlug, parsePositiveInteger } from "../protocol/validation.js";
 import { withWriterLock } from "./lock.js";
 import { roomPaths, type RoomPaths } from "./paths.js";
-import { readCursor, readRoomState } from "./room-store.js";
+import { readCursor, readMessages, readRoomState } from "./room-store.js";
 import { writeSecureFile } from "./secure-fs.js";
 
 // Read the boardroom for a room. Returns the persisted boardroom when present,
@@ -145,6 +147,33 @@ export async function writeChannelCursor(
   };
   await writeJson(channelCursorPath(paths, channelId, participantId), record);
   return record;
+}
+
+// T5 bridge: project a chat channel as a read-only view over the existing
+// message log. The default #general channel maps to the room's existing log (no
+// duplicated storage); other channels have no per-channel store yet (T6/T8) and
+// project as empty. unread/lastReadId come from the T3 per-channel cursor, so an
+// idle participant can inspect history/unread without foreground attended mode.
+// Message visibility (broadcast `status` vs directed mentions) is preserved by
+// returning the log messages unchanged.
+export async function readChannelView(
+  root: string,
+  roomId: string,
+  channelId: string,
+  participantId: string
+): Promise<ChannelView> {
+  assertSafeSlug(channelId, "channel id");
+  assertSafeSlug(participantId, "participant id");
+  const boardroom = await readBoardroom(root, roomId);
+  const channel = boardroom.channels.find((c) => c.id === channelId);
+  if (channel === undefined) throw new Error(`channel not found: ${channelId}`);
+
+  // Only the default #general chat channel is backed by the existing log in the
+  // MVP; other channels are not yet stored, so they project as empty.
+  const messages = channelId === DEFAULT_CHANNEL_ID ? await readMessages(root, roomId) : [];
+  const lastReadId = await readChannelCursor(root, roomId, channelId, participantId);
+  const { unread, latestId } = summarizeUnread(messages, lastReadId);
+  return { channelId, type: channel.type, messages, unread, lastReadId, latestId };
 }
 
 function channelCursorPath(paths: RoomPaths, channelId: string, participantId: string): string {

@@ -8,6 +8,8 @@ import {
   createBoardroom,
   createRoom,
   readBoardroom,
+  readChannelView,
+  writeChannelCursor,
   readBrief,
   readParticipants,
   readRoomState,
@@ -46,6 +48,7 @@ export async function runRoomCommand(argv: string[], context: CliContext): Promi
   if (subcommand === "start") return roomStart(rest, context);
   if (subcommand === "create-boardroom") return roomCreateBoardroom(rest, context);
   if (subcommand === "channel-create") return roomChannelCreate(rest, context);
+  if (subcommand === "channel-read") return roomChannelRead(rest, context);
   if (subcommand === "boardroom") return roomBoardroom(rest, context);
   if (subcommand === "brief") return roomBrief(rest, context);
   if (subcommand === "attendance") return roomAttendance(rest, context);
@@ -148,6 +151,30 @@ async function roomChannelCreate(argv: string[], context: CliContext): Promise<n
     flagBoolean(args, "json"),
     { ok: true, room: current.roomId, channel, boardroom },
     `Channel #${channelId} (${type}) added to ${current.roomId}\n`
+  );
+}
+
+// Idle chat read (T5): inspect a channel's history + unread via the T3 read
+// cursor WITHOUT entering foreground attended mode (no /wait, no attendance
+// touch). #general projects the existing message log (no duplicated storage);
+// `--mark-read` advances the channel cursor. Send/messages/watch/attend stay
+// unchanged — this is an additive idle path.
+async function roomChannelRead(argv: string[], context: CliContext): Promise<number> {
+  const args = parseArgs(argv);
+  const channelId = args.positional[0] ?? "general";
+  const current = await readCurrent(context.home);
+  const participantId = flagString(args, "participant") ?? current.alias;
+  const view = await readChannelView(context.home, current.roomId, channelId, participantId);
+  let out = view;
+  if (flagBoolean(args, "mark-read") && view.latestId > view.lastReadId) {
+    await writeChannelCursor(context.home, current.roomId, channelId, participantId, view.latestId);
+    out = { ...view, unread: 0, lastReadId: view.latestId };
+  }
+  return emit(
+    context,
+    flagBoolean(args, "json"),
+    { ok: true, room: current.roomId, ...out },
+    `#${channelId} (${out.type}): ${out.messages.length} messages, ${out.unread} unread (last read id ${out.lastReadId})\n`
   );
 }
 
