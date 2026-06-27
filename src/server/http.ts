@@ -9,6 +9,7 @@ import {
   closeRoom,
   createForumPost,
   listForumPosts,
+  readBoardroom,
   readBrief,
   readForumPost,
   readMessages,
@@ -21,7 +22,7 @@ import {
   MAX_BRIEF_LENGTH,
   RoomLogFullError
 } from "../storage/index.js";
-import type { AttendancePolicy, Participant, RoomBrief } from "../protocol/index.js";
+import type { AttendancePolicy, Boardroom, Channel, Participant, RoomBrief } from "../protocol/index.js";
 import {
   assertSafeSlug,
   describeAttendancePolicy,
@@ -139,6 +140,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "POST" && pathname === "/leave") return postLeave(context);
   if (context.req.method === "POST" && pathname === "/close") return postClose(context);
   if (context.req.method === "GET" && pathname === "/status") return getStatus(context);
+  if (context.req.method === "GET" && pathname === "/boardroom") return getBoardroom(context);
   if (pathname === "/watch") {
     throw new HttpError(404, "not_found", "this server long-polls on GET /wait, not /watch");
   }
@@ -525,7 +527,11 @@ async function postClose(context: RequestContext): Promise<void> {
 async function getStatus(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   const paths = roomPaths(context.options.root, context.options.roomId);
-  const [state, participants] = await Promise.all([readRoomState(paths), readParticipants(paths)]);
+  const [state, participants, boardroom] = await Promise.all([
+    readRoomState(paths),
+    readParticipants(paths),
+    readBoardroom(context.options.root, context.options.roomId)
+  ]);
   const now = Date.now();
   sendJson(context.res, 200, {
     ok: true,
@@ -538,8 +544,47 @@ async function getStatus(context: RequestContext): Promise<void> {
     stale_after_ms: ATTENDANCE_STALE_AFTER_MS,
     brief_updated_at: state.brief_updated_at,
     brief_updated_by: state.brief_updated_by,
+    boardroom: publicBoardroom(boardroom),
     participants: participants.map((participant) => publicParticipant(participant, state.attendance_policy, now))
   });
+}
+
+// Expose boardroom + channel metadata over HTTP (V2 Ticket A). Reuses the
+// host-owned `readBoardroom` projection — a legacy bare room surfaces as a
+// single #general chat channel at runtime with no migration.
+async function getBoardroom(context: RequestContext): Promise<void> {
+  await requireParticipant(context);
+  const boardroom = await readBoardroom(context.options.root, context.options.roomId);
+  sendJson(context.res, 200, { ok: true, boardroom: publicBoardroom(boardroom) });
+}
+
+type PublicChannel = Pick<Channel, "id" | "name" | "type" | "lifecycle" | "createdAt">;
+type PublicBoardroom = Pick<Boardroom, "id" | "lifecycle" | "legacy" | "createdAt" | "updatedAt"> & {
+  name?: string;
+  channels: PublicChannel[];
+};
+
+// Metadata-only projection of the host-owned boardroom for the HTTP surface.
+// Deliberately enumerates the boardroom/channel metadata fields so the privacy
+// gate is provable: never raw tokens, invite URLs, or message bodies. The
+// host-owned files remain the single source of truth.
+function publicBoardroom(boardroom: Boardroom): PublicBoardroom {
+  const out: PublicBoardroom = {
+    id: boardroom.id,
+    lifecycle: boardroom.lifecycle,
+    legacy: boardroom.legacy,
+    createdAt: boardroom.createdAt,
+    updatedAt: boardroom.updatedAt,
+    channels: boardroom.channels.map((channel) => ({
+      id: channel.id,
+      name: channel.name,
+      type: channel.type,
+      lifecycle: channel.lifecycle,
+      createdAt: channel.createdAt
+    }))
+  };
+  if (boardroom.name !== undefined) out.name = boardroom.name;
+  return out;
 }
 
 type PublicParticipant = Omit<Participant, "token_hash"> & {
