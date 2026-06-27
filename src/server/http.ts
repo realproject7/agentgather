@@ -107,6 +107,8 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "GET" && pathname === "/theme.css") return serveBrowserAsset(context, "theme.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/kit.css") return serveBrowserAsset(context, "kit.css", "text/css; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/room.js") return serveBrowserAsset(context, "room.js", "text/javascript; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/channel-rail.css") return serveBrowserAsset(context, "channel-rail.css", "text/css; charset=utf-8");
+  if (context.req.method === "GET" && pathname === "/channel-rail.js") return serveBrowserAsset(context, "channel-rail.js", "text/javascript; charset=utf-8");
   if (context.req.method === "GET" && pathname === "/markdown.js") return serveBrowserAsset(context, "markdown.js", "text/javascript; charset=utf-8");
   // Forum UI (T8): static assets + a small HTTP surface over the frozen T6 store.
   if (context.req.method === "GET" && pathname === "/forum.html") return serveBrowserAsset(context, "forum.html", "text/html; charset=utf-8");

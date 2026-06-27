@@ -6,9 +6,12 @@
     <title>Agent Gather Forum</title>
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="stylesheet" href="forum.css">
+    <link rel="stylesheet" href="channel-rail.css">
   </head>
   <body>
-    <main class="forum-shell k-frame" data-view="list">
+    <div class="boardroom-frame k-frame">
+    <nav id="channel-rail" class="channel-rail k-rail-nav" aria-label="Channels" hidden></nav>
+    <main class="forum-shell" data-view="list">
       <header class="topbar">
         <div class="forum-heading">
           <button id="forum-back" class="icon-button k-pill" type="button" aria-label="Back to posts">←</button>
@@ -83,6 +86,8 @@
         </section>
       </div>
     </main>
+    </div>
+    <script src="channel-rail.js" type="module"></script>
     <script src="forum.js" type="module"></script>
   </body>
 </html>

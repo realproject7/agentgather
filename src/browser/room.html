@@ -7,9 +7,12 @@
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="stylesheet" href="room.css">
+    <link rel="stylesheet" href="channel-rail.css">
   </head>
   <body>
-    <main class="room-shell k-frame" data-state="loading">
+    <div class="boardroom-frame k-frame">
+    <nav id="channel-rail" class="channel-rail k-rail-nav" aria-label="Channels" hidden></nav>
+    <main class="room-shell" data-state="loading">
       <header class="topbar">
         <div class="room-heading">
           <img class="brand-mark" src="agentgather-logo.png" alt="" width="24" height="24">
@@ -153,6 +156,8 @@
         </div>
       </section>
     </main>
+    </div>
+    <script src="channel-rail.js" type="module"></script>
     <script src="room.js" type="module"></script>
   </body>
 </html>
