@@ -276,10 +276,16 @@ async function postJoin(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   const now = new Date().toISOString();
   const { removed_at: _removedAt, ...baseParticipant } = auth.participant;
-  // 9A: re-negotiate effective_mode on (re)connect from the stored declaration
-  // and the host's requested_mode.
+  // 9A: a participant may declare its supported attention modes + advisory
+  // cadences on join; persist the declaration, then negotiate effective_mode
+  // from it and the host's requested_mode. An empty body re-negotiates from the
+  // already-stored declaration (a plain reconnect), unchanged.
+  const declared = parseAttentionDeclaration(
+    await readJsonBody<{ supported_modes?: unknown; poll_cadence_s?: unknown; safety_wake_s?: unknown }>(context)
+  );
   const participant: Participant = withNegotiatedAttention({
     ...baseParticipant,
+    ...declared,
     attention: "attending",
     joinedAt: baseParticipant.joinedAt || now,
     lastSeenAt: now

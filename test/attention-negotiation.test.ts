@@ -146,6 +146,39 @@ test("a no-background participant degrades honestly to manual and the roster sho
   }
 });
 
+test("declaring supported_modes on POST /join persists them and negotiates effective_mode (regression for the drop-to-[] bug)", async () => {
+  // Host requests wake_on_event; the agent has NOT declared support yet (stored
+  // default is []). Previously /join ignored its body, so the declaration was
+  // dropped and the participant stayed supported_modes:[] / effective_mode:manual.
+  const fx = await startFixture({ requested_mode: "wake_on_event" });
+  try {
+    const res = await fetch(`${fx.baseUrl}/join`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fx.agentToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ supported_modes: ["wake_on_event"], poll_cadence_s: 45, safety_wake_s: 600 })
+    });
+    assert.equal(res.status, 200);
+
+    // persisted on disk: declaration kept, effective_mode negotiated (not manual)
+    const stored = (await readParticipants(roomPaths(fx.root, "demo"))).find((p) => p.alias === "agent");
+    assert.deepEqual(stored?.supported_modes, ["wake_on_event"]);
+    assert.equal(stored?.effective_mode, "wake_on_event");
+    assert.equal(stored?.poll_cadence_s, 45);
+    assert.equal(stored?.safety_wake_s, 600);
+
+    // roster/status reflects the negotiated mode (no raw token leaked)
+    const status = (await (await fetch(`${fx.baseUrl}/status`, { headers: { Authorization: `Bearer ${fx.agentToken}` } })).json()) as {
+      participants: Array<{ alias: string; supported_modes?: AttentionMode[]; effective_mode?: AttentionMode; token_hash?: unknown }>;
+    };
+    const me = status.participants.find((p) => p.alias === "agent");
+    assert.equal(me?.effective_mode, "wake_on_event");
+    assert.deepEqual(me?.supported_modes, ["wake_on_event"]);
+    assert.equal(me?.token_hash, undefined);
+  } finally {
+    await fx.close();
+  }
+});
+
 test("re-negotiation on reconnect (POST /join) recomputes effective_mode from stored declaration", async () => {
   const fx = await startFixture({ requested_mode: "wake_on_event", supported_modes: ["foreground_attended", "heartbeat"] });
   try {
