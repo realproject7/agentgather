@@ -12,6 +12,16 @@
 //
 // A legacy / single-channel room renders exactly as today: the rail stays
 // hidden, so the chat surface is visually unchanged (zero regression).
+//
+// V2 #167 (disable option): only the default #general chat channel carries chat
+// in this version. Any other `chat`-type channel renders DISABLED in the rail
+// (dimmed + "soon", not-allowed) and is NOT routed into the room-wide log;
+// selecting it shows a clear not-active pane that points back to #general. Forum
+// channels and #general stay fully usable.
+
+// Mirrors DEFAULT_CHANNEL_ID in src/protocol/boardroom.ts — the legacy room log
+// is surfaced as the #general chat channel; no other chat channel is backed yet.
+const DEFAULT_CHANNEL_ID = "general";
 
 const rail = document.getElementById("channel-rail");
 if (rail) void initRail(rail);
@@ -41,7 +51,7 @@ async function initRail(railEl) {
 
   const onForum = location.pathname.replace(/\/+$/, "").endsWith("forum.html");
   const activeForum = onForum ? new URLSearchParams(location.search).get("channel") : null;
-  const firstChat = channels.find((channel) => channel.type === "chat");
+  const frame = railEl.closest(".boardroom-frame");
 
   const list = document.createElement("ul");
   list.className = "rail-channels";
@@ -51,9 +61,17 @@ async function initRail(railEl) {
   let forumSubgroup = null;
   let activeForumLink = null;
   for (const channel of channels) {
+    // A non-#general chat channel is not usable yet → render it disabled and
+    // route its selection to the not-active pane instead of the room-wide log.
+    if (channel.type === "chat" && channel.id !== DEFAULT_CHANNEL_ID) {
+      list.append(disabledChatItem(channel, frame, token));
+      continue;
+    }
+    // The functional chat channel is #general; it stays active on the room
+    // surface, while the active forum channel is active on the forum surface.
     const active = onForum
       ? channel.type === "forum" && channel.id === activeForum
-      : channel.type === "chat" && firstChat !== undefined && channel.id === firstChat.id;
+      : channel.type === "chat" && channel.id === DEFAULT_CHANNEL_ID;
     const isActiveForum = active && channel.type === "forum";
     const link = channelLink(channel, active, token, isActiveForum);
     list.append(link);
@@ -148,6 +166,101 @@ function channelLink(channel, active, token, isActiveForum = false) {
     link.append(type);
   }
   return link;
+}
+
+function spanCls(className, text) {
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = text;
+  return span;
+}
+
+// A disabled (non-#general) chat channel: dimmed, a "soon" tag, not-allowed, and
+// not a navigable link. Selecting it opens the not-active pane rather than
+// routing into the room-wide log.
+function disabledChatItem(channel, frame, token) {
+  const item = document.createElement("div");
+  item.className = "channel-link disabled";
+  item.setAttribute("role", "button");
+  item.tabIndex = 0;
+  item.title = `Channel-scoped chat isn't available yet. Only #${DEFAULT_CHANNEL_ID} carries chat in this version.`;
+
+  const glyph = spanCls("glyph", "#");
+  glyph.setAttribute("aria-hidden", "true");
+  item.append(glyph, spanCls("name", channel.name || channel.id), spanCls("soon", "soon"));
+
+  const open = () => showNotActivePane(channel, frame, token);
+  item.addEventListener("click", open);
+  item.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      open();
+    }
+  });
+  return item;
+}
+
+// Replace the reused surface with a clear not-active pane (NOT the room-wide
+// log). The rail stays; the pane carries a "Go to #general" action.
+function showNotActivePane(channel, frame, token) {
+  if (!frame) return;
+  const surface = frame.querySelector(".room-shell, .forum-shell");
+  if (surface) surface.style.display = "none";
+  // Nothing in the rail is highlighted while a not-active channel is shown — the
+  // disabled item stays dimmed, mirroring the OpenDesign.
+  for (const link of frame.querySelectorAll(".channel-link.on")) {
+    link.classList.remove("on");
+    link.removeAttribute("aria-current");
+  }
+  let pane = frame.querySelector(".not-active-pane");
+  if (!pane) {
+    pane = buildNotActivePane(token);
+    frame.append(pane);
+  }
+  pane.querySelector(".na-name").textContent = channel.name || channel.id;
+  pane.hidden = false;
+}
+
+function buildNotActivePane(token) {
+  const pane = document.createElement("section");
+  pane.className = "not-active-pane";
+
+  const bar = document.createElement("div");
+  bar.className = "na-bar";
+  const title = document.createElement("span");
+  title.className = "na-title";
+  const hash = spanCls("h", "#");
+  hash.setAttribute("aria-hidden", "true");
+  title.append(hash, spanCls("na-name", ""));
+  bar.append(title, spanCls("na-tag", "not active"));
+
+  const body = document.createElement("div");
+  body.className = "notactive";
+  const icon = spanCls("na-ic", "#");
+  icon.setAttribute("aria-hidden", "true");
+  const heading = spanCls("na-t", "This chat channel isn’t active yet");
+  const detail = document.createElement("div");
+  detail.className = "na-d";
+  const general = document.createElement("b");
+  general.textContent = "#general";
+  detail.append(
+    document.createTextNode("Only "),
+    general,
+    document.createTextNode(
+      " carries chat in this version. Channel-scoped chat for additional chat channels is planned but not implemented — so this channel is shown but not usable, instead of routing you into the room-wide log. Forum channels are fully usable."
+    )
+  );
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "na-go";
+  go.textContent = "Go to #general";
+  go.addEventListener("click", () => {
+    location.href = `./${token ? `#token=${encodeURIComponent(token)}` : ""}`;
+  });
+
+  body.append(icon, heading, detail, go);
+  pane.append(bar, body);
+  return pane;
 }
 
 // chat channel → the room surface; forum channel → the forum surface. The

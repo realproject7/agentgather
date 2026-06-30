@@ -25,6 +25,7 @@ import {
 import type { AttendancePolicy, Boardroom, Channel, Participant, RoomBrief } from "../protocol/index.js";
 import {
   assertSafeSlug,
+  DEFAULT_CHANNEL_ID,
   describeAttendancePolicy,
   findNameOwnerConflict,
   negotiateParticipantAttention,
@@ -413,6 +414,19 @@ function parsePositiveSeconds(value: unknown, label: string): number {
 
 async function getMessages(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  // Channel boundary (V2 #167): only the default #general chat channel is backed
+  // by the room-wide log in this version. A `channel` param for any other chat
+  // channel is rejected with a clear 400 rather than silently returning the
+  // room-wide log (which would misrepresent an unsupported channel). No `channel`
+  // param (legacy clients) and `channel=general` keep the existing behavior.
+  const channel = context.url.searchParams.get("channel");
+  if (channel !== null && channel !== DEFAULT_CHANNEL_ID) {
+    throw new HttpError(
+      400,
+      "unsupported_channel",
+      `channel-scoped chat is not available; only #${DEFAULT_CHANNEL_ID} carries chat in this version`
+    );
+  }
   await touchParticipant(context, auth.participant, auth.participant.attention);
   const sinceId = parseSinceId(context.url.searchParams.get("since_id"));
   const messages = (await readMessages(context.options.root, context.options.roomId)).filter(

@@ -113,6 +113,85 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
   }
 });
 
+// A boardroom with a non-#general chat channel alongside #general + a forum.
+async function startBoardroomWithDisabledChat(): Promise<{ baseUrl: string; hostToken: string; close: () => Promise<void> }> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-boardshell-disabled-"));
+  const hostToken = "tgl_host";
+  await createRoom({ root, roomId: "demo", hostAlias: "host" });
+  await writeParticipants(root, "demo", [{ ...mkP("host", "human", hostToken, true), display_name: "Host" }]);
+  await createBoardroom(root, "demo", {
+    name: "ag-project",
+    channels: [
+      { id: "general", name: "general", type: "chat", lifecycle: "active", createdAt: "2026-06-21T00:00:00.000Z" },
+      { id: "review-forum", name: "review-forum", type: "forum", lifecycle: "active", createdAt: "2026-06-21T00:00:00.000Z" },
+      { id: "ops-chat-test", name: "ops-chat-test", type: "chat", lifecycle: "active", createdAt: "2026-06-21T00:00:00.000Z" }
+    ]
+  });
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
+  await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
+  return { baseUrl, hostToken, close: () => new Promise((r) => server.close(() => r())) };
+}
+
+test("boardroom shell: a non-#general chat channel is disabled and opens a not-active pane (V2 #167), overflow-0 desktop+mobile", { timeout: 120_000 }, async () => {
+  const fixture = await startBoardroomWithDisabledChat();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // rail renders all three channels; #general stays the active functional chat
+    await page.waitForSelector("#channel-rail:not([hidden]) .channel-link");
+    assert.equal(await page.locator("#channel-rail .channel-link").count(), 3);
+    await page.waitForSelector(".channel-link.on:has-text('general')");
+
+    // the non-#general chat channel is disabled: dimmed, a "soon" tag, and NOT a
+    // navigable link (rendered as a div, not an <a> into the room-wide log)
+    const disabled = page.locator(".channel-link.disabled:has-text('ops-chat-test')");
+    await disabled.waitFor();
+    assert.equal(await disabled.locator(".soon").count(), 1);
+    assert.equal(await disabled.evaluate((el) => el.tagName), "DIV");
+
+    // selecting it shows the not-active pane (NOT the chat surface) with a
+    // Go to #general action; the reused room surface is hidden
+    await disabled.click();
+    await page.waitForSelector(".not-active-pane:not([hidden])");
+    assert.match(await page.locator(".not-active-pane .na-name").innerText(), /ops-chat-test/);
+    assert.match(await page.locator(".not-active-pane").innerText(), /only #general/i);
+    await page.waitForSelector(".not-active-pane .na-go:has-text('Go to #general')");
+    assert.equal(await page.locator(".room-shell:visible").count(), 0);
+    // URL did not route into the chat/global surface
+    assert.equal(new URL(page.url()).search, "");
+
+    // the forum channel stays a real link to the forum surface
+    assert.match(
+      (await page.locator(".channel-link:has-text('review-forum')").getAttribute("href")) ?? "",
+      /^forum\.html\?channel=review-forum/
+    );
+
+    // overflow-0 at desktop with the not-active pane shown
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      true,
+      "no horizontal overflow at 1280"
+    );
+
+    // overflow-0 at mobile (rail collapses to a strip; pane fills the width)
+    await page.setViewportSize({ width: 390, height: 760 });
+    await page.waitForTimeout(150);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      true,
+      "no horizontal overflow at 390"
+    );
+    await page.screenshot({ path: path.join(os.tmpdir(), "chat-disabled-mobile.png"), fullPage: true });
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("legacy single-channel room renders as today — no channel rail", { timeout: 120_000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-boardshell-legacy-"));
   const hostToken = "tgl_host";

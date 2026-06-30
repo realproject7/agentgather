@@ -329,6 +329,31 @@ test("loop guard blocks repeated agent messages and resets on human message", as
   }
 });
 
+test("GET /messages enforces the #general channel boundary (V2 #167)", async () => {
+  const fixture = await startFixture();
+  try {
+    await jsonFetch(fixture, "POST", "/messages", fixture.agentToken, { text: "hello general" });
+
+    // no `channel` param → unchanged room-wide log
+    const noChannel = await jsonFetch(fixture, "GET", "/messages?since_id=0", fixture.hostToken);
+    assert.equal(noChannel.status, 200);
+    assert.equal(noChannel.body.messages.some((m: { text: string }) => m.text === "hello general"), true);
+
+    // channel=general (the default chat channel) → same room-wide log
+    const general = await jsonFetch(fixture, "GET", "/messages?channel=general&since_id=0", fixture.hostToken);
+    assert.equal(general.status, 200);
+    assert.equal(general.body.messages.some((m: { text: string }) => m.text === "hello general"), true);
+
+    // any other chat channel → a clear 400, NOT a silent room-wide log
+    const other = await jsonFetch(fixture, "GET", "/messages?channel=ops-chat-test&since_id=0", fixture.hostToken);
+    assert.equal(other.status, 400);
+    assert.equal(other.body.error, "unsupported_channel");
+    assert.equal("messages" in other.body, false);
+  } finally {
+    await fixture.close();
+  }
+});
+
 function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
   return {
     alias,
