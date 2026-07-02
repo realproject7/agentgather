@@ -137,6 +137,30 @@ test("broker forwards browser shell and assets", async () => {
   }
 });
 
+test("the broker forwards the room server's CSP + hardening headers to the browser (#181)", async () => {
+  const fixture = await setup();
+  try {
+    // The #181 headers emitted by the room server must survive the broker forward
+    // (forwardToHost) so tunneled pages get the CSP, not just locally-served ones.
+    const shell = await fixture.fetchThroughBroker("/");
+    assert.equal(shell.status, 200);
+    const csp = shell.headers.get("content-security-policy") ?? "";
+    assert.match(csp, /script-src 'self'/);
+    assert.match(csp, /object-src 'none'/);
+    assert.match(csp, /base-uri 'none'/);
+    assert.match(csp, /frame-ancestors 'none'/);
+    assert.equal(shell.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(shell.headers.get("referrer-policy"), "no-referrer");
+
+    // Non-HTML assets carry them too (nosniff matters most on script/style).
+    const js = await fixture.fetchThroughBroker("/room.js");
+    assert.match(js.headers.get("content-security-policy") ?? "", /script-src 'self'/);
+    assert.equal(js.headers.get("x-content-type-options"), "nosniff");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("host derives sender identity from the token; broker never honors a client-supplied from", async () => {
   const fixture = await setup();
   try {

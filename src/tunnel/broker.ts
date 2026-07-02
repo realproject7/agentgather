@@ -9,6 +9,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes } from "node:crypto";
 import { URL } from "node:url";
 import {
+  FORWARDED_RESPONSE_HEADERS,
   type ForwardedRequest,
   type ForwardedResponse,
   type HostRegistration,
@@ -373,8 +374,11 @@ export class TunnelBroker {
     const responseBody =
       typeof response.body_base64 === "string" ? Buffer.from(response.body_base64, "base64") : Buffer.alloc(0);
     const responseHeaders: Record<string, string> = {};
-    const contentType = response.headers["content-type"] ?? response.headers["Content-Type"];
-    if (typeof contentType === "string") responseHeaders["content-type"] = contentType;
+    for (const [name, value] of Object.entries(response.headers)) {
+      if (typeof value === "string" && FORWARDED_RESPONSE_HEADERS.has(name.toLowerCase())) {
+        responseHeaders[name.toLowerCase()] = value;
+      }
+    }
     res.writeHead(response.status, responseHeaders);
     res.end(responseBody);
     return { status: response.status, bytesIn: body?.length ?? 0, bytesOut: responseBody.length };

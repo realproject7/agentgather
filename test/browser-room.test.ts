@@ -846,3 +846,66 @@ test("the active-session banner renders a host-requested attendance policy and s
     await fixture.close();
   }
 });
+
+test("markdown.js renders a hostile corpus inert — script tags, on* handlers, javascript:/data: URLs (#181)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // Drive the real shared renderer (src/browser/markdown.js) over a hostile corpus
+    // and inspect the produced DOM: nothing executes and no dangerous node/href lands.
+    const result = await page.evaluate(async () => {
+      // Computed specifier: the module is resolved in the browser at runtime, not
+      // by the test compiler (which cannot see the served /markdown.js).
+      const spec = `./${"markdown"}.js`;
+      const mod = (await import(spec)) as { renderSafeMarkdown: (parent: Element, md: string, opts: object) => void };
+      const corpus = [
+        "<script>window.__mdxss = 1</script>",
+        '<img src=x onerror="window.__mdxss = 2">',
+        "[click me](javascript:alert(1))",
+        "[data link](data:text/html,<script>window.__mdxss=3</script>)",
+        "plain javascript:alert(1) not a link",
+        "<a href=\"javascript:alert(1)\">raw anchor</a>",
+        "[safe](https://example.com)"
+      ];
+      const container = document.createElement("div");
+      for (const item of corpus) {
+        const line = document.createElement("div");
+        mod.renderSafeMarkdown(line, item, {});
+        container.append(line);
+      }
+      document.body.append(container);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const links = Array.from(container.querySelectorAll("a")).map((a) => a.getAttribute("href") || "");
+      return {
+        scripts: container.querySelectorAll("script").length,
+        imgs: container.querySelectorAll("img").length,
+        jsHrefs: container.querySelectorAll('a[href^="javascript:"]').length,
+        dataHrefs: container.querySelectorAll('a[href^="data:"]').length,
+        onHandlers: container.querySelectorAll("[onerror], [onclick], [onload]").length,
+        links,
+        xss: (window as unknown as { __mdxss?: unknown }).__mdxss,
+        text: container.textContent || ""
+      };
+    });
+
+    assert.equal(result.scripts, 0, "no <script> nodes produced");
+    assert.equal(result.imgs, 0, "no <img> nodes produced");
+    assert.equal(result.jsHrefs, 0, "no javascript: hrefs");
+    assert.equal(result.dataHrefs, 0, "no data: hrefs");
+    assert.equal(result.onHandlers, 0, "no inline event-handler attributes");
+    assert.equal(result.xss, undefined, "no hostile script executed");
+    // Only the one genuinely safe https link is linkified (not over-blocked).
+    assert.equal(result.links.length, 1);
+    assert.match(result.links[0] ?? "", /^https:\/\/example\.com/);
+    // Hostile markup survives only as inert text.
+    assert.match(result.text, /<script>/);
+    assert.match(result.text, /javascript:alert\(1\)/);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
