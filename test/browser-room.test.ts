@@ -1012,8 +1012,7 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
 
     // Tab goes to the background, then a peer @mentions the host.
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-    const longText = `@host ${"x".repeat(200)} tail`;
-    await postMessage(fixture, fixture.reviewerToken, longText);
+    await postMessage(fixture, fixture.reviewerToken, "@host please take a look when you can");
 
     // One OS notification + a title unread count of 1.
     await page.waitForFunction(() => document.title.startsWith("(1) "));
@@ -1021,10 +1020,9 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
     assert.equal(first.length, 1);
     const note = first[0];
     assert.ok(note, "one notification recorded");
-    assert.match(note.title, /reviewer mentioned you/);
-    // Body is truncated (~120) and never leaks a token.
-    assert.ok(note.body.length <= 120, `body ${note.body.length} chars`);
-    assert.match(note.body, /…$/);
+    // Body is GENERIC (sender alias only) — never the message text, so it can't leak.
+    assert.match(note.body, /New mention from reviewer/);
+    assert.equal(note.body.includes("please take a look"), false);
     assert.equal(note.body.includes(fixture.hostToken), false);
     assert.equal(note.body.includes(fixture.reviewerToken), false);
 
@@ -1092,6 +1090,45 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length), 0);
     assert.equal(await page.title(), "Agent Gather Room");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a notification body never carries an invite URL or token from the message text (#186)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await installNotificationDouble(page, "default");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.click("#notify-toggle");
+    await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+    // A peer @mentions the host but pastes an invite URL AND a tgl_-like token.
+    const token = "tgl_secret_9f3aK2p0Qz7Lx8Bn4Vd6Wc1";
+    await postMessage(
+      fixture,
+      fixture.reviewerToken,
+      `@host join https://agentgather.dev/#token=${token} — Bearer ${token}`
+    );
+
+    await page.waitForFunction(() => (window as unknown as { __notifs: unknown[] }).__notifs.length === 1);
+    const notif = await page.evaluate(
+      () => (window as unknown as { __notifs: Array<{ title: string; body: string }> }).__notifs[0]
+    );
+    assert.ok(notif);
+    // The OS body is generic — it carries neither the URL nor the token, from either
+    // the body or the title.
+    const combined = `${notif.title} ${notif.body}`;
+    assert.equal(combined.includes("agentgather.dev"), false);
+    assert.equal(combined.includes(token), false);
+    assert.equal(combined.includes("tgl_"), false);
+    assert.equal(combined.includes("https://"), false);
+    assert.match(notif.body, /New mention from reviewer/);
   } finally {
     await browser.close();
     await fixture.close();

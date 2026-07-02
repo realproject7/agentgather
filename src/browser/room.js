@@ -381,24 +381,24 @@ function maybeNotify(message) {
 }
 
 // OS notification, only when permission is actually granted. Permission-denied (or
-// no Notification API) degrades silently to the title badge handled above. The body
-// is the message text truncated — never a token or invite URL.
+// no Notification API) degrades silently to the title badge handled above.
+// Privacy (#186): the body is GENERIC — never the message text. The OS surfaces
+// this outside the app (notification center / lock screen), and agentgather invite
+// URLs carry participant tokens, so quoting message content there could leak a
+// secret a peer pasted. Only the sender alias (already public in the roster) and
+// the room name appear; the human opens the tab to read the actual message.
 function fireOsNotification(message, mentioned) {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   const sender = state.participantLabels.get(message.from) || message.from;
   const room = state.roomName || "the room";
-  const title = mentioned ? `${sender} mentioned you in ${room}` : `${sender} in ${room}`;
+  const title = `Agent Gather · ${room}`;
+  const body = mentioned ? `New mention from ${sender}` : `New message from ${sender}`;
   try {
     // tag keyed by message id → the OS coalesces, so a message never double-notifies.
-    new Notification(title, { body: truncateNotifyBody(message.text), tag: `agentgather-${message.id}` });
+    new Notification(title, { body, tag: `agentgather-${message.id}` });
   } catch {
     // A hostile browser or blocked context must not break the poll loop.
   }
-}
-
-function truncateNotifyBody(text) {
-  const clean = String(text || "").replace(/\s+/g, " ").trim();
-  return clean.length > 120 ? `${clean.slice(0, 119)}…` : clean;
 }
 
 // Title unread count + favicon dot, shown only while unfocused. Both clear on focus.
@@ -489,7 +489,7 @@ function toggleNotifyScope() {
 function updateNotifyUi() {
   const on = state.notify.enabled;
   notifyToggle.setAttribute("aria-pressed", String(on));
-  notifyToggle.textContent = on ? "🔔 on" : "🔔 off";
+  notifyToggle.textContent = on ? "notify on" : "notify";
   const blocked = typeof Notification !== "undefined" && Notification.permission === "denied";
   notifyToggle.title = on
     ? blocked
