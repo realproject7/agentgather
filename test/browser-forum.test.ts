@@ -142,6 +142,49 @@ test("forum UI: feed → thread → back, rail nesting, markdown body, wake badg
   }
 });
 
+test("forum UI: selected post is URL-addressable — deep link + refresh reopen the thread, invalid id falls back to the feed, no token in the URL", { timeout: 120_000 }, async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+
+    // Deep link straight to a populated post: the thread opens without a click.
+    await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum&post=rfc-1#token=${fixture.hostToken}`);
+    await page.waitForSelector(".forum-shell[data-view='thread']");
+    assert.match(await page.locator("#detail-title").innerText(), /single column vs split/);
+
+    // The address bar keeps channel + post but never the bearer token.
+    const deepUrl = new URL(page.url());
+    assert.equal(deepUrl.searchParams.get("channel"), "design-forum");
+    assert.equal(deepUrl.searchParams.get("post"), "rfc-1");
+    assert.equal(page.url().includes("token"), false, "token must not be persisted in the URL");
+
+    // Refresh that URL: it reopens the same thread instead of the feed.
+    await page.reload();
+    await page.waitForSelector(".forum-shell[data-view='thread']");
+    assert.match(await page.locator("#detail-title").innerText(), /single column vs split/);
+
+    // Clicking back to the feed drops the post param from the URL.
+    await page.click("#forum-back");
+    await page.waitForSelector(".forum-shell[data-view='feed']");
+    assert.equal(new URL(page.url()).searchParams.get("post"), null);
+
+    // Selecting a post via click syncs the URL so copy-link/refresh work.
+    await page.click(".row");
+    await page.waitForSelector(".forum-shell[data-view='thread']");
+    assert.equal(new URL(page.url()).searchParams.get("post"), "rfc-1");
+
+    // An invalid/missing post id falls back gracefully to the feed and clears it.
+    await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum&post=does-not-exist#token=${fixture.hostToken}`);
+    await page.waitForSelector(".row .ti:has-text('Forum post layout — single column vs split')");
+    await page.waitForSelector(".forum-shell[data-view='feed']");
+    assert.equal(new URL(page.url()).searchParams.get("post"), null);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("forum UI shows an empty state for a forum with no posts", { timeout: 120_000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-forumempty-"));
   const hostToken = "tgl_host";
