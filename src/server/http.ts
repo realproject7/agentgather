@@ -184,6 +184,7 @@ async function getBrief(context: RequestContext): Promise<void> {
 
 async function postBrief(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "brief");
   requireHost(auth.participant);
   const body = await readJsonBody<{ body?: unknown }>(context);
   if (typeof body.body !== "string") throw new HttpError(400, "invalid_body", "brief body is required");
@@ -217,6 +218,7 @@ async function getCard(context: RequestContext): Promise<void> {
 
 async function postAttendance(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "attendance");
   requireHost(auth.participant);
   const body = await readJsonBody<{ policy?: unknown }>(context);
   if (typeof body.policy !== "string") throw new HttpError(400, "invalid_policy", "attendance policy is required");
@@ -244,6 +246,7 @@ async function getProfile(context: RequestContext): Promise<void> {
 
 async function postProfile(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "profile");
   const body = await readJsonBody<{
     display_name?: unknown;
     supported_modes?: unknown;
@@ -287,6 +290,7 @@ const DUPLICATE_JOIN_WARNING =
 
 async function postJoin(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "join");
   const now = new Date().toISOString();
   const { removed_at: _removedAt, ...baseParticipant } = auth.participant;
   // 9A: a participant may declare its supported attention modes + advisory
@@ -367,6 +371,7 @@ async function getForumPost(context: RequestContext): Promise<void> {
 
 async function postForumPost(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "forum/posts");
   await requireRoomOpen(context);
   const body = await readJsonBody<{ channel?: unknown; title?: unknown; body?: unknown; tags?: unknown; status?: unknown }>(context);
   if (typeof body.channel !== "string" || typeof body.title !== "string" || typeof body.body !== "string") {
@@ -385,6 +390,7 @@ async function postForumPost(context: RequestContext): Promise<void> {
 
 async function postForumComment(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "forum/comment");
   await requireRoomOpen(context);
   const body = await readJsonBody<{ channel?: unknown; post?: unknown; body?: unknown }>(context);
   if (typeof body.channel !== "string" || typeof body.post !== "string" || typeof body.body !== "string") {
@@ -571,6 +577,7 @@ async function getWait(context: RequestContext): Promise<void> {
 
 async function postLeave(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "leave");
   await upsertParticipant(context.options.root, context.options.roomId, {
     ...auth.participant,
     attention: "away",
@@ -583,6 +590,7 @@ async function postLeave(context: RequestContext): Promise<void> {
 
 async function postClose(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "close");
   requireHost(auth.participant);
   const state = await closeRoom(context.options.root, context.options.roomId);
   await appendSystem(context, "room closed");
@@ -597,6 +605,7 @@ async function postClose(context: RequestContext): Promise<void> {
 // is a 409 and a non-host is a 403 (via requireHost).
 async function postSession(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "session");
   requireHost(auth.participant);
   await requireRoomOpen(context);
   const body = await readJsonBody<{
@@ -889,16 +898,47 @@ async function readJsonBody<T>(context: RequestContext): Promise<T> {
   }
 }
 
-function enforceRateLimit(alias: string, limit: number): void {
-  const now = Date.now();
-  const bucket = rateBuckets.get(alias);
+// Per-endpoint write budgets (per room:alias, per minute). Interactive writes are
+// far rarer than chat, so they sit well below the /messages budget while staying
+// clear of any normal human/agent cadence. Endpoints not listed use the default.
+const DEFAULT_WRITE_RATE_LIMIT = 30;
+const WRITE_RATE_LIMITS: Record<string, number> = {
+  brief: 20,
+  close: 10,
+  join: 60,
+  "forum/comment": 60
+};
+
+// Reuse the existing /messages bucket mechanism for every authenticated write:
+// one bucket per room:alias:endpoint so per-endpoint budgets are independent.
+function enforceWriteRateLimit(context: RequestContext, alias: string, endpoint: string): void {
+  const limit = WRITE_RATE_LIMITS[endpoint] ?? DEFAULT_WRITE_RATE_LIMIT;
+  enforceRateLimit(`${context.options.roomId}:${alias}:${endpoint}`, limit);
+}
+
+function enforceRateLimit(key: string, limit: number, now: number = Date.now()): void {
+  // Opportunistic prune on touch (no timers): drop every elapsed window so the
+  // bucket map cannot grow unbounded as aliases/endpoints churn over process life.
+  for (const [bucketKey, bucket] of rateBuckets) {
+    if (now >= bucket.resetAt) rateBuckets.delete(bucketKey);
+  }
+  const bucket = rateBuckets.get(key);
   if (bucket === undefined || now >= bucket.resetAt) {
-    rateBuckets.set(alias, { resetAt: now + 60_000, count: 1 });
+    rateBuckets.set(key, { resetAt: now + 60_000, count: 1 });
     return;
   }
   bucket.count += 1;
   if (bucket.count > limit) throw new HttpError(429, "rate_limited", "rate limit exceeded");
 }
+
+// Test-only accessors for the in-memory rate-limit buckets (churn/reclaim tests).
+export function rateBucketCount(): number {
+  return rateBuckets.size;
+}
+export function clearRateBuckets(): void {
+  rateBuckets.clear();
+}
+export { enforceRateLimit as __enforceRateLimit };
 
 function enforceLoopGuard(roomId: string, participant: Participant, limit: number): void {
   if (participant.kind === "human") {

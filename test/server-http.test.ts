@@ -11,7 +11,13 @@ import {
   writeParticipants
 } from "../src/storage/index.js";
 import type { Participant } from "../src/protocol/index.js";
-import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
+import {
+  createRoomHttpServer,
+  participantTokenHash,
+  rateBucketCount,
+  clearRateBuckets,
+  __enforceRateLimit
+} from "../src/server/index.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-server-test-"));
@@ -460,6 +466,42 @@ test("the session_id marker is server-only and never exposed through the /status
   } finally {
     await fixture.close();
   }
+});
+
+test("a non-message write endpoint is rate-limited with the shared 429 shape (#188)", async () => {
+  const fixture = await startFixture();
+  try {
+    // /brief's budget is 20/min per room:alias; the 21st host edit in the window is
+    // rejected with the same rate_limited/429 shape as /messages.
+    let last: { status: number; body: any } = { status: 0, body: {} };
+    for (let i = 0; i < 21; i += 1) {
+      last = await jsonFetch(fixture, "POST", "/brief", fixture.hostToken, { body: `edit ${i}` });
+    }
+    assert.equal(last.status, 429);
+    assert.equal(last.body.error, "rate_limited");
+    assert.match(last.body.message, /rate limit/i);
+
+    // A different endpoint keeps its own budget — the /brief limit doesn't spill over.
+    const attendance = await jsonFetch(fixture, "POST", "/attendance", fixture.hostToken, { policy: "manual-ok" });
+    assert.equal(attendance.status, 200);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the rate-limit bucket map stays bounded as aliases churn (expired windows reclaimed) (#188)", async () => {
+  clearRateBuckets();
+  const base = 1_000_000;
+  // Many distinct aliases each touch once inside the same window: buckets accumulate.
+  for (let i = 0; i < 500; i += 1) {
+    __enforceRateLimit(`room:alias-${i}:join`, 60, base);
+  }
+  assert.equal(rateBucketCount(), 500);
+  // A later touch after the 60s window elapses prunes every expired bucket on touch,
+  // so the map cannot grow without bound over the life of the process.
+  __enforceRateLimit("room:fresh:join", 60, base + 60_001);
+  assert.equal(rateBucketCount(), 1);
+  clearRateBuckets();
 });
 
 function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
