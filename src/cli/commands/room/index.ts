@@ -14,6 +14,7 @@ import {
   readBoardroom,
   readChannelView,
   readForumPost,
+  renameChannel,
   setForumPostStatus,
   startActiveSession,
   writeChannelCursor,
@@ -33,6 +34,7 @@ import {
   normalizeBaseUrl,
   parseAttendancePolicy,
   parseAttentionMode,
+  parseChannelName,
   parseChannelType,
   parseForumStatus,
   roomUrl,
@@ -59,6 +61,7 @@ export async function runRoomCommand(argv: string[], context: CliContext): Promi
   if (subcommand === "start") return roomStart(rest, context);
   if (subcommand === "create-boardroom") return roomCreateBoardroom(rest, context);
   if (subcommand === "channel-create") return roomChannelCreate(rest, context);
+  if (subcommand === "channel-rename") return roomChannelRename(rest, context);
   if (subcommand === "channel-read") return roomChannelRead(rest, context);
   if (subcommand === "forum-post") return roomForumPost(rest, context);
   if (subcommand === "forum-comment") return roomForumComment(rest, context);
@@ -174,6 +177,28 @@ async function roomChannelCreate(argv: string[], context: CliContext): Promise<n
     flagBoolean(args, "json"),
     { ok: true, room: current.roomId, channel, boardroom },
     `Channel #${channelId} (${type}) added to ${current.roomId}\n`
+  );
+}
+
+// Host channel-rename flow (#168): update a channel's display name via the
+// boardroom-store writer-lock/validation path so hosts never edit boardroom.json
+// by hand. Renames the display name only (the channel id is unchanged). Carries
+// no tokens or invite URLs.
+async function roomChannelRename(argv: string[], context: CliContext): Promise<number> {
+  const args = parseArgs(argv);
+  const channelId = args.positional[0];
+  if (channelId === undefined) throw new Error("channel id is required");
+  const nameFlag = flagString(args, "name");
+  if (nameFlag === undefined) throw new Error("--name is required");
+  const name = parseChannelName(nameFlag);
+  const current = await readCurrent(context.home);
+  const boardroom = await renameChannel(context.home, current.roomId, channelId, name);
+  const channel = boardroom.channels.find((c) => c.id === channelId);
+  return emit(
+    context,
+    flagBoolean(args, "json"),
+    { ok: true, room: current.roomId, channel, boardroom },
+    `Channel #${channelId} renamed to "${name}" in ${current.roomId}\n`
   );
 }
 

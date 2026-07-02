@@ -85,6 +85,36 @@ export async function addChannel(root: string, roomId: string, channel: Channel,
   });
 }
 
+// Host channel-rename flow (#168): update a channel's human-facing display name
+// via the same writer-lock + validation path as create, so hosts never edit
+// boardroom.json by hand. The channel id/type/lifecycle are unchanged — only
+// `name`. Materializes a legacy room's #general projection on first write.
+// Rejects an unknown channel id.
+export async function renameChannel(
+  root: string,
+  roomId: string,
+  channelId: string,
+  name: string,
+  now: Date = new Date()
+): Promise<Boardroom> {
+  assertSafeSlug(roomId, "room id");
+  assertSafeSlug(channelId, "channel id");
+  const paths = roomPaths(root, roomId);
+  return withWriterLock(paths.lock, async () => {
+    const current = await readBoardroomUnlocked(paths);
+    if (!current.channels.some((c) => c.id === channelId)) {
+      throw new Error(`channel not found: ${channelId}`);
+    }
+    const next: Boardroom = {
+      ...current,
+      channels: current.channels.map((c) => (c.id === channelId ? { ...c, name } : c)),
+      updatedAt: now.toISOString(),
+      legacy: false
+    };
+    return persistBoardroom(paths, next);
+  });
+}
+
 async function persistBoardroom(paths: RoomPaths, boardroom: Boardroom): Promise<Boardroom> {
   const persisted: Boardroom = { ...boardroom, legacy: false };
   assertValidBoardroom(persisted);
