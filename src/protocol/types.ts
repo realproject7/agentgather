@@ -24,6 +24,22 @@ export interface RoomBrief {
   brief_updated_by: string;
 }
 
+// Active chat session (V2 T11): a channel-wide bounded live-chat event on a chat
+// channel (#general in this version). The host starts it with an expected
+// duration and a requested attendance policy; it ends explicitly or on room
+// close. Idle (no active_session) is the default state — this is an event, not a
+// permanent channel state machine. expected_duration_m is advisory metadata; the
+// server does NOT auto-end on it. ended_at is set on the end response; an
+// ended/closed session is cleared from RoomState so /status returns to idle.
+export interface ActiveSession {
+  channel_id: string;
+  started_at: string;
+  expected_duration_m: number;
+  requested_mode?: AttendancePolicy;
+  started_by: string;
+  ended_at?: string;
+}
+
 export interface RoomState {
   id: string;
   status: RoomStatus;
@@ -35,6 +51,9 @@ export interface RoomState {
   brief_version: number;
   brief_updated_at: string;
   brief_updated_by: string;
+  // T11: the single active chat session for this room, when one is running.
+  // Absent when idle; cleared on end and on room close.
+  active_session?: ActiveSession;
 }
 
 export interface Participant {

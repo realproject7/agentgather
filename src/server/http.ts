@@ -8,6 +8,7 @@ import {
   appendServerMessage,
   closeRoom,
   createForumPost,
+  endActiveSession,
   listForumPosts,
   readBoardroom,
   readBrief,
@@ -16,9 +17,11 @@ import {
   readParticipants,
   readRoomState,
   roomPaths,
+  startActiveSession,
   updateBrief,
   updateAttendancePolicy,
   upsertParticipant,
+  ActiveSessionExistsError,
   MAX_BRIEF_LENGTH,
   RoomLogFullError
 } from "../storage/index.js";
@@ -142,6 +145,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "GET" && pathname === "/wait") return getWait(context);
   if (context.req.method === "POST" && pathname === "/leave") return postLeave(context);
   if (context.req.method === "POST" && pathname === "/close") return postClose(context);
+  if (context.req.method === "POST" && pathname === "/session") return postSession(context);
   if (context.req.method === "GET" && pathname === "/status") return getStatus(context);
   if (context.req.method === "GET" && pathname === "/boardroom") return getBoardroom(context);
   if (pathname === "/watch") {
@@ -546,6 +550,87 @@ async function postClose(context: RequestContext): Promise<void> {
   sendJson(context.res, 200, { ok: true, room_status: state.status });
 }
 
+// Active chat session (T11): host-only start/end of a channel-wide bounded
+// live-chat event. Mirrors the `postClose` host gate. Start/end each append a
+// system message and wake `/wait`ers (the wake path — no new notification
+// machinery). Channel is gated to #general per #167; a second concurrent start
+// is a 409 and a non-host is a 403 (via requireHost).
+async function postSession(context: RequestContext): Promise<void> {
+  const auth = await requireParticipant(context);
+  requireHost(auth.participant);
+  await requireRoomOpen(context);
+  const body = await readJsonBody<{
+    action?: unknown;
+    channel?: unknown;
+    expected_duration_m?: unknown;
+    requested_mode?: unknown;
+  }>(context);
+
+  if (body.action === "start") {
+    const channel = typeof body.channel === "string" ? body.channel : DEFAULT_CHANNEL_ID;
+    if (channel !== DEFAULT_CHANNEL_ID) {
+      throw new HttpError(
+        400,
+        "unsupported_channel",
+        `active sessions are only available for #${DEFAULT_CHANNEL_ID} in this version`
+      );
+    }
+    const expectedDurationM = parseDurationM(body.expected_duration_m);
+    const requestedMode = parseRequestedMode(body.requested_mode);
+    let session;
+    try {
+      session = await startActiveSession({
+        root: context.options.root,
+        roomId: context.options.roomId,
+        channelId: channel,
+        startedBy: auth.participant.alias,
+        expectedDurationM,
+        ...(requestedMode === undefined ? {} : { requestedMode })
+      });
+    } catch (error) {
+      if (error instanceof ActiveSessionExistsError) {
+        throw new HttpError(409, "session_active", error.message);
+      }
+      throw error;
+    }
+    await appendSystem(
+      context,
+      `Active chat session started in #${channel} by ${auth.participant.alias} (~${expectedDurationM}m)`
+    );
+    context.options.waitHub.notify(context.options.roomId);
+    sendJson(context.res, 201, { ok: true, active_session: session });
+    return;
+  }
+
+  if (body.action === "end") {
+    const ended = await endActiveSession({ root: context.options.root, roomId: context.options.roomId });
+    if (ended === null) throw new HttpError(409, "no_active_session", "no active chat session to end");
+    await appendSystem(context, `Active chat session ended in #${ended.channel_id}`);
+    context.options.waitHub.notify(context.options.roomId);
+    sendJson(context.res, 200, { ok: true, active_session: ended });
+    return;
+  }
+
+  throw new HttpError(400, "invalid_action", "action must be start or end");
+}
+
+function parseDurationM(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    throw new HttpError(400, "invalid_duration", "expected_duration_m must be a positive integer");
+  }
+  return value as number;
+}
+
+function parseRequestedMode(value: unknown): AttendancePolicy | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new HttpError(400, "invalid_requested_mode", "requested_mode must be a string");
+  try {
+    return parseAttendancePolicy(value);
+  } catch (error) {
+    throw new HttpError(400, "invalid_requested_mode", error instanceof Error ? error.message : "invalid requested_mode");
+  }
+}
+
 async function getStatus(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   const paths = roomPaths(context.options.root, context.options.roomId);
@@ -567,6 +652,8 @@ async function getStatus(context: RequestContext): Promise<void> {
     brief_updated_at: state.brief_updated_at,
     brief_updated_by: state.brief_updated_by,
     boardroom: publicBoardroom(boardroom),
+    // T11: present while a session is active; absent (idle) after end/room close.
+    ...(state.active_session === undefined ? {} : { active_session: state.active_session }),
     participants: participants.map((participant) => publicParticipant(participant, state.attendance_policy, now))
   });
 }
