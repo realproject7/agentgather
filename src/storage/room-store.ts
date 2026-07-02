@@ -329,6 +329,63 @@ export async function upsertParticipant(root: string, roomId: string, participan
   });
 }
 
+export interface JoinParticipantResult {
+  duplicateActiveSession: boolean;
+}
+
+// Persist a participant's join and, in the SAME writer-lock transaction, decide
+// whether the alias was already actively attended by a *different* session (V2 D,
+// #163). Detection and the write must be atomic so two racing joins can't both
+// read "not attended" and skip the warning — a soft, advisory flag, but derived
+// without a read-then-write gap.
+export async function joinParticipant(
+  root: string,
+  roomId: string,
+  participant: Participant,
+  options: { staleAfterMs: number; now?: number; incomingSessionId?: string }
+): Promise<JoinParticipantResult> {
+  assertSafeSlug(participant.alias, "participant alias");
+  const paths = roomPaths(root, roomId);
+  const now = options.now ?? Date.now();
+  return withWriterLock(paths.lock, async () => {
+    const participants = await readParticipants(paths);
+    const existingIndex = participants.findIndex((current) => current.alias === participant.alias);
+    const existing = existingIndex === -1 ? undefined : participants[existingIndex];
+    const duplicateActiveSession =
+      existing === undefined
+        ? false
+        : isActivelyAttendedByOtherSession(existing, now, options.staleAfterMs, options.incomingSessionId);
+    if (existingIndex === -1) {
+      participants.push(participant);
+    } else {
+      participants[existingIndex] = participant;
+    }
+    await writeJson(paths.participants, participants);
+    return { duplicateActiveSession };
+  });
+}
+
+// A join is a *concurrent second session* (not a reconnect) when the stored record
+// is still live: it has not left (removed_at unset), is foreground, and was seen
+// within the stale window. A matching session marker means the same session is
+// resuming, so that is never a duplicate; a reconnect after leave/stale fails the
+// live check regardless of marker, so legacy (markerless) clients still reconnect
+// cleanly.
+function isActivelyAttendedByOtherSession(
+  existing: Participant,
+  now: number,
+  staleAfterMs: number,
+  incomingSessionId?: string
+): boolean {
+  if (existing.removed_at !== undefined) return false;
+  const foreground = existing.attention === "attending" || existing.attention === "managed";
+  if (!foreground) return false;
+  const lastSeen = Date.parse(existing.lastSeenAt);
+  if (!Number.isFinite(lastSeen) || now - lastSeen > staleAfterMs) return false;
+  if (incomingSessionId !== undefined && existing.session_id === incomingSessionId) return false;
+  return true;
+}
+
 export async function closeRoom(root: string, roomId: string, now: Date = new Date()): Promise<RoomState> {
   const paths = roomPaths(root, roomId);
   return withWriterLock(paths.lock, async () => {

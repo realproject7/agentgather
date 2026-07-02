@@ -354,6 +354,114 @@ test("GET /messages enforces the #general channel boundary (V2 #167)", async () 
   }
 });
 
+test("a concurrent second session joining an actively-attended alias gets a soft, privacy-safe warning (#163)", async () => {
+  const fixture = await startFixture();
+  try {
+    // First session joins: nothing was actively attended, so no warning.
+    const first = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "session-A" });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.warning, undefined);
+
+    // A *different* session joins the same token while the first is still attending
+    // and fresh — soft warning, but still a 200 (the token is the auth; never blocked).
+    const second = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "session-B" });
+    assert.equal(second.status, 200);
+    assert.equal(second.body.ok, true);
+    assert.equal(second.body.participant, "agent");
+    assert.match(second.body.warning, /already .*attended/i);
+    // Privacy: the warning leaks no token, no session markers, and no counts.
+    assert.ok(!second.body.warning.includes(fixture.agentToken));
+    assert.ok(!second.body.warning.includes("session-A"));
+    assert.ok(!second.body.warning.includes("session-B"));
+    assert.ok(!/\btoken\b/i.test(second.body.warning));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a markerless concurrent join is still flagged; the same session_id resuming is not (#163)", async () => {
+  const fixture = await startFixture();
+  try {
+    // Legacy clients send no session_id: fall back to attendance_state + last-seen.
+    assert.equal((await jsonFetch(fixture, "POST", "/join", fixture.agentToken)).body.warning, undefined);
+    const markerless = await jsonFetch(fixture, "POST", "/join", fixture.agentToken);
+    assert.match(markerless.body.warning, /already .*attended/i);
+
+    // The same session marker resuming while still fresh is a reconnect, not a duplicate.
+    const markedFirst = await jsonFetch(fixture, "POST", "/join", fixture.hostToken, { session_id: "host-sess" });
+    assert.equal(markedFirst.body.warning, undefined);
+    const markedResume = await jsonFetch(fixture, "POST", "/join", fixture.hostToken, { session_id: "host-sess" });
+    assert.equal(markedResume.body.warning, undefined);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a reconnect after leaving or going stale rejoins with no spurious warning (#163)", async () => {
+  const fixture = await startFixture();
+  try {
+    // Join, then leave (attention -> away) and rejoin: not actively attended -> no warning.
+    await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "s1" });
+    await jsonFetch(fixture, "POST", "/leave", fixture.agentToken);
+    const afterLeave = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "s2" });
+    assert.equal(afterLeave.status, 200);
+    assert.equal(afterLeave.body.warning, undefined);
+
+    // Simulate the prior session going stale (last seen beyond the 90s window) while
+    // still marked attending; a fresh session rejoining is a reconnect, not a dupe.
+    await writeParticipants(fixture.root, fixture.roomId, [
+      participant("host", "human", true, fixture.hostToken),
+      {
+        ...participant("agent", "agent", false, fixture.agentToken),
+        attention: "attending",
+        lastSeenAt: new Date(Date.now() - 120_000).toISOString()
+      }
+    ]);
+    const afterStale = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "s3" });
+    assert.equal(afterStale.status, 200);
+    assert.equal(afterStale.body.warning, undefined);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an invalid session_id is rejected before any join is recorded (#163)", async () => {
+  const fixture = await startFixture();
+  try {
+    const empty = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "" });
+    assert.equal(empty.status, 400);
+    assert.equal(empty.body.error, "invalid_session_id");
+    const tooLong = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "x".repeat(201) });
+    assert.equal(tooLong.status, 400);
+    assert.equal(tooLong.body.error, "invalid_session_id");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the session_id marker is server-only and never exposed through the /status roster (#163)", async () => {
+  const fixture = await startFixture();
+  try {
+    // The agent joins with an opaque session marker; a duplicate join yields the warning.
+    await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "secret-marker-A" });
+    const dupe = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "secret-marker-B" });
+    assert.match(dupe.body.warning, /already .*attended/i);
+    assert.ok(!dupe.body.warning.includes("secret-marker-A"));
+
+    // Any participant polling /status must NOT see other clients' session markers.
+    const status = await jsonFetch(fixture, "GET", "/status", fixture.hostToken);
+    assert.equal(status.status, 200);
+    for (const roster of status.body.participants as Array<Record<string, unknown>>) {
+      assert.equal("session_id" in roster, false);
+      assert.equal("token_hash" in roster, false);
+    }
+    // The raw serialized response carries no marker anywhere either.
+    assert.ok(!JSON.stringify(status.body).includes("secret-marker"));
+  } finally {
+    await fixture.close();
+  }
+});
+
 function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
   return {
     alias,

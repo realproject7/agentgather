@@ -11,6 +11,7 @@ import {
   endActiveSession,
   listForumPosts,
   readBoardroom,
+  joinParticipant,
   readBrief,
   readForumPost,
   readMessages,
@@ -277,6 +278,13 @@ async function postProfile(context: RequestContext): Promise<void> {
   sendJson(context.res, 200, { ok: true, participant: publicParticipant(updated) });
 }
 
+// Privacy-safe soft warning for a concurrent second session (#163). The token is
+// the auth, so a join is never hard-blocked; this only advises. The text names no
+// token, no other-session details, and no counts — only that the alias is already
+// attended, so a mis-routed session can tell it is in the wrong place.
+const DUPLICATE_JOIN_WARNING =
+  "this alias is already actively attended by another session; if this is a second session you may be joined in the wrong room";
+
 async function postJoin(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   const now = new Date().toISOString();
@@ -285,20 +293,52 @@ async function postJoin(context: RequestContext): Promise<void> {
   // cadences on join; persist the declaration, then negotiate effective_mode
   // from it and the host's requested_mode. An empty body re-negotiates from the
   // already-stored declaration (a plain reconnect), unchanged.
-  const declared = parseAttentionDeclaration(
-    await readJsonBody<{ supported_modes?: unknown; poll_cadence_s?: unknown; safety_wake_s?: unknown }>(context)
-  );
+  const body = await readJsonBody<{
+    supported_modes?: unknown;
+    poll_cadence_s?: unknown;
+    safety_wake_s?: unknown;
+    session_id?: unknown;
+  }>(context);
+  const declared = parseAttentionDeclaration(body);
+  const incomingSessionId = parseSessionId(body.session_id);
   const participant: Participant = withNegotiatedAttention({
     ...baseParticipant,
     ...declared,
     attention: "attending",
     joinedAt: baseParticipant.joinedAt || now,
-    lastSeenAt: now
+    lastSeenAt: now,
+    // Keep the last known marker when none is supplied (legacy re-join); overwrite
+    // when this session declares its own.
+    ...(incomingSessionId === undefined ? {} : { session_id: incomingSessionId })
   });
-  await upsertParticipant(context.options.root, context.options.roomId, participant);
+  // Detect + persist atomically so racing joins can't both miss the warning.
+  const { duplicateActiveSession } = await joinParticipant(
+    context.options.root,
+    context.options.roomId,
+    participant,
+    {
+      staleAfterMs: ATTENDANCE_STALE_AFTER_MS,
+      ...(incomingSessionId === undefined ? {} : { incomingSessionId })
+    }
+  );
   await appendSystem(context, `${auth.participant.alias} joined`);
   context.options.waitHub.notify(context.options.roomId);
-  sendJson(context.res, 200, { ok: true, participant: auth.participant.alias });
+  sendJson(context.res, 200, {
+    ok: true,
+    participant: auth.participant.alias,
+    ...(duplicateActiveSession ? { warning: DUPLICATE_JOIN_WARNING } : {})
+  });
+}
+
+function parseSessionId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new HttpError(400, "invalid_session_id", "session_id must be a non-empty string");
+  }
+  if (value.length > 200) {
+    throw new HttpError(400, "invalid_session_id", "session_id must be at most 200 characters");
+  }
+  return value;
 }
 
 // ---- Forum HTTP surface (T8) over the frozen T6 store ----
@@ -696,7 +736,7 @@ function publicBoardroom(boardroom: Boardroom): PublicBoardroom {
   return out;
 }
 
-type PublicParticipant = Omit<Participant, "token_hash"> & {
+type PublicParticipant = Omit<Participant, "token_hash" | "session_id"> & {
   attendance_required: boolean;
   attendance_state: Participant["attention"] | "not_attending" | "stale";
   last_seen_age_ms: number;
@@ -710,6 +750,9 @@ function publicParticipant(
 ): PublicParticipant {
   const publicFields: Participant = { ...participant };
   delete publicFields.token_hash;
+  // The opaque session marker (#163) is a server-only duplicate-join signal; it is
+  // never returned to clients (a peer must not read others' session markers).
+  delete publicFields.session_id;
   const lastSeenAt = Date.parse(participant.lastSeenAt);
   const lastSeenAgeMs = Number.isFinite(lastSeenAt) ? Math.max(0, now - lastSeenAt) : Number.MAX_SAFE_INTEGER;
   const attendanceRequired = isForegroundRequired(attendancePolicy, participant);
