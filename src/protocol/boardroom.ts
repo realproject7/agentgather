@@ -153,6 +153,22 @@ export function parseChannelType(value: string): ChannelType {
   throw new Error(`channel type must be one of ${CHANNEL_TYPES.join(", ")}`);
 }
 
+// Normalize/validate a channel display name (host channel-rename flow, #168).
+// Mirrors the participant display-name rules: 1-60 characters, collapsed
+// whitespace, no control characters. The channel *id* is never changed here —
+// only the human-facing display name.
+export function parseChannelName(value: string): string {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  const hasControlChar = [...trimmed].some((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return code < 0x20 || code === 0x7f;
+  });
+  if (trimmed.length === 0 || trimmed.length > 60 || hasControlChar) {
+    throw new Error("channel name must be 1-60 characters without control characters");
+  }
+  return trimmed;
+}
+
 // Name ownership (T7, built on `nameOwnerHash`): a display name is reclaimable
 // only by its owning token. Returns the participant that already owns
 // `displayName` under a *different* token (a blocking conflict), or undefined
