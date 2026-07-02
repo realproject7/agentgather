@@ -135,7 +135,10 @@
 
       <form id="composer" class="composer k-composer" data-mode="direct">
         <div id="mention-warning" class="mention-warning" hidden></div>
-        <div id="reply-indicator" class="reply-indicator" hidden></div>
+        <div id="reply-indicator" class="reply-indicator" hidden>
+          <span id="reply-indicator-label" class="reply-indicator-label"></span>
+          <button id="reply-clear" class="reply-clear" type="button" aria-label="Cancel reply" title="Cancel reply">✕</button>
+        </div>
         <div id="send-error" class="send-error" role="alert" hidden></div>
         <ul id="mention-autocomplete" class="mention-autocomplete" role="listbox" hidden></ul>
         <span class="composer-prompt" aria-hidden="true">&gt;</span>

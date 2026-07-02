@@ -15,6 +15,10 @@ const state = {
   roomStatus: "open",
   briefVersion: 0,
   replyTo: null,
+  // Reply affordance (#113): minimal from/text record per rendered message id so
+  // a message carrying reply_to can show compact replied-to context in the
+  // timeline. Reuses the existing reply_to metadata — no new message schema.
+  messagesById: new Map(),
   composing: false,
   sendInFlight: false,
   pendingSend: null,
@@ -77,6 +81,8 @@ const messageText = document.getElementById("message-text");
 const sendButton = document.getElementById("send-button");
 const sendError = document.getElementById("send-error");
 const replyIndicator = document.getElementById("reply-indicator");
+const replyIndicatorLabel = document.getElementById("reply-indicator-label");
+const replyClear = document.getElementById("reply-clear");
 const closeButton = document.getElementById("close-button");
 const exportButton = document.getElementById("export-button");
 const hostControls = document.getElementById("host-controls");
@@ -225,6 +231,12 @@ function bindEvents() {
         }
       }
     }
+    // Escape with the autocomplete closed clears a pending reply (#113).
+    if (event.key === "Escape" && mentionAutocomplete.hidden && state.replyTo !== null) {
+      event.preventDefault();
+      clearReply();
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !state.composing) {
       event.preventDefault();
       void submitMessage();
@@ -235,6 +247,10 @@ function bindEvents() {
     setTimeout(() => hideAutocomplete(), 120);
   });
   broadcastToggle.addEventListener("click", () => setBroadcast(!state.broadcast));
+  replyClear.addEventListener("click", () => {
+    clearReply();
+    messageText.focus();
+  });
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitMessage();
@@ -573,6 +589,7 @@ async function submitMessage() {
   state.sendInFlight = false;
   setComposerDisabled(state.roomStatus === "closed");
   replyIndicator.hidden = true;
+  replyIndicatorLabel.textContent = "";
   hideMentionWarning();
   // A broadcast is a deliberate one-shot; return to direct so the next message
   // is not accidentally sent room-wide.
@@ -768,6 +785,10 @@ function participantStatusText(participant) {
 }
 
 function renderMessage(message) {
+  // Record a minimal from/text preview so a later message carrying reply_to can
+  // show its replied-to context, even for a message rendered earlier (#113).
+  state.messagesById.set(message.id, { from: labelFor(message.from), text: message.text });
+
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
   if (message.type === "status") item.classList.add("broadcast");
@@ -832,9 +853,34 @@ function renderMessage(message) {
   }
   meta.append(time);
 
+  // Discoverable per-message reply action (#113): a visible button (also
+  // keyboard-focusable) that sets the composer reply target. Double-click still
+  // works as a shortcut.
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  const replyBtn = document.createElement("button");
+  replyBtn.type = "button";
+  replyBtn.className = "reply-btn";
+  replyBtn.textContent = "↩ Reply";
+  replyBtn.setAttribute("aria-label", `Reply to ${state.participantLabels.get(message.from) || message.from} #${message.id}`);
+  replyBtn.addEventListener("click", () => setReply(message));
+  actions.append(replyBtn);
+  meta.append(actions);
+
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
-  bubble.append(meta, text);
+  bubble.append(meta);
+  // Replied-to context: reuse the existing reply_to metadata (no new schema).
+  if (typeof message.reply_to === "number") {
+    const ref = state.messagesById.get(message.reply_to);
+    const context = document.createElement("div");
+    context.className = "reply-context";
+    context.textContent = ref
+      ? `↩ ${ref.from}: ${replySnippet(ref.text)}`
+      : `↩ replying to #${message.reply_to}`;
+    bubble.append(context);
+  }
+  bubble.append(text);
 
   item.addEventListener("dblclick", () => setReply(message));
   item.dataset.senderKind = senderKind;
@@ -843,12 +889,33 @@ function renderMessage(message) {
   item.scrollIntoView({ block: "nearest" });
 }
 
+function labelFor(alias) {
+  return state.participantLabels.get(alias) || alias;
+}
+
+// One-line, plain-text preview of a replied-to message body for the composer
+// indicator and the timeline reply context (never rendered as markdown).
+function replySnippet(text) {
+  const flat = String(text || "").replace(/\s+/g, " ").trim();
+  return flat.length > 80 ? `${flat.slice(0, 80)}…` : flat;
+}
+
 function setReply(message) {
   state.replyTo = message.id;
   clearPendingSendIfTextChanged();
   replyIndicator.hidden = false;
-  replyIndicator.textContent = `Replying to ${message.from} #${message.id}`;
+  replyIndicatorLabel.textContent = `Replying to ${labelFor(message.from)} #${message.id}`;
   messageText.focus();
+}
+
+// Clear the pending reply before send (button, or Escape in the composer). The
+// message being replied to is unchanged; only the composer's reply target drops.
+function clearReply() {
+  if (state.replyTo === null) return;
+  state.replyTo = null;
+  clearPendingSendIfTextChanged();
+  replyIndicator.hidden = true;
+  replyIndicatorLabel.textContent = "";
 }
 
 function ensurePendingSend(text, replyTo) {

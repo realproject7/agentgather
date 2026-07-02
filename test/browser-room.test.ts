@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
-import { createRoom, writeParticipants } from "../src/storage/index.js";
+import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 
 async function makeRoot(): Promise<string> {
@@ -280,6 +280,54 @@ test("browser bare URL explains invite requirement and human token claims displa
     await guestPage.waitForSelector("text=Ship the browser room safely.");
     // Roster continues to show the chosen display name.
     await guestPage.waitForSelector("text=Project Seven");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("browser reply affordance: per-message reply button, clearable composer indicator, reply_to send + timeline context (#113)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // Seed a message to reply to.
+    await page.fill("#message-text", "first message here");
+    await page.click("#send-button");
+    await page.waitForSelector(".message:not(.system) .message-text:has-text('first message here')");
+    const firstRow = page.locator(".message:not(.system)", { hasText: "first message here" });
+
+    // Discoverable per-message reply action → composer shows the reply indicator.
+    await firstRow.locator(".reply-btn").click();
+    await page.waitForSelector("#reply-indicator", { state: "visible" });
+    assert.match(await page.locator("#reply-indicator-label").innerText(), /Replying to Host #\d+/);
+
+    // The indicator is clearable before send.
+    await page.click("#reply-clear");
+    await page.waitForSelector("#reply-indicator", { state: "hidden" });
+
+    // Reply again, then send: the send carries the existing reply_to metadata.
+    await firstRow.locator(".reply-btn").click();
+    await page.waitForSelector("#reply-indicator", { state: "visible" });
+    await page.fill("#message-text", "the reply body");
+    await page.click("#send-button");
+    await page.waitForSelector(".message:not(.system) .message-text:has-text('the reply body')");
+    // Indicator clears after a successful send.
+    await page.waitForSelector("#reply-indicator", { state: "hidden" });
+
+    // Replied-to context renders in the timeline from the reply_to metadata.
+    await page.waitForSelector(".reply-context");
+    assert.match(await page.locator(".reply-context").last().innerText(), /↩ Host: first message here/);
+
+    // Server log: the reply carries reply_to = the first message's id (no new schema).
+    const messages = await readMessages(fixture.root, fixture.roomId);
+    const first = messages.find((m) => m.text.includes("first message here"));
+    const reply = messages.find((m) => m.text.includes("the reply body"));
+    assert.ok(first && reply, "both messages persisted");
+    assert.equal(reply?.reply_to, first?.id);
   } finally {
     await browser.close();
     await fixture.close();
