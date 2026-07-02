@@ -909,3 +909,65 @@ test("markdown.js renders a hostile corpus inert — script tags, on* handlers, 
     await fixture.close();
   }
 });
+
+test("the roster shows an honest wake-tier chip derived from effective_mode (#185)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    // Agents with distinct negotiated modes, plus one that declared nothing.
+    await writeParticipants(fixture.root, fixture.roomId, [
+      { ...participant("host", "human", true, fixture.hostToken), display_name: "Host" },
+      {
+        ...participant("waker", "agent", false, "t-waker"),
+        attention: "attending",
+        requested_mode: "wake_on_event",
+        effective_mode: "wake_on_event"
+      },
+      {
+        ...participant("fg", "agent", false, "t-fg"),
+        attention: "attending",
+        requested_mode: "foreground_attended",
+        effective_mode: "foreground_attended"
+      },
+      {
+        ...participant("relay", "agent", false, "t-relay"),
+        attention: "manual",
+        requested_mode: "manual",
+        effective_mode: "manual"
+      },
+      { ...participant("undeclared", "agent", false, "t-undeclared"), attention: "manual" }
+    ]);
+
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForFunction(
+      () => document.querySelectorAll("#participant-list .participant").length >= 5
+    );
+
+    const tiers = await page.evaluate(() => {
+      const out: Record<string, string | null> = {};
+      for (const li of document.querySelectorAll("#participant-list .participant")) {
+        const alias = li.querySelector("strong")?.textContent || "";
+        const chip = li.querySelector(".tier-chip");
+        out[alias] = chip ? chip.getAttribute("data-tier") : null;
+      }
+      return out;
+    });
+
+    assert.equal(tiers["waker"], "A");
+    assert.equal(tiers["fg"], "B");
+    assert.equal(tiers["relay"], "C");
+    // 9A invariant: an agent that declared no modes shows NO tier chip — the roster
+    // never claims a wake capability that was not declared.
+    assert.equal(tiers["undeclared"], null);
+
+    // The chip carries its short label and an honest tooltip (behavior, not harness).
+    const chipA = page.locator('.tier-chip[data-tier="A"]');
+    assert.match((await chipA.textContent()) || "", /Tier A/);
+    assert.match((await chipA.getAttribute("title")) || "", /wakes on|auto/i);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

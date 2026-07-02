@@ -145,6 +145,9 @@ async function handleRequest(context: RequestContext): Promise<void> {
   // browser-only reimplementation.
   if (context.req.method === "GET" && pathname === "/mentions.js") return serveProtocolAsset(context, "mentions.js");
   if (context.req.method === "GET" && pathname === "/validation.js") return serveProtocolAsset(context, "validation.js");
+  // Wake-tier derivation (#185): the roster imports the SAME protocol function the
+  // cards use, so the tier can never drift between surfaces.
+  if (context.req.method === "GET" && pathname === "/wake-tier.js") return serveProtocolAsset(context, "wake-tier.js");
   if (context.req.method === "GET" && pathname === "/manifest.webmanifest") {
     return serveBrowserAsset(context, "manifest.webmanifest", "application/manifest+json; charset=utf-8");
   }

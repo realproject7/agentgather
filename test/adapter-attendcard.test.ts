@@ -57,6 +57,8 @@ test("attention guidance states empty polls do not invoke the model and the safe
   });
   assert.match(text, /Requested mode: foreground_attended/);
   assert.match(text, /Effective mode: wake_on_event/);
+  // Wake tier (#185): effective wake_on_event → Tier A on the card.
+  assert.match(text, /Wake tier: Tier A · auto-wake — /);
   assert.match(text, /empty poll.*NOT invoke the model/i);
   assert.match(text, /Bounded safety wake/i);
   assert.match(text, /1800 s/);
@@ -99,4 +101,16 @@ test("the agent Attend Card includes the attention section and leaks no extra to
   // token appears only in the existing command context, not the Attention section.
   const attentionSection = card.slice(card.indexOf("## Attention"), card.indexOf("## Commands"));
   assert.equal(attentionSection.includes("tgl_secret_reviewer"), false, "attention section must not carry the token");
+  // The tier line lives in the Attention section and reads Tier A here.
+  assert.match(attentionSection, /Wake tier: Tier A/);
+});
+
+test("an agent that declares no supported modes shows Tier C, never an undeclared capability (#185)", () => {
+  // 9A invariant: with nothing declared, effective_mode is the manual floor, so the
+  // card must render the relay tier — not auto-wake — and never a higher capability.
+  const guidance = renderAttentionGuidance({});
+  assert.match(guidance, /Effective mode: manual/);
+  assert.match(guidance, /Wake tier: Tier C · relay/);
+  assert.equal(/Wake tier: Tier A/.test(guidance), false);
+  assert.equal(/Wake tier: Tier B/.test(guidance), false);
 });

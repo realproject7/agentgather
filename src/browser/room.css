@@ -871,6 +871,36 @@ pre {
   color: var(--warn);
 }
 
+/* wake-tier chip (#185): inline pill next to the effective mode. Pill skin comes
+   from .k-pill; the tier's colour reads capability at a glance — A capable (ok),
+   B needs-a-nudge (warn), C manual (muted) — all from tokens, no raw literals. */
+.tier-chip {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  vertical-align: baseline;
+  color: var(--muted);
+}
+
+.tier-chip[data-tier="A"] {
+  border-color: rgba(var(--ok-rgb), 0.32);
+  background: rgba(var(--ok-rgb), 0.12);
+  color: var(--ok);
+}
+
+.tier-chip[data-tier="B"] {
+  border-color: rgba(var(--warn-rgb), 0.32);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.tier-chip[data-tier="C"] {
+  border-color: var(--border);
+  background: var(--chip);
+  color: var(--muted);
+}
+
 /* host controls (#116): room-state segment + action grid, host-only */
 .rail-state {
   display: grid;
