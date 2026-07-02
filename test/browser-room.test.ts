@@ -266,10 +266,19 @@ test("browser bare URL explains invite requirement and human token claims displa
 
     const guestPage = await browser.newPage({ viewport: { width: 960, height: 700 } });
     await guestPage.goto(`${fixture.baseUrl}/#token=${humanToken}`);
-    await guestPage.waitForSelector("text=Choose your room name");
+    await guestPage.waitForSelector("text=Choose your display name");
+    // #97: the join modal asks for a DISPLAY NAME and never frames the field as
+    // the room name — regression guard on the confusing dogfood copy. The invite
+    // token owns identity; this field only controls the visible name.
+    const joinCopy = await guestPage.locator("#join-panel").innerText();
+    assert.match(joinCopy, /Choose your display name/);
+    assert.doesNotMatch(joinCopy, /room name/i);
+    assert.match(joinCopy, /invite token/i);
+    assert.match(joinCopy, /Display name/);
     await guestPage.fill("#display-name", "Project Seven");
     await guestPage.click("#join-button");
     await guestPage.waitForSelector("text=Ship the browser room safely.");
+    // Roster continues to show the chosen display name.
     await guestPage.waitForSelector("text=Project Seven");
   } finally {
     await browser.close();
