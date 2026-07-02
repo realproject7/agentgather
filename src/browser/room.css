@@ -108,6 +108,40 @@ h1::before {
   box-shadow: none;
 }
 
+/* notification opt-in controls (#186): visible topbar pills (unlike .icon-button,
+   which is a mobile-only affordance). Pill skin comes from .k-pill; the "on" state
+   reads via the accent token, all sourced from theme.css (anti-drift clean). */
+.notify-btn {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  background: var(--chip);
+  color: var(--muted-strong);
+  font-size: var(--fs-sm);
+}
+
+.notify-btn[hidden] {
+  display: none;
+}
+
+.notify-btn:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.notify-btn[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.notify-btn:active {
+  transform: translateY(1px);
+}
+
 .icon-button,
 .rail-actions button,
 .composer button,

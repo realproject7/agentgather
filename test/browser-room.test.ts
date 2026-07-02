@@ -980,3 +980,166 @@ test("the roster shows an honest wake-tier chip derived from effective_mode (#18
     await fixture.close();
   }
 });
+
+// Install a deterministic Notification double before page scripts run so the poll-
+// driven notification layer (#186) can be exercised headless.
+async function installNotificationDouble(page: import("playwright").Page, permission: string): Promise<void> {
+  await page.addInitScript((perm) => {
+    const calls: Array<{ title: string; body: string; tag: string }> = [];
+    Object.defineProperty(window, "__notifs", { value: calls, configurable: true });
+    let current = perm as string;
+    class FakeNotification {
+      constructor(title: string, opts?: { body?: string; tag?: string }) {
+        calls.push({ title, body: (opts && opts.body) || "", tag: (opts && opts.tag) || "" });
+      }
+      static get permission(): string {
+        return current;
+      }
+      static requestPermission(): Promise<string> {
+        if (current === "default") current = "granted";
+        return Promise.resolve(current);
+      }
+      close(): void {}
+    }
+    Object.defineProperty(window, "Notification", { value: FakeNotification, configurable: true });
+  }, permission);
+}
+
+test("a mention while unfocused fires one OS notification + title badge, dedups, and clears on focus (#186)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await installNotificationDouble(page, "default");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // Opt in: the click is the user gesture that grants permission (double → granted).
+    await page.click("#notify-toggle");
+    await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
+    assert.equal(await page.isHidden("#notify-scope"), false);
+
+    // Tab goes to the background, then a peer @mentions the host.
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await postMessage(fixture, fixture.reviewerToken, "@host please take a look when you can");
+
+    // One OS notification + a title unread count of 1.
+    await page.waitForFunction(() => document.title.startsWith("(1) "));
+    const first = await page.evaluate(() => (window as unknown as { __notifs: Array<{ title: string; body: string }> }).__notifs);
+    assert.equal(first.length, 1);
+    const note = first[0];
+    assert.ok(note, "one notification recorded");
+    // Body is GENERIC (sender alias only) — never the message text, so it can't leak.
+    assert.match(note.body, /New mention from reviewer/);
+    assert.equal(note.body.includes("please take a look"), false);
+    assert.equal(note.body.includes(fixture.hostToken), false);
+    assert.equal(note.body.includes(fixture.reviewerToken), false);
+
+    // De-dup: another poll cycle must NOT re-notify the same message id.
+    await page.waitForTimeout(3500);
+    const second = await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length);
+    assert.equal(second, 1);
+    assert.ok((await page.title()).startsWith("(1) "));
+
+    // Focusing clears the badge back to the base title.
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForFunction(() => document.title === "Agent Gather Room");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("permission-denied degrades silently to the title badge with no OS notification (#186)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await installNotificationDouble(page, "denied");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    await page.click("#notify-toggle");
+    await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await postMessage(fixture, fixture.reviewerToken, "@host ping while blocked");
+
+    // Title badge still appears; no OS notification is fired.
+    await page.waitForFunction(() => document.title.startsWith("(1) "));
+    const notifs = await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length);
+    assert.equal(notifs, 0);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("own messages and non-mentions in mentions-only scope do not notify (#186)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await installNotificationDouble(page, "default");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.click("#notify-toggle");
+    await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+    // Default scope is mentions-only: a non-mention from a peer must not notify.
+    await postMessage(fixture, fixture.reviewerToken, "hello everyone, no mention here");
+    await page.waitForTimeout(3500);
+    assert.equal(await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length), 0);
+    assert.equal(await page.title(), "Agent Gather Room");
+
+    // The host's own message never notifies, even while unfocused.
+    await page.fill("#message-text", "@reviewer my own note");
+    await page.click("#send-button");
+    await page.waitForSelector("text=@reviewer my own note");
+    await page.waitForTimeout(500);
+    assert.equal(await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length), 0);
+    assert.equal(await page.title(), "Agent Gather Room");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a notification body never carries an invite URL or token from the message text (#186)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await installNotificationDouble(page, "default");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.click("#notify-toggle");
+    await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+    // A peer @mentions the host but pastes an invite URL AND a tgl_-like token.
+    const token = "tgl_secret_9f3aK2p0Qz7Lx8Bn4Vd6Wc1";
+    await postMessage(
+      fixture,
+      fixture.reviewerToken,
+      `@host join https://agentgather.dev/#token=${token} — Bearer ${token}`
+    );
+
+    await page.waitForFunction(() => (window as unknown as { __notifs: unknown[] }).__notifs.length === 1);
+    const notif = await page.evaluate(
+      () => (window as unknown as { __notifs: Array<{ title: string; body: string }> }).__notifs[0]
+    );
+    assert.ok(notif);
+    // The OS body is generic — it carries neither the URL nor the token, from either
+    // the body or the title.
+    const combined = `${notif.title} ${notif.body}`;
+    assert.equal(combined.includes("agentgather.dev"), false);
+    assert.equal(combined.includes(token), false);
+    assert.equal(combined.includes("tgl_"), false);
+    assert.equal(combined.includes("https://"), false);
+    assert.match(notif.body, /New mention from reviewer/);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
