@@ -111,7 +111,7 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     // Browser human joins and sends through the broker, loading shell + assets.
     const page = await browser.newPage({ viewport: { width: 980, height: 720 } });
     await page.goto(`${publicBaseUrl}/#token=${humanToken}`);
-    await page.waitForSelector("text=Choose your room name");
+    await page.waitForSelector("text=Choose your display name");
     await page.fill("#display-name", "Remote Human");
     await page.click("#join-button");
     await page.waitForSelector("text=Forward through the broker.");
