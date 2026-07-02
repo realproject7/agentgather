@@ -50,8 +50,13 @@ export function buildWaitResponse(options: BuildWaitResponseOptions): WaitRespon
     mentioned: options.messages.some((message) => message.mentions.includes(options.participant)),
     next_since_id: nextSinceId,
     keep_waiting: options.keepWaiting,
-    next_cmd: options.keepWaiting
-      ? `curl -s "${roomUrl(options.baseUrl, `/wait?participant=${options.participant}&since_id=${nextSinceId}`)}" -H "Authorization: Bearer $TOKEN"`
-      : null
+    // #75: a delivered-message response (keep_waiting=false while the room is OPEN)
+    // must still carry an actionable, cursor-updated continuation so the caller can
+    // resume the /wait long-poll from next_since_id instead of dead-ending. next_cmd
+    // is null only when the room is closed — there is nothing left to continue.
+    next_cmd:
+      options.roomStatus === "open"
+        ? `curl -s "${roomUrl(options.baseUrl, `/wait?participant=${options.participant}&since_id=${nextSinceId}`)}" -H "Authorization: Bearer $TOKEN"`
+        : null
   };
 }

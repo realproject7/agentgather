@@ -126,6 +126,13 @@ test("/wait held request releases when a new message arrives", async () => {
     assert.equal(waited.body.heartbeat, false);
     assert.equal(waited.body.messages[0].text, "@agent wake");
     assert.equal(waited.body.keep_waiting, false);
+    // #75: a delivered message still carries an actionable continuation (cursor-
+    // updated) while the room is open — not a dead-end null.
+    assert.notEqual(waited.body.next_cmd, null);
+    assert.equal(
+      String(waited.body.next_cmd).includes(`/wait?participant=agent&since_id=${waited.body.next_since_id}`),
+      true
+    );
   } finally {
     await fixture.close();
   }

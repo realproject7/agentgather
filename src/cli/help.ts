@@ -10,6 +10,7 @@ export const KNOWN_COMMANDS = new Set([
   "reply",
   "watch",
   "attend",
+  "wake-adapter",
   "handoff",
   "export",
   "doctor",
@@ -32,6 +33,16 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "Run exactly one HTTP GET /wait turn (one-turn compatibility alias).",
     "Use agentgather attend to loop continuously. watch uses /wait, not /watch."
+  ].join("\n"),
+  "wake-adapter": [
+    "agentgather wake-adapter --exec <command> [--since id] [--max-turns n] [--max-events n] [--json]",
+    "",
+    "Opt-in local wake adapter (Tier A). Holds the cheap /wait long-poll and runs",
+    "<command> ONCE per actionable event (@mention / active-session start) — the",
+    "drain-on-run contract; empty polls only advance the durable cursor. The command",
+    "gets env AG_ROOM_URL + AG_SINCE_ID (pointers) and reads the room via the API",
+    "itself; room message content never reaches its argv/env, and it is spawned with",
+    "no shell. Declares wake_on_event on start; stops when the room closes."
   ].join("\n"),
   tunnel: [
     "agentgather tunnel start --room current --broker <url> --subdomain <slug> [--target http://127.0.0.1:8787] [--json]",
@@ -94,6 +105,7 @@ export function buildHelpText(): string {
     "  agentgather reply <message_id> <message> [--client-msg-id id] [--json]",
     "  agentgather watch [--since id] [--json]",
     "  agentgather attend [--since id] [--json]",
+    "  agentgather wake-adapter --exec <command> [--since id] [--max-turns n] [--max-events n] [--json]",
     "  agentgather handoff <alias> --summary <text-or-file> [--json]",
     "  agentgather export [--output file] [--json]",
     "  agentgather doctor [--json]",
@@ -107,6 +119,7 @@ export function buildHelpText(): string {
     "  messages    Read room messages",
     "  watch       Run one wait turn",
     "  attend      Stay in foreground attendance until the room closes",
+    "  wake-adapter Opt-in local wake adapter: run a command once per actionable event (Tier A)",
     "  handoff     Send an embedded handoff summary",
     "  export      Write a readable room artifact",
     "  doctor      Check local room health without printing secrets",
