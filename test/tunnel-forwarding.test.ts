@@ -52,12 +52,12 @@ async function setup(): Promise<Fixture> {
   const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
 
   await runRoomCommand(
-    ["start", "demo-room", "--alias", "host", "--brief", "Ship it.", "--url", hostBaseUrl, "--json"],
+    ["start", "demo-room", "--alias", "host", "--brief", "Ship it.", "--url", hostBaseUrl, "--show-token", "--json"],
     context
   );
   const hostToken = stdout.json<{ token: string }>().token;
   stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const reviewerToken = stdout.json<{ token: string }>().token;
 
   const broker = new TunnelBroker({ routeTtlMs: 60_000 });

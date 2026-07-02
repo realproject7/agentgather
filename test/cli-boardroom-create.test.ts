@@ -79,7 +79,7 @@ test("room channel-create adds a typed channel and rejects a duplicate", async (
 
 test("a legacy room (room start) still works and projects to #general; create flow is additive", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "legacy", "--alias", "host", "--json"], context);
+  await runRoomCommand(["start", "legacy", "--alias", "host", "--show-token", "--json"], context);
   const started = stdout.json<{ ok: true; token: string }>();
   assert.ok(started.token.startsWith("tgl_"));
   // No boardroom.json written by the legacy path; readBoardroom projects #general.

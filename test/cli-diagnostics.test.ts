@@ -44,7 +44,7 @@ async function makeContext(): Promise<{ context: CliContext; stdout: Capture; st
 
 test("export writes a readable artifact without mutating source messages", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "export-room", "--alias", "operator", "--json"], context);
+  await runRoomCommand(["start", "export-room", "--alias", "operator", "--show-token", "--json"], context);
   const started = stdout.json<{ token: string }>();
   stdout.chunks = [];
   await runRoomCommand(["join", "export-room", "--alias", "operator", "--token", started.token, "--url", "http://127.0.0.1:9"], context);
@@ -67,7 +67,7 @@ test("export writes a readable artifact without mutating source messages", async
 
 test("doctor reports actionable checks without dumping bearer tokens", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "doctor-room", "--alias", "operator", "--json"], context);
+  await runRoomCommand(["start", "doctor-room", "--alias", "operator", "--show-token", "--json"], context);
   const started = stdout.json<{ token: string }>();
 
   stdout.chunks = [];

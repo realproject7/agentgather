@@ -114,7 +114,7 @@ test("a request body over the limit is rejected before forwarding", async () => 
   const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
   await runRoomCommand(["start", "demo-room", "--alias", "host", "--url", hostBaseUrl, "--json"], context);
   stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const token = stdout.json<{ token: string }>().token;
 
   const broker = new TunnelBroker({ routeTtlMs: 60_000, limits: { requestBodyBytes: 64 }, logSink: () => {} });

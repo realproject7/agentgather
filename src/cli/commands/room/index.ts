@@ -110,7 +110,18 @@ async function roomStart(argv: string[], context: CliContext): Promise<number> {
   await writeParticipants(context.home, roomId, [participant(alias, kind, true, token)]);
   await writeToken(context.home, roomId, alias, token);
   await writeCurrent(context.home, { roomId, alias, token, baseUrl });
-  return emit(context, flagBoolean(args, "json"), { ok: true, room: roomId, alias, kind, token, baseUrl });
+  // Token surface (#146): the raw host token is NOT echoed by default so it does
+  // not land in shell history / CI logs / scrollback. It is persisted to local
+  // host state above (retrieve it with `room current --json`); pass
+  // `--show-token` to opt back in for programmatic use.
+  return emit(context, flagBoolean(args, "json"), {
+    ok: true,
+    room: roomId,
+    alias,
+    kind,
+    baseUrl,
+    ...(flagBoolean(args, "show-token") ? { token } : {})
+  });
 }
 
 // Host create-boardroom flow (T7): create the room + host participant like
@@ -618,10 +629,17 @@ async function roomInvite(argv: string[], context: CliContext): Promise<number> 
   const advertised = advertisedBaseUrl(context.home, current.roomId, current.baseUrl);
   const cardCommand = `curl -s "${roomUrl(advertised, `/card?participant=${alias}&token=${token}`)}"`;
   const browserUrl = `${normalizeBaseUrl(advertised)}/#token=${token}`;
+  // Token surface (#146): `--json` is token-free and invite-URL-free by default —
+  // the raw token, the `#token=` browser URL, and the token-bearing card command
+  // are omitted so they do not leak into logs/history. Pass `--show-token` to opt
+  // in for programmatic use; the human text output (below) and `room invite-card`
+  // remain the sharing path.
   return emit(
     context,
     flagBoolean(args, "json"),
-    { ok: true, room: current.roomId, alias, kind, token, card_command: cardCommand, browser_url: browserUrl },
+    flagBoolean(args, "show-token")
+      ? { ok: true, room: current.roomId, alias, kind, token, card_command: cardCommand, browser_url: browserUrl }
+      : { ok: true, room: current.roomId, alias, kind },
     `Invite ${alias}:\n${kind === "human" ? `Open: ${browserUrl}\n` : ""}${cardCommand}\n`
   );
 }

@@ -68,10 +68,10 @@ async function setup(options: { claimTimeoutMs?: number } = {}): Promise<Fixture
   const hostPort = await getFreePort();
   const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
 
-  await runRoomCommand(["start", "demo-room", "--alias", "host", "--brief", "Relay it.", "--url", hostBaseUrl, "--json"], context);
+  await runRoomCommand(["start", "demo-room", "--alias", "host", "--brief", "Relay it.", "--url", hostBaseUrl, "--show-token", "--json"], context);
   const hostToken = stdout.json<{ token: string }>().token;
   stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const reviewerToken = stdout.json<{ token: string }>().token;
 
   const records: Array<Record<string, unknown>> = [];
@@ -306,7 +306,7 @@ test("an over-limit relay request body is rejected before it is queued", async (
   };
   await runRoomCommand(["start", "demo-room", "--alias", "host", "--json"], context);
   stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const token = stdout.json<{ token: string }>().token;
 
   const broker = new TunnelBroker({ routeTtlMs: 60_000, limits: { requestBodyBytes: 64 }, logSink: () => {} });

@@ -95,7 +95,7 @@ test("broker access logs never contain tokens, query strings, message text, or b
     context
   );
   stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const token = stdout.json<{ token: string }>().token;
 
   const records: Array<Record<string, unknown>> = [];

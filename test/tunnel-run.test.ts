@@ -78,10 +78,10 @@ async function setup(options: { waitHoldMs?: number; brokerOptions?: Constructor
   const hostPort = await getFreePort();
   const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
 
-  await runRoomCommand(["start", "demo-room", "--alias", "host", "--brief", "Run it.", "--url", hostBaseUrl, "--json"], context);
+  await runRoomCommand(["start", "demo-room", "--alias", "host", "--brief", "Run it.", "--url", hostBaseUrl, "--show-token", "--json"], context);
   const hostToken = stdout.json<{ token: string }>().token;
   stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const reviewerToken = stdout.json<{ token: string }>().token;
 
   const broker = new TunnelBroker(options.brokerOptions ?? { routeTtlMs: 60_000, logSink: () => {} });
@@ -221,7 +221,7 @@ test("tunnel run installs a signal shutdown that closes the route and prints sta
     stdout,
     stderr: new Capture()
   };
-  await runRoomCommand(["start", "demo-room", "--alias", "host", "--json"], context);
+  await runRoomCommand(["start", "demo-room", "--alias", "host", "--show-token", "--json"], context);
   const hostToken = stdout.json<{ token: string }>().token;
 
   const broker = new TunnelBroker({ routeTtlMs: 60_000, logSink: () => {} });

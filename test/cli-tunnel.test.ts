@@ -86,7 +86,7 @@ test("tunnel start publishes the broker URL into room state, invite cards, /card
     await runRoomCommand(["start", "demo-room", "--alias", "host", "--brief", "Ship it.", "--json"], context);
 
     stdout.reset();
-    await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+    await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
     const invite = stdout.json<{ token: string }>();
 
     stdout.reset();
