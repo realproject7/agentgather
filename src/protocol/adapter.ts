@@ -12,6 +12,7 @@
 // (#139) and A2A cannot wake a detached agent without an adapter/supervisor.
 import type { AttentionMode } from "./types.js";
 import { describeAttentionMode } from "./attention.js";
+import { describeWakeTier, wakeTierForMode } from "./wake-tier.js";
 
 // Actionable events that justify invoking the model.
 export type ActionableEvent = "mention" | "assigned_post" | "relevant_message" | "session_state_change";
@@ -110,10 +111,15 @@ export interface AttentionCardInfo {
 // tokens or invite URLs. Always states that empty polls do not invoke the model
 // and that the safety wake is bounded.
 export function renderAttentionGuidance(info: AttentionCardInfo, harnessNote?: string): string {
+  // Wake tier (#185): derive honestly from the negotiated effective mode (the
+  // manual floor when nothing is declared), so the card never advertises a wake
+  // capability the participant did not declare.
+  const tier = describeWakeTier(wakeTierForMode(info.effective_mode ?? "manual"));
   const lines = [
     "## Attention",
     `Requested mode: ${info.requested_mode ?? "foreground_attended (default)"}`,
     `Effective mode: ${info.effective_mode ?? "manual (until you declare supported_modes)"}`,
+    `Wake tier: ${tier.label} — ${tier.headline}`,
     `Advisory poll cadence: ${info.poll_cadence_s ?? "host default"} s (a check interval — NOT a model-invocation cadence).`,
     "",
     "Wake-on-event contract:",

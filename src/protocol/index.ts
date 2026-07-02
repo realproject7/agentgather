@@ -9,3 +9,4 @@ export * from "./instructions.js";
 export * from "./types.js";
 export * from "./urls.js";
 export * from "./validation.js";
+export * from "./wake-tier.js";

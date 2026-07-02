@@ -1,5 +1,6 @@
 import { analyzeMentions } from "./mentions.js";
 import { renderSafeMarkdown } from "./markdown.js";
+import { describeWakeTier, wakeTierForMode } from "./wake-tier.js";
 
 const state = {
   token: null,
@@ -521,14 +522,30 @@ function renderParticipantGroup(label, group) {
     // `human · host` badge so the host's kind reads on the row itself — no new
     // card or layout shift. Non-host rows leave kind implied by the group header.
     const hostPart = participant.is_host ? `${participant.kind} · host · ` : "";
+    meta.append(document.createTextNode(`${aliasPart}${hostPart}`));
     // 9A: show the negotiated effective attention mode; when degraded (the host
     // requested a more capable mode than the participant can provide) show both
     // as `requested→effective`. effective_mode is always a declared mode or the
     // manual floor, so the roster never claims an undeclared capability.
-    const modePart = participant.effective_mode
-      ? `${participant.requested_mode && participant.requested_mode !== participant.effective_mode ? `${participant.requested_mode}→` : ""}${participant.effective_mode} · `
-      : "";
-    meta.textContent = `${aliasPart}${hostPart}${modePart}${formatRelative(participant.lastSeenAt)}`;
+    if (participant.effective_mode) {
+      const modeText =
+        participant.requested_mode && participant.requested_mode !== participant.effective_mode
+          ? `${participant.requested_mode}→${participant.effective_mode}`
+          : participant.effective_mode;
+      meta.append(document.createTextNode(`${modeText} `));
+      // Wake-tier chip (#185) next to the effective mode, derived from the SAME
+      // protocol function the attend card uses. Only rendered when a mode is
+      // declared, so it never claims an undeclared wake capability.
+      const tier = wakeTierForMode(participant.effective_mode);
+      const chip = document.createElement("span");
+      chip.className = "tier-chip k-pill";
+      chip.dataset.tier = tier;
+      chip.textContent = `Tier ${tier}`;
+      chip.title = describeWakeTier(tier).headline;
+      meta.append(chip);
+      meta.append(document.createTextNode(" · "));
+    }
+    meta.append(document.createTextNode(formatRelative(participant.lastSeenAt)));
     item.append(name, status, meta);
     participantList.append(item);
   }
