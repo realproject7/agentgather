@@ -101,10 +101,10 @@ async function startRoomFixture(): Promise<{
   close: () => Promise<void>;
 }> {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "message-room", "--alias", "operator", "--json"], context);
+  await runRoomCommand(["start", "message-room", "--alias", "operator", "--show-token", "--json"], context);
   const started = stdout.json<{ token: string }>();
   stdout.chunks = [];
-  await runRoomCommand(["invite", "reviewer", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--show-token", "--json"], context);
   const invite = stdout.json<{ token: string }>();
 
   const server = createRoomHttpServer({

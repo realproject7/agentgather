@@ -46,7 +46,7 @@ async function makeContext(): Promise<{ context: CliContext; stdout: Capture; st
 test("room lifecycle CLI creates rooms, updates briefs, invites participants, and closes cleanly", async () => {
   const { context, stdout } = await makeContext();
   await runRoomCommand(
-    ["start", "cli-room", "--alias", "operator", "--brief", "Review frontend implementation.", "--json"],
+    ["start", "cli-room", "--alias", "operator", "--brief", "Review frontend implementation.", "--show-token", "--json"],
     context
   );
   const started = stdout.json<{ ok: true; room: string; alias: string; token: string; baseUrl: string }>();
@@ -90,7 +90,7 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
   assert.equal(briefMessages.some((message) => message.type === "system" && message.text === "Room brief updated to v2"), true);
 
   stdout.chunks = [];
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
   const invite = stdout.json<{ ok: true; alias: string; kind: string; token: string; card_command: string; browser_url: string }>();
   assert.equal(invite.alias, "reviewer");
   assert.equal(invite.kind, "agent");
@@ -187,10 +187,10 @@ test("room CLI rejects invalid room IDs and participant aliases", async () => {
 
 test("room invite commands normalize trailing slash base URLs", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "slash-room", "--url", "http://127.0.0.1:8787/", "--json"], context);
+  await runRoomCommand(["start", "slash-room", "--url", "http://127.0.0.1:8787/", "--show-token", "--json"], context);
   stdout.chunks = [];
 
-  await runRoomCommand(["invite", "reviewer", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--show-token", "--json"], context);
   const invite = stdout.json<{ card_command: string }>();
   assert.match(invite.card_command, /http:\/\/127\.0\.0\.1:8787\/card\?participant=reviewer/);
   assert.doesNotMatch(invite.card_command, /127\.0\.0\.1:8787\/\/card/);
@@ -209,7 +209,7 @@ test("human invites print a browser-openable fragment URL", async () => {
   await runRoomCommand(["start", "human-room", "--brief", "Coordinate the human review.", "--json"], context);
   stdout.chunks = [];
 
-  await runRoomCommand(["invite", "guest", "--kind", "human", "--json"], context);
+  await runRoomCommand(["invite", "guest", "--kind", "human", "--show-token", "--json"], context);
   const invite = stdout.json<{ kind: string; token: string; browser_url: string }>();
   assert.equal(invite.kind, "human");
   assert.equal(invite.browser_url, `http://127.0.0.1:8787/#token=${invite.token}`);
@@ -257,7 +257,7 @@ test("room start --kind persists the host kind separately from the host role (V2
 
 test("room serve requires explicit secure remote opt-in", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "remote-room", "--alias", "operator", "--json"], context);
+  await runRoomCommand(["start", "remote-room", "--alias", "operator", "--show-token", "--json"], context);
   const started = stdout.json<{ token: string }>();
 
   await assert.rejects(runRoomCommand(["serve", "--host", "0.0.0.0"], context), /--allow-remote/);
@@ -284,10 +284,10 @@ test("room serve requires explicit secure remote opt-in", async () => {
 
 test("room brief set uses the live HTTP server when available so waiters are notified", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "server-brief", "--alias", "operator", "--json"], context);
+  await runRoomCommand(["start", "server-brief", "--alias", "operator", "--show-token", "--json"], context);
   const started = stdout.json<{ token: string }>();
   stdout.chunks = [];
-  await runRoomCommand(["invite", "reviewer", "--json"], context);
+  await runRoomCommand(["invite", "reviewer", "--show-token", "--json"], context);
   const invite = stdout.json<{ token: string }>();
 
   const server = createRoomHttpServer({

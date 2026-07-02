@@ -45,15 +45,15 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
   const hostBaseUrl = `http://127.0.0.1:${hostPort}`;
 
   await runRoomCommand(
-    ["start", "tunnel-room", "--alias", "operator", "--brief", "Forward through the broker.", "--url", hostBaseUrl, "--json"],
+    ["start", "tunnel-room", "--alias", "operator", "--brief", "Forward through the broker.", "--url", hostBaseUrl, "--show-token", "--json"],
     context
   );
   const hostToken = stdout.json<{ token: string }>().token;
   stdout.reset();
-  await runRoomCommand(["invite", "human", "--kind", "human", "--json"], context);
+  await runRoomCommand(["invite", "human", "--kind", "human", "--show-token", "--json"], context);
   const humanToken = stdout.json<{ token: string }>().token;
   stdout.reset();
-  await runRoomCommand(["invite", "curl-agent", "--kind", "agent", "--json"], context);
+  await runRoomCommand(["invite", "curl-agent", "--kind", "agent", "--show-token", "--json"], context);
   const curlToken = stdout.json<{ token: string }>().token;
 
   const broker = new TunnelBroker({ routeTtlMs: 60_000 });

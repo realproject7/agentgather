@@ -54,15 +54,15 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
   const baseUrl = `http://127.0.0.1:${port}`;
 
   await runRoomCommand(
-    ["start", "dogfood-room", "--alias", "operator", "--brief", "Coordinate the release check.", "--url", baseUrl, "--json"],
+    ["start", "dogfood-room", "--alias", "operator", "--brief", "Coordinate the release check.", "--url", baseUrl, "--show-token", "--json"],
     host.context
   );
   const started = host.stdout.json<{ token: string }>();
   host.stdout.reset();
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--json"], host.context);
+  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], host.context);
   const reviewerInvite = host.stdout.json<{ token: string }>();
   host.stdout.reset();
-  await runRoomCommand(["invite", "curl-agent", "--kind", "agent", "--json"], host.context);
+  await runRoomCommand(["invite", "curl-agent", "--kind", "agent", "--show-token", "--json"], host.context);
   const curlInvite = host.stdout.json<{ token: string }>();
   host.stdout.reset();
 
