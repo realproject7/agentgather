@@ -439,6 +439,29 @@ test("an invalid session_id is rejected before any join is recorded (#163)", asy
   }
 });
 
+test("the session_id marker is server-only and never exposed through the /status roster (#163)", async () => {
+  const fixture = await startFixture();
+  try {
+    // The agent joins with an opaque session marker; a duplicate join yields the warning.
+    await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "secret-marker-A" });
+    const dupe = await jsonFetch(fixture, "POST", "/join", fixture.agentToken, { session_id: "secret-marker-B" });
+    assert.match(dupe.body.warning, /already .*attended/i);
+    assert.ok(!dupe.body.warning.includes("secret-marker-A"));
+
+    // Any participant polling /status must NOT see other clients' session markers.
+    const status = await jsonFetch(fixture, "GET", "/status", fixture.hostToken);
+    assert.equal(status.status, 200);
+    for (const roster of status.body.participants as Array<Record<string, unknown>>) {
+      assert.equal("session_id" in roster, false);
+      assert.equal("token_hash" in roster, false);
+    }
+    // The raw serialized response carries no marker anywhere either.
+    assert.ok(!JSON.stringify(status.body).includes("secret-marker"));
+  } finally {
+    await fixture.close();
+  }
+});
+
 function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
   return {
     alias,

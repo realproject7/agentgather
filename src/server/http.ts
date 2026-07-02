@@ -736,7 +736,7 @@ function publicBoardroom(boardroom: Boardroom): PublicBoardroom {
   return out;
 }
 
-type PublicParticipant = Omit<Participant, "token_hash"> & {
+type PublicParticipant = Omit<Participant, "token_hash" | "session_id"> & {
   attendance_required: boolean;
   attendance_state: Participant["attention"] | "not_attending" | "stale";
   last_seen_age_ms: number;
@@ -750,6 +750,9 @@ function publicParticipant(
 ): PublicParticipant {
   const publicFields: Participant = { ...participant };
   delete publicFields.token_hash;
+  // The opaque session marker (#163) is a server-only duplicate-join signal; it is
+  // never returned to clients (a peer must not read others' session markers).
+  delete publicFields.session_id;
   const lastSeenAt = Date.parse(participant.lastSeenAt);
   const lastSeenAgeMs = Number.isFinite(lastSeenAt) ? Math.max(0, now - lastSeenAt) : Number.MAX_SAFE_INTEGER;
   const attendanceRequired = isForegroundRequired(attendancePolicy, participant);
