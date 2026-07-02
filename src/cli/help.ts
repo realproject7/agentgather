@@ -70,6 +70,7 @@ export function buildHelpText(): string {
     "  agentgather room serve [--port 8787] [--host 127.0.0.1] [--url URL] [--allow-remote]",
     "  agentgather room brief view|set [--body text] [--json]",
     "  agentgather room attendance view|set [--policy agents-foreground] [--json]",
+    "  agentgather room session start|end [--channel general] [--duration-m 30] [--mode agents-foreground] [--json]",
     "  agentgather room invite <alias> [--kind agent|human] [--json]",
     "  agentgather room invite-card <alias> [--json]",
     "  agentgather room join <room> --alias <alias> --token <token> [--url URL] [--json]",

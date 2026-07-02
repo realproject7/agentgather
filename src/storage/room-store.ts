@@ -5,6 +5,7 @@ import {
   buildMessage,
   clientMessageInputFromRecord,
   parseMentions,
+  type ActiveSession,
   type ClientMessageInput,
   type AttendancePolicy,
   type Message,
@@ -21,6 +22,14 @@ export const MAX_BRIEF_LENGTH = 16_000;
 export class RoomLogFullError extends Error {
   constructor() {
     super("room message log is full");
+  }
+}
+
+// Thrown when a start is requested while a session is already active (T11 MVP:
+// one active session per room). Mapped to HTTP 409 by the server.
+export class ActiveSessionExistsError extends Error {
+  constructor() {
+    super("an active chat session is already running");
   }
 }
 
@@ -69,6 +78,22 @@ export interface UpdateAttendancePolicyOptions {
   roomId: string;
   policy: AttendancePolicy;
   updatedBy: string;
+  now?: Date;
+}
+
+export interface StartActiveSessionOptions {
+  root: string;
+  roomId: string;
+  channelId: string;
+  startedBy: string;
+  expectedDurationM: number;
+  requestedMode?: AttendancePolicy;
+  now?: Date;
+}
+
+export interface EndActiveSessionOptions {
+  root: string;
+  roomId: string;
   now?: Date;
 }
 
@@ -308,13 +333,65 @@ export async function closeRoom(root: string, roomId: string, now: Date = new Da
   const paths = roomPaths(root, roomId);
   return withWriterLock(paths.lock, async () => {
     const state = await readRoomState(paths);
+    // Closing the room clears any active session (T11): state returns to idle.
+    const { active_session: _cleared, ...rest } = state;
     const closed = {
-      ...state,
+      ...rest,
       status: "closed" as const,
       updatedAt: now.toISOString()
     };
     await writeJson(paths.state, closed);
     return closed;
+  });
+}
+
+// Start the room's single active chat session (T11). Throws
+// ActiveSessionExistsError if one is already running (concurrent-start 409).
+export async function startActiveSession(options: StartActiveSessionOptions): Promise<ActiveSession> {
+  assertSafeSlug(options.roomId, "room id");
+  assertSafeSlug(options.startedBy, "started by");
+  const now = options.now ?? new Date();
+  const paths = roomPaths(options.root, options.roomId);
+  return withWriterLock(paths.lock, async () => {
+    const state = await readRoomState(paths);
+    if (state.active_session !== undefined && state.active_session.ended_at === undefined) {
+      throw new ActiveSessionExistsError();
+    }
+    const session: ActiveSession = {
+      channel_id: options.channelId,
+      started_at: now.toISOString(),
+      expected_duration_m: options.expectedDurationM,
+      started_by: options.startedBy
+    };
+    if (options.requestedMode !== undefined) session.requested_mode = options.requestedMode;
+    await writeJson(paths.state, {
+      ...state,
+      updatedAt: now.toISOString(),
+      active_session: session
+    });
+    return session;
+  });
+}
+
+// End the active chat session (T11). Returns the ended session (with ended_at
+// stamped) or null when none is active; the session is cleared from RoomState so
+// /status returns to idle.
+export async function endActiveSession(options: EndActiveSessionOptions): Promise<ActiveSession | null> {
+  assertSafeSlug(options.roomId, "room id");
+  const now = options.now ?? new Date();
+  const paths = roomPaths(options.root, options.roomId);
+  return withWriterLock(paths.lock, async () => {
+    const state = await readRoomState(paths);
+    if (state.active_session === undefined || state.active_session.ended_at !== undefined) {
+      return null;
+    }
+    const ended: ActiveSession = { ...state.active_session, ended_at: now.toISOString() };
+    const { active_session: _cleared, ...rest } = state;
+    await writeJson(paths.state, {
+      ...rest,
+      updatedAt: now.toISOString()
+    });
+    return ended;
   });
 }
 

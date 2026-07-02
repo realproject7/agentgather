@@ -9,11 +9,13 @@ import {
   createBoardroom,
   createForumPost,
   createRoom,
+  endActiveSession,
   listForumPosts,
   readBoardroom,
   readChannelView,
   readForumPost,
   setForumPostStatus,
+  startActiveSession,
   writeChannelCursor,
   readBrief,
   readParticipants,
@@ -24,9 +26,10 @@ import {
   upsertParticipant,
   writeParticipants
 } from "../../../storage/index.js";
-import type { Channel, Participant, ParticipantKind, RoomBrief } from "../../../protocol/index.js";
+import type { ActiveSession, Channel, Participant, ParticipantKind, RoomBrief } from "../../../protocol/index.js";
 import {
   assertSafeSlug,
+  DEFAULT_CHANNEL_ID,
   normalizeBaseUrl,
   parseAttendancePolicy,
   parseAttentionMode,
@@ -65,6 +68,7 @@ export async function runRoomCommand(argv: string[], context: CliContext): Promi
   if (subcommand === "boardroom") return roomBoardroom(rest, context);
   if (subcommand === "brief") return roomBrief(rest, context);
   if (subcommand === "attendance") return roomAttendance(rest, context);
+  if (subcommand === "session") return roomSession(rest, context);
   if (subcommand === "serve") return roomServe(rest, context);
   if (subcommand === "launch") return roomLaunch(rest, context);
   if (subcommand === "runtime-status") return roomRuntimeStatus(rest, context);
@@ -381,6 +385,130 @@ async function updateAttendancePolicyDirect(
     text: `Attendance policy set to ${state.attendance_policy}`
   });
   return { attendance_policy: state.attendance_policy };
+}
+
+// Active chat session (T11): host-only start/end of a channel-wide bounded
+// live-chat event for #general. Prefers the running server (its POST /session
+// wakes `/wait` immediately) and falls back to a direct writer-lock update +
+// system message when no server is reachable — mirroring `room brief`/`room
+// attendance`.
+async function roomSession(argv: string[], context: CliContext): Promise<number> {
+  const [action, ...rest] = argv;
+  const current = await readCurrent(context.home);
+  const args = parseArgs(rest);
+  if (action === "start") {
+    const channel = flagString(args, "channel") ?? DEFAULT_CHANNEL_ID;
+    if (channel !== DEFAULT_CHANNEL_ID) {
+      throw new Error(`active sessions are only available for #${DEFAULT_CHANNEL_ID} in this version`);
+    }
+    const expectedDurationM = parseSessionDuration(flagString(args, "duration-m"));
+    const modeValue = flagString(args, "mode");
+    const requestedMode = modeValue === undefined ? undefined : parseAttendancePolicy(modeValue);
+    const session =
+      (await postSessionToServer(current.baseUrl, current.token, {
+        action: "start",
+        channel,
+        expected_duration_m: expectedDurationM,
+        ...(requestedMode === undefined ? {} : { requested_mode: requestedMode })
+      })) ??
+      (await startSessionDirect(context, current.roomId, current.alias, channel, expectedDurationM, requestedMode));
+    return emit(
+      context,
+      flagBoolean(args, "json"),
+      { ok: true, active_session: session },
+      `Active chat session started in #${session.channel_id} (~${session.expected_duration_m}m)\n`
+    );
+  }
+  if (action === "end") {
+    const session =
+      (await postSessionToServer(current.baseUrl, current.token, { action: "end" })) ??
+      (await endSessionDirect(context, current.roomId));
+    return emit(
+      context,
+      flagBoolean(args, "json"),
+      { ok: true, active_session: session },
+      `Active chat session ended in #${session.channel_id}\n`
+    );
+  }
+  throw new Error("room session requires start or end");
+}
+
+function parseSessionDuration(value: string | undefined): number {
+  const durationM = Number(value ?? "30");
+  if (!Number.isInteger(durationM) || durationM <= 0) {
+    throw new Error("--duration-m must be a positive integer");
+  }
+  return durationM;
+}
+
+interface SessionRequestBody {
+  action: "start" | "end";
+  channel?: string;
+  expected_duration_m?: number;
+  requested_mode?: AttendancePolicy;
+}
+
+async function postSessionToServer(
+  baseUrl: string,
+  token: string,
+  body: SessionRequestBody
+): Promise<ActiveSession | null> {
+  try {
+    const response = await fetch(roomUrl(baseUrl, "/session"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+    const payload = await readResponseJson<{ active_session?: ActiveSession; message?: string }>(response);
+    if (response.status === 404) return null;
+    if (!response.ok || payload.active_session === undefined) {
+      throw new Error(payload.message ?? `session ${body.action} failed with HTTP ${response.status}`);
+    }
+    return payload.active_session;
+  } catch (error) {
+    if (error instanceof TypeError) return null;
+    throw error;
+  }
+}
+
+async function startSessionDirect(
+  context: CliContext,
+  roomId: string,
+  alias: string,
+  channel: string,
+  expectedDurationM: number,
+  requestedMode: AttendancePolicy | undefined
+): Promise<ActiveSession> {
+  const session = await startActiveSession({
+    root: context.home,
+    roomId,
+    channelId: channel,
+    startedBy: alias,
+    expectedDurationM,
+    ...(requestedMode === undefined ? {} : { requestedMode })
+  });
+  await appendServerMessage({
+    root: context.home,
+    roomId,
+    from: "system",
+    text: `Active chat session started in #${channel} by ${alias} (~${expectedDurationM}m)`
+  });
+  return session;
+}
+
+async function endSessionDirect(context: CliContext, roomId: string): Promise<ActiveSession> {
+  const session = await endActiveSession({ root: context.home, roomId });
+  if (session === null) throw new Error("no active chat session to end");
+  await appendServerMessage({
+    root: context.home,
+    roomId,
+    from: "system",
+    text: `Active chat session ended in #${session.channel_id}`
+  });
+  return session;
 }
 
 async function postBriefToServer(baseUrl: string, token: string, body: string): Promise<RoomBrief | null> {
