@@ -11,10 +11,34 @@
 import { renderSafeMarkdown } from "./markdown.js";
 
 const hashParams = new URLSearchParams(location.hash.replace(/^#/, ""));
-const token = hashParams.get("token");
+const fragmentToken = hashParams.get("token");
+// Token: prefer the invite fragment, else this tab's sessionStorage copy, so a
+// refresh or deep link keeps auth without leaving the token in the address bar.
+// Mirrors the room surface (room.js, key "agentgather.token"). The token lives
+// only in the fragment + tab-scoped sessionStorage — it is never written to the
+// query string/history or persisted to host-owned room files (#172).
+const token = fragmentToken || sessionStorage.getItem("agentgather.token");
+if (token) sessionStorage.setItem("agentgather.token", token);
 // Strip the token from the address bar once read (mirrors the room surface).
-if (token) history.replaceState(null, "", location.pathname + location.search);
+if (fragmentToken) history.replaceState(null, "", location.pathname + location.search);
 const channel = new URLSearchParams(location.search).get("channel");
+
+// Deep link (V2 #172): the selected forum post is addressable via a `post` query
+// param alongside `channel`, so refresh / copy-link / direct handoff reopen the
+// thread instead of falling back to the feed. The token is never written back
+// here — it was stripped from the URL above and lives only in memory, so the
+// synced address bar carries no bearer/participant token or invite URL.
+function selectedPostParam() {
+  return new URLSearchParams(location.search).get("post");
+}
+
+function syncSelectionUrl(postId) {
+  const params = new URLSearchParams(location.search);
+  if (postId === null || postId === undefined || postId === "") params.delete("post");
+  else params.set("post", String(postId));
+  const qs = params.toString();
+  history.replaceState(null, "", `${location.pathname}${qs ? `?${qs}` : ""}`);
+}
 
 const STATUSES = ["open", "answered", "resolved", "closed"];
 const MONTHS = [
@@ -321,6 +345,7 @@ async function selectPost(id) {
   state.selected = id;
   state.view = "thread";
   shell.dataset.view = "thread";
+  syncSelectionUrl(id);
   setRailActive();
   el("detail").hidden = true;
   el("detail-state").hidden = false;
@@ -342,8 +367,22 @@ function backToFeed() {
   state.selected = null;
   state.view = "feed";
   shell.dataset.view = "feed";
+  syncSelectionUrl(null);
   setRailActive();
   renderFeed();
+}
+
+// On initial load, honor a deep-linked post: open the thread when the id maps to
+// a real post in the loaded feed; otherwise fall back gracefully to the feed and
+// drop the stale param so the address bar matches the visible view (#172).
+function applyInitialSelection() {
+  const postId = selectedPostParam();
+  if (!postId) return;
+  if (state.posts.some((p) => String(p.id) === String(postId))) {
+    void selectPost(postId);
+  } else {
+    syncSelectionUrl(null);
+  }
 }
 
 async function loadParticipants() {
@@ -473,7 +512,7 @@ function start() {
     setListState("No forum channel selected. Add ?channel=<forum-channel> to the URL.", true);
     return;
   }
-  void loadParticipants().then(loadPosts);
+  void loadParticipants().then(loadPosts).then(applyInitialSelection);
 }
 
 start();
