@@ -169,6 +169,11 @@ test("the broker stores no target and relays requests through a host attendant",
     const shell = await fetch(`${fixture.publicBaseUrl}/`);
     assert.equal(shell.status, 200);
     assert.match(await shell.text(), /Agent Gather Room/);
+    // #181: the room server's CSP + hardening headers must survive the relay hop
+    // (host attendant capture + broker forward), not just direct serving.
+    assert.match(shell.headers.get("content-security-policy") ?? "", /script-src 'self'/);
+    assert.equal(shell.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(shell.headers.get("referrer-policy"), "no-referrer");
 
     const wait = await fetch(`${fixture.publicBaseUrl}/wait?participant=reviewer&since_id=999`, {
       headers: { Authorization: `Bearer ${fixture.reviewerToken}` }

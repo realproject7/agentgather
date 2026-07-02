@@ -12,7 +12,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { normalizeBaseUrl } from "../protocol/index.js";
-import { type ForwardedRequest, type ForwardedResponse, TunnelError } from "./protocol.js";
+import { FORWARDED_RESPONSE_HEADERS, type ForwardedRequest, type ForwardedResponse, TunnelError } from "./protocol.js";
 
 // Request headers passed through to the host. The Authorization header carries
 // the participant token the host uses to derive sender identity. Origin and
@@ -69,9 +69,7 @@ export async function forwardToHost(options: ForwardOptions): Promise<ForwardRes
     throw new TunnelError("response_too_large", 502, "forwarded response exceeds the broker limit");
   }
 
-  const responseHeaders: Record<string, string> = {};
-  const contentType = response.headers.get("content-type");
-  if (contentType !== null) responseHeaders["content-type"] = contentType;
+  const responseHeaders = selectForwardedResponseHeaders(response.headers);
   options.res.writeHead(response.status, responseHeaders);
 
   const bytesOut = await streamResponse(response, options.res, options.responseBodyBytes);
@@ -149,11 +147,22 @@ export async function relayToLocalServer(
   if (buffer.length > responseBodyBytes) {
     throw new TunnelError("response_too_large", 502, "host response exceeds the broker limit");
   }
-  const responseHeaders: Record<string, string> = {};
-  const contentType = response.headers.get("content-type");
-  if (contentType !== null) responseHeaders["content-type"] = contentType;
-  const result: ForwardedResponse = { status: response.status, headers: responseHeaders };
+  const result: ForwardedResponse = {
+    status: response.status,
+    headers: selectForwardedResponseHeaders(response.headers)
+  };
   if (buffer.length > 0) result.body_base64 = buffer.toString("base64");
+  return result;
+}
+
+// Copy the allowlisted response headers (content-type + the #181 hardening set)
+// from a fetch Response into a plain lowercase-keyed map for forwarding.
+function selectForwardedResponseHeaders(headers: Headers): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const name of FORWARDED_RESPONSE_HEADERS) {
+    const value = headers.get(name);
+    if (value !== null) result[name] = value;
+  }
   return result;
 }
 

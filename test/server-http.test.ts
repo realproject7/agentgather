@@ -504,6 +504,40 @@ test("the rate-limit bucket map stays bounded as aliases churn (expired windows 
   clearRateBuckets();
 });
 
+test("every room-server response carries the CSP + browser-hardening headers (#181)", async () => {
+  const fixture = await startFixture();
+  try {
+    // HTML shell: strict script-src plus object-src/base-uri/frame-ancestors none.
+    const html = await fetch(`${fixture.baseUrl}/`);
+    assert.equal(html.status, 200);
+    const csp = html.headers.get("content-security-policy") ?? "";
+    assert.match(csp, /script-src 'self'/);
+    assert.match(csp, /object-src 'none'/);
+    assert.match(csp, /base-uri 'none'/);
+    assert.match(csp, /frame-ancestors 'none'/);
+    // No 'unsafe-inline' — the browser assets carry no inline script, so the CSP
+    // stays strict; a regression that injected one would be blocked, not allowed.
+    assert.equal(/unsafe-inline/.test(csp), false);
+    assert.equal(html.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(html.headers.get("referrer-policy"), "no-referrer");
+
+    // JSON/API responses carry them too (harmless for CLI/API; nosniff still helps).
+    const status = await fetch(`${fixture.baseUrl}/status`, {
+      headers: { Authorization: `Bearer ${fixture.hostToken}` }
+    });
+    assert.equal(status.status, 200);
+    assert.equal(status.headers.get("x-content-type-options"), "nosniff");
+    assert.match(status.headers.get("content-security-policy") ?? "", /script-src 'self'/);
+
+    // Even error responses are hardened (they render as JSON but stay covered).
+    const notFound = await fetch(`${fixture.baseUrl}/does-not-exist`);
+    assert.equal(notFound.status, 404);
+    assert.equal(notFound.headers.get("referrer-policy"), "no-referrer");
+  } finally {
+    await fixture.close();
+  }
+});
+
 function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
   return {
     alias,

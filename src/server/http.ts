@@ -91,9 +91,27 @@ const rateBuckets = new Map<string, { resetAt: number; count: number }>();
 const loopCounts = new Map<string, number>();
 const ATTENDANCE_STALE_AFTER_MS = 90_000;
 
+// Browser-hardening headers (#181) on every room-server response. The single XSS
+// defense (markdown.js builds DOM via textContent/createElement, never innerHTML)
+// gains a second layer: a strict script-src blocks any inline/injected script,
+// event handler, or javascript: URL that a renderer regression might let through.
+// The browser assets carry NO inline <script>/<style>, so 'self' needs no nonce.
+// object-src/base-uri/frame-ancestors 'none' block plugins, <base> hijacking, and
+// clickjacking. Applied to every response (harmless on JSON/API; CLI ignores it).
+export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Security-Policy": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer"
+};
+
+function applySecurityHeaders(res: ServerResponse): void {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+}
+
 export function createRoomHttpServer(options: RoomHttpServerOptions): Server {
   const resolved = resolveOptions(options);
   return createServer((req, res) => {
+    applySecurityHeaders(res);
     const url = new URL(req.url ?? "/", resolved.baseUrl);
     void handleRequest({ req, res, url, options: resolved }).catch((error: unknown) => {
       sendError(res, error);

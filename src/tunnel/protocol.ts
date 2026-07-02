@@ -185,6 +185,19 @@ const SENSITIVE_HEADERS = new Set([
 ]);
 
 /**
+ * Response header names forwarded from the host room server back to the browser.
+ * content-type is always required; the browser-hardening headers (#181) must
+ * survive both proxy hops (broker relay + BYO proxy) so the room server's CSP,
+ * nosniff, and referrer policy actually reach the browser under tunneled serving.
+ */
+export const FORWARDED_RESPONSE_HEADERS = new Set([
+  "content-type",
+  "content-security-policy",
+  "x-content-type-options",
+  "referrer-policy"
+]);
+
+/**
  * Remove credential-bearing headers from a forwarded header map so tunnel logs
  * and metrics can never capture participant tokens. Pure; returns a new map and
  * does not mutate the input.
