@@ -40,7 +40,6 @@ import {
   renderAgentInstructions,
   renderAttentionGuidance,
   renderForumReviewGuidance,
-  roomUrl,
   type AttentionCardInfo,
   type ForumPostStatus
 } from "../protocol/index.js";
@@ -984,6 +983,11 @@ export function renderAttendCard(
   attention: AttentionCardInfo = {},
   forumReviewChannel?: string
 ): string {
+  // Security/UX (#109): the raw token appears exactly ONCE — in the AG_TOKEN
+  // export below — and every example references $AG_BASE / $AG_TOKEN, mirroring
+  // the forum-review block. This keeps the token from being scattered across
+  // curl examples where it is easy to leak on copy/paste or in shared logs.
+  const base = normalizeBaseUrl(baseUrl);
   return [
     `# Agent Gather Attend Card: ${alias}`,
     "",
@@ -997,14 +1001,16 @@ export function renderAttendCard(
     renderAttentionGuidance(attention),
     "",
     "## Commands",
-    `curl -s "${roomUrl(baseUrl, `/card?participant=${alias}&token=${token}`)}"`,
-    `curl -s -X POST "${roomUrl(baseUrl, "/join")}" -H "Authorization: Bearer ${token}"`,
-    `curl -s "${roomUrl(baseUrl, `/wait?participant=${alias}&since_id=0`)}" -H "Authorization: Bearer ${token}"`,
+    "Set these once; the token appears only here (keep it secret):",
+    `export AG_BASE='${base}' AG_TOKEN='${token}'`,
+    `curl -s "$AG_BASE/card?participant=${alias}&token=$AG_TOKEN"`,
+    `curl -s -X POST "$AG_BASE/join" -H "Authorization: Bearer $AG_TOKEN"`,
+    `curl -s "$AG_BASE/wait?participant=${alias}&since_id=0" -H "Authorization: Bearer $AG_TOKEN"`,
     `agentgather attend --json`,
-    `curl -s "${roomUrl(baseUrl, "/messages?since_id=0")}" -H "Authorization: Bearer ${token}"`,
-    `curl -s -X POST "${roomUrl(baseUrl, "/messages")}" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
+    `curl -s "$AG_BASE/messages?since_id=0" -H "Authorization: Bearer $AG_TOKEN"`,
+    `curl -s -X POST "$AG_BASE/messages" -H "Authorization: Bearer $AG_TOKEN" -H "Content-Type: application/json" --data '{"text":"hello"}'`,
     "",
-    ...(forumReviewChannel === undefined ? [] : forumReviewSection(baseUrl, token, forumReviewChannel)),
+    ...(forumReviewChannel === undefined ? [] : forumReviewSection(forumReviewChannel)),
     ...attendanceRecovery(forumReviewChannel !== undefined),
     "",
     "## First Action",
@@ -1042,15 +1048,15 @@ function attendanceRecovery(forumReview: boolean): string[] {
 }
 
 // Forum review task block (T10): the 9B wake-on-event guidance + copy-pastable
-// commands against the real T6 forum endpoints. The token appears exactly once
-// (in the env export); the curls reference $AG_TOKEN so it is not repeated.
-function forumReviewSection(baseUrl: string, token: string, channel: string): string[] {
-  const base = normalizeBaseUrl(baseUrl);
+// commands against the real T6 forum endpoints. The token is NOT re-exported
+// here — AG_BASE / AG_TOKEN are exported once in the Commands section above
+// (#109), and these curls reference $AG_TOKEN so the raw token appears exactly
+// once in the whole card.
+function forumReviewSection(channel: string): string[] {
   return [
     renderForumReviewGuidance(channel),
     "",
-    "Forum commands (set these once; the token appears only here):",
-    `export AG_BASE='${base}' AG_TOKEN='${token}'`,
+    "Forum commands (reuse the AG_BASE / AG_TOKEN exported above):",
     "# check assigned/updated forum posts",
     `curl -s "$AG_BASE/forum/posts?channel=${channel}" -H "Authorization: Bearer $AG_TOKEN"`,
     "# read a post + its comments (replace POST_ID)",

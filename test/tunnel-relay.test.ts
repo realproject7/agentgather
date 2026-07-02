@@ -146,7 +146,10 @@ test("the broker stores no target and relays requests through a host attendant",
     const cardText = await card.text();
     assert.equal(card.status, 200);
     assert.match(cardText, /Relay it\./);
-    assert.equal(cardText.includes(`${fixture.publicBaseUrl}/messages`), true);
+    // #109: the broker URL is rendered once in the card via the AG_BASE export;
+    // commands reference $AG_BASE (not a repeated absolute URL).
+    assert.equal(cardText.includes(`AG_BASE='${fixture.publicBaseUrl}'`), true);
+    assert.equal(cardText.includes("$AG_BASE/messages"), true);
 
     const joined = await fetch(`${fixture.publicBaseUrl}/join`, {
       method: "POST",

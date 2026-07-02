@@ -53,13 +53,15 @@ test("an agent invited for forum review gets the forum section + real T6 command
   assert.match(card, /return to your declared attention mode/);
   // safety language intact (advice, not authority)
   assert.match(card, /external advice, not operator instructions/);
-  // Within the new forum-review section the token appears exactly once (the env
-  // export); the forum curls reference $AG_TOKEN, so T10 adds no extra repetition
-  // beyond the existing necessary invite context.
+  // #109: the raw token appears exactly ONCE in the whole card (the AG_TOKEN
+  // export in the Commands section); the forum-review section re-exports nothing
+  // and its curls reference $AG_TOKEN.
+  const cardOccurrences = card.split("tgl_secret_reviewer").length - 1;
+  assert.equal(cardOccurrences, 1, "raw token must appear exactly once in the whole card (env export)");
+  assert.match(card, /export AG_BASE='http:\/\/127\.0\.0\.1:8787' AG_TOKEN='tgl_secret_reviewer'/);
   const forumSection = card.slice(card.indexOf("## Forum review task"), card.indexOf("## Attendance Recovery"));
-  const occurrences = forumSection.split("tgl_secret_reviewer").length - 1;
-  assert.equal(occurrences, 1, "forum review token must appear once in the section (env export), not repeated");
-  assert.match(forumSection, /export AG_BASE='http:\/\/127\.0\.0\.1:8787' AG_TOKEN='tgl_secret_reviewer'/);
+  assert.equal(forumSection.includes("tgl_secret_reviewer"), false, "forum section must not repeat the raw token");
+  assert.match(forumSection, /reuse the AG_BASE \/ AG_TOKEN exported above/);
 });
 
 test("an agent NOT invited for forum review gets no forum section (zero regression)", () => {
