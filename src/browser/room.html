@@ -56,6 +56,10 @@
       </section>
 
       <div class="room-main">
+      <div id="session-banner" class="session-banner" role="status" aria-live="polite" hidden>
+        <span class="session-ic" aria-hidden="true">◆</span>
+        <span class="session-text"><b id="session-title"></b> <span id="session-detail"></span></span>
+      </div>
       <div id="room-banner" class="room-banner" role="status" aria-live="polite" hidden>
         <span class="banner-ic" aria-hidden="true"></span>
         <span class="banner-text"><b id="banner-title"></b> <span id="banner-detail"></span></span>
@@ -115,6 +119,10 @@
               <button id="export-button" class="rail-btn" type="button">export</button>
               <button id="tickets-button" class="rail-btn" type="button" disabled title="No follow-up data available in the local host room.">tickets</button>
             </div>
+            <div id="session-control" class="rail-session">
+              <button id="session-toggle" class="rail-btn session-toggle" type="button" data-mode="start" title="Start or end a channel-wide active chat session in #general.">start session</button>
+            </div>
+            <div id="session-error" class="rail-note session-error-note" role="alert" hidden></div>
             <div id="invite-note" class="rail-note" hidden></div>
           </section>
         </aside>
