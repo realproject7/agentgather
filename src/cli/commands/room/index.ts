@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -52,7 +53,7 @@ import {
   type RuntimeLaunchPlan
 } from "../../../server/index.js";
 import { readPublicBaseUrl } from "../../../tunnel/index.js";
-import { parseArgs, flagBoolean, flagString } from "../../args.js";
+import { parseArgs, flagBoolean, flagString, type ParsedArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
 import { readCurrent, readToken, writeCurrent, writeToken } from "../../state.js";
 
@@ -86,6 +87,26 @@ export async function runRoomCommand(argv: string[], context: CliContext): Promi
   return 1;
 }
 
+// Resolve a brief body from either the inline flag or `--brief-file <path>`
+// (#114). Reading from a file lets hosts author multiline Markdown briefs with
+// real newlines instead of shell-escaped literal `\n`, which rendered visibly in
+// the room brief. Returns undefined when neither is provided (callers keep their
+// existing default). A missing/unreadable file, or passing both inputs, fails
+// with a clear error.
+async function resolveBriefBody(args: ParsedArgs, inlineFlag: string): Promise<string | undefined> {
+  const filePath = flagString(args, "brief-file");
+  const inline = flagString(args, inlineFlag);
+  if (filePath === undefined) return inline;
+  if (inline !== undefined) {
+    throw new Error(`provide either --${inlineFlag} or --brief-file, not both`);
+  }
+  try {
+    return await readFile(filePath, "utf8");
+  } catch (error) {
+    throw new Error(`could not read --brief-file '${filePath}': ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function roomStart(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
   const roomId = args.positional[0];
@@ -93,7 +114,7 @@ async function roomStart(argv: string[], context: CliContext): Promise<number> {
   const alias = flagString(args, "alias") ?? "host";
   const baseUrl = normalizeBaseUrl(flagString(args, "url") ?? "http://127.0.0.1:8787");
   const token = createToken();
-  const briefBody = flagString(args, "brief") ?? "";
+  const briefBody = (await resolveBriefBody(args, "brief")) ?? "";
   const expiresAt = flagString(args, "expires-at");
   // Host kind is modeled separately from the host role (V2 #169): an agent host
   // keeps is_host/ownership but groups under AGENTS. Defaults to human, so
@@ -134,7 +155,7 @@ async function roomCreateBoardroom(argv: string[], context: CliContext): Promise
   const alias = flagString(args, "alias") ?? "host";
   const baseUrl = normalizeBaseUrl(flagString(args, "url") ?? "http://127.0.0.1:8787");
   const token = createToken();
-  const briefBody = flagString(args, "brief") ?? "";
+  const briefBody = (await resolveBriefBody(args, "brief")) ?? "";
   const expiresAt = flagString(args, "expires-at");
   const now = new Date();
   const channels = parseChannelSpec(flagString(args, "channels"), now.toISOString());
@@ -349,7 +370,7 @@ async function roomBrief(argv: string[], context: CliContext): Promise<number> {
     return emit(context, flagBoolean(args, "json"), { ok: true, brief }, brief.body);
   }
   if (action === "set") {
-    const body = flagString(args, "body") ?? args.positional.join(" ");
+    const body = (await resolveBriefBody(args, "body")) ?? args.positional.join(" ");
     if (body.length === 0) throw new Error("brief body is required");
     const brief =
       (await postBriefToServer(current.baseUrl, current.token, body)) ??
