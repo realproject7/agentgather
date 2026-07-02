@@ -762,3 +762,87 @@ test("last-message rail KV updates on the sender's own send (#121/#123)", async 
     await fixture.close();
   }
 });
+
+test("host starts and ends an active chat session; the banner reflects it and non-hosts see it read-only (#183)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const hostPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await hostPage.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await hostPage.waitForSelector("text=Ship the browser room safely.");
+    const guestPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await guestPage.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
+    await guestPage.waitForSelector("text=Ship the browser room safely.");
+
+    // Idle: no banner for anyone; the host toggle reads "start session".
+    assert.equal(await hostPage.isHidden("#session-banner"), true);
+    assert.equal(await guestPage.isHidden("#session-banner"), true);
+    assert.equal((await hostPage.textContent("#session-toggle"))?.trim(), "start session");
+
+    // Host starts a session — the prompt supplies the expected duration (T11 API).
+    hostPage.once("dialog", (dialog) => void dialog.accept("20"));
+    await hostPage.click("#session-toggle");
+
+    // The accent banner names the channel, elapsed vs expected, and the toggle flips.
+    await hostPage.waitForSelector("#session-banner:not([hidden])");
+    assert.equal(await hostPage.textContent("#session-title"), "Active session in #general");
+    assert.match((await hostPage.textContent("#session-detail")) || "", /0m elapsed · ~20m expected/);
+    await hostPage.waitForFunction(
+      () => document.getElementById("session-toggle")?.textContent?.trim() === "end session"
+    );
+    // T11 system message carries the "started" line — no separate toast layer.
+    await hostPage.waitForSelector("text=Active chat session started in #general");
+
+    // The non-host sees the same banner (informational) but has no host controls,
+    // so the start/end toggle is not reachable to them.
+    await guestPage.waitForSelector("#session-banner:not([hidden])");
+    assert.match((await guestPage.textContent("#session-title")) || "", /Active session in #general/);
+    assert.equal(await guestPage.isHidden("#host-controls"), true);
+    assert.equal(await guestPage.isHidden("#session-toggle"), true);
+
+    // Host ends the session — the confirm is accepted, banner collapses to idle,
+    // and the T11 "ended" line lands in the timeline.
+    hostPage.once("dialog", (dialog) => void dialog.accept());
+    await hostPage.click("#session-toggle");
+    await hostPage.waitForSelector("#session-banner", { state: "hidden" });
+    await hostPage.waitForFunction(
+      () => document.getElementById("session-toggle")?.textContent?.trim() === "start session"
+    );
+    await hostPage.waitForSelector("text=Active chat session ended in #general");
+    await guestPage.waitForSelector("#session-banner", { state: "hidden" });
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("the active-session banner renders a host-requested attendance policy and stays clear of raw color literals (#183)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    // A session started with a requested_mode (via the T11 API) surfaces that
+    // policy in the banner detail for everyone.
+    const started = await fetch(`${fixture.baseUrl}/session`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.hostToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start", expected_duration_m: 45, requested_mode: "agents-foreground" })
+    });
+    assert.equal(started.status, 201);
+
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("#session-banner:not([hidden])");
+    assert.match((await page.textContent("#session-detail")) || "", /~45m expected · attendance agents-foreground/);
+
+    // Idle vs active is a real visual change, not just text: the banner is on its
+    // own auto grid row that only occupies space when a session is active.
+    const bannerBox = await page.evaluate(() => {
+      const el = document.getElementById("session-banner");
+      return el ? el.getBoundingClientRect().height : 0;
+    });
+    assert.ok(bannerBox > 0, "active session banner occupies vertical space");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

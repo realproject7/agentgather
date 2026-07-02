@@ -26,7 +26,10 @@ const state = {
   // tell a closed room's read-only host history apart from "unavailable".
   historyAvailable: true,
   closedHistoryLoaded: false,
-  lastMessageTs: null
+  lastMessageTs: null,
+  // T11 active chat session (null when idle); refreshed from /status on the 5s poll.
+  activeSession: null,
+  sessionInFlight: false
 };
 
 const shell = document.querySelector(".room-shell");
@@ -76,6 +79,12 @@ const roomBanner = document.getElementById("room-banner");
 const bannerTitle = document.getElementById("banner-title");
 const bannerDetail = document.getElementById("banner-detail");
 const bannerAction = document.getElementById("banner-action");
+const sessionBanner = document.getElementById("session-banner");
+const sessionTitle = document.getElementById("session-title");
+const sessionDetail = document.getElementById("session-detail");
+const sessionControl = document.getElementById("session-control");
+const sessionToggle = document.getElementById("session-toggle");
+const sessionError = document.getElementById("session-error");
 const historyStrip = document.getElementById("history-strip");
 const historySourceTag = document.getElementById("history-source-tag");
 const historySourceNote = document.getElementById("history-source-note");
@@ -206,6 +215,7 @@ function bindEvents() {
     void submitMessage();
   });
   closeButton.addEventListener("click", () => void closeRoom());
+  sessionToggle.addEventListener("click", () => void toggleSession());
   exportButton.addEventListener("click", exportRoom);
   railBroadcast.addEventListener("click", () => {
     setBroadcast(true);
@@ -284,6 +294,9 @@ async function loadStatus() {
   hostControls.hidden = !payload.is_host;
   rsActive.classList.toggle("on", payload.room_status !== "closed");
   closeButton.classList.toggle("on", payload.room_status === "closed");
+  // T11 (#183): idle when absent, active while a session runs; the banner and the
+  // host toggle render off this in applyRoomState -> renderSession.
+  state.activeSession = payload.active_session || null;
   updateJoinFlips();
   applyRoomState();
 }
@@ -384,6 +397,45 @@ async function closeRoom() {
   const payload = await authFetch("/close", { method: "POST" });
   state.roomStatus = payload.room_status;
   await loadStatus();
+}
+
+// Host-only start/end of the T11 active chat session (#183). Start prompts for a
+// duration; end confirms. The server appends the start/end system message (T11),
+// so there is no separate toast — the timeline carries the "session ended" line.
+async function toggleSession() {
+  if (state.sessionInFlight || state.roomStatus === "closed") return;
+  const active = Boolean(state.activeSession);
+  let body;
+  if (active) {
+    if (!window.confirm("End the active chat session for everyone in #general?")) return;
+    body = { action: "end" };
+  } else {
+    const raw = window.prompt("Session length in minutes?", "30");
+    if (raw === null) return;
+    const minutes = Number.parseInt(raw, 10);
+    if (!Number.isInteger(minutes) || minutes <= 0) {
+      showSessionError("Enter a whole number of minutes greater than zero.");
+      return;
+    }
+    body = { action: "start", expected_duration_m: minutes };
+  }
+  sessionError.hidden = true;
+  state.sessionInFlight = true;
+  sessionToggle.disabled = true;
+  try {
+    await authFetch("/session", { method: "POST", body: JSON.stringify(body) });
+    await loadStatus();
+  } catch (error) {
+    showSessionError(error instanceof Error ? error.message : String(error));
+  } finally {
+    state.sessionInFlight = false;
+    sessionToggle.disabled = false;
+  }
+}
+
+function showSessionError(message) {
+  sessionError.textContent = message;
+  sessionError.hidden = false;
 }
 
 function exportRoom() {
@@ -843,7 +895,32 @@ function applyRoomState() {
   composer.hidden = closed;
   setComposerDisabled(closed || state.sendInFlight);
   renderBanner(closed);
+  renderSession(closed);
   renderHistoryStrip(closed);
+}
+
+// Active chat session surface (#183 / V2 T12): everyone sees the accent banner
+// while a session runs; the host also gets the start/end toggle (the toggle lives
+// inside #host-controls, so it is already gated to hosts). A closed room clears
+// the session server-side, so this collapses back to the idle look.
+function renderSession(closed) {
+  const session = closed ? null : state.activeSession;
+  if (session) {
+    const channel = session.channel_id || "general";
+    const elapsed = Math.max(0, Math.round((Date.now() - Date.parse(session.started_at)) / 60000));
+    const expected = session.expected_duration_m;
+    const policy = session.requested_mode ? ` · attendance ${session.requested_mode}` : "";
+    sessionTitle.textContent = `Active session in #${channel}`;
+    sessionDetail.textContent = `${elapsed}m elapsed · ~${expected}m expected${policy}`;
+    sessionBanner.hidden = false;
+  } else {
+    sessionBanner.hidden = true;
+  }
+  // The host can start a session only while the room is open; a closed room hides
+  // the control entirely (no fabricated affordance).
+  sessionControl.hidden = closed;
+  sessionToggle.dataset.mode = session ? "end" : "start";
+  sessionToggle.textContent = session ? "end session" : "start session";
 }
 
 function renderBanner(closed) {

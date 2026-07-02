@@ -298,7 +298,9 @@ h1::before {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* session banner, connection banner, then the workspace; a hidden banner
+     collapses its auto track to zero height so idle keeps the current look. */
+  grid-template-rows: auto auto minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -1195,6 +1197,71 @@ button:disabled {
 
 .timeline.hide-system .message.system {
   display: none;
+}
+
+/* ---- active chat session banner (#183 / V2 T12) ---- */
+/* Idle = no banner (current look); an active session lights up this accent-
+   tinted strip so idle vs active is unmistakable without any animation loop. */
+.session-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 9px 14px 0;
+  padding: 10px 13px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  background: var(--accent-weak);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+
+.session-banner[hidden] {
+  display: none;
+}
+
+.session-ic {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.session-text b {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.session-text span {
+  color: var(--muted);
+}
+
+/* host-only start/end control, in the host-controls rail (auto-gated on is_host) */
+.rail-session {
+  margin-top: 9px;
+}
+
+.rail-session[hidden] {
+  display: none;
+}
+
+.session-toggle {
+  width: 100%;
+}
+
+.session-toggle[data-mode="end"] {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.session-error-note {
+  border-color: rgba(var(--danger-rgb), 0.35);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 /* ---- route / quota banner (#83/#84) ---- */
