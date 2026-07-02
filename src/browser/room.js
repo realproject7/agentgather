@@ -30,7 +30,14 @@ const state = {
   lastMessageTs: null,
   // T11 active chat session (null when idle); refreshed from /status on the 5s poll.
   activeSession: null,
-  sessionInFlight: false
+  sessionInFlight: false,
+  // Room name (from /status), used to key per-room notification prefs.
+  roomName: null,
+  // Browser notification layer (#186): opt-in, poll-driven (no push/SSE/worker).
+  // enabled + scope persist per-room in sessionStorage; unread drives the title
+  // badge + favicon dot while the tab is unfocused. ready gates out the initial
+  // history backlog so only genuinely new messages notify.
+  notify: { enabled: false, scope: "mentions", ready: false, focused: true, unread: 0 }
 };
 
 const shell = document.querySelector(".room-shell");
@@ -59,6 +66,12 @@ const timeline = document.getElementById("timeline");
 const systemFilter = document.getElementById("system-filter");
 const participantList = document.getElementById("participant-list");
 const rosterToggle = document.getElementById("roster-toggle");
+const notifyToggle = document.getElementById("notify-toggle");
+const notifyScope = document.getElementById("notify-scope");
+const faviconLink = document.querySelector('link[rel="icon"]');
+const baseTitle = document.title;
+const originalFavicon = faviconLink ? faviconLink.getAttribute("href") : null;
+let dottedFavicon = null;
 const composer = document.getElementById("composer");
 const messageText = document.getElementById("message-text");
 const sendButton = document.getElementById("send-button");
@@ -128,7 +141,11 @@ async function startWithToken(token) {
 async function enterRoom() {
   joinPanel.hidden = true;
   await Promise.all([loadBrief(), loadStatus()]);
+  hydrateNotifyPrefs();
+  // The first poll loads existing history; notifications stay off for it and only
+  // arm (ready) afterwards so the backlog never fires a burst of notifications.
   await pollMessages();
+  state.notify.ready = true;
   setInterval(() => void pollMessages(), 3000);
   setInterval(() => void loadStatus(), 5000);
   bindEvents();
@@ -160,6 +177,13 @@ async function submitProfile() {
 
 function bindEvents() {
   rosterToggle.addEventListener("click", () => shell.classList.toggle("roster-open"));
+  notifyToggle.addEventListener("click", () => void toggleNotify());
+  notifyScope.addEventListener("click", () => toggleNotifyScope());
+  window.addEventListener("focus", onWindowFocus);
+  window.addEventListener("blur", onWindowBlur);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") onWindowFocus();
+  });
   briefRefresh.addEventListener("click", () => void loadBrief());
   briefOpen.addEventListener("click", () => openBriefOverlay());
   briefClose.addEventListener("click", () => closeBriefOverlay());
@@ -263,6 +287,7 @@ async function loadStatus() {
   }
   markConnectionLive();
   state.roomStatus = payload.room_status;
+  state.roomName = payload.room;
   roomTitle.textContent = payload.room;
   briefRoomName.textContent = payload.room;
   roomStatus.textContent = payload.room_status;
@@ -325,6 +350,8 @@ async function pollMessages() {
     if (state.seen.has(message.id)) continue;
     state.seen.add(message.id);
     renderMessage(message);
+    // De-dup is inherent: the seen-set guard means each id reaches maybeNotify once.
+    maybeNotify(message);
     if (message.ts) state.lastMessageTs = message.ts;
   }
   updateLastMessage();
@@ -334,6 +361,175 @@ async function pollMessages() {
     state.closedHistoryLoaded = true;
     applyRoomState();
   }
+}
+
+// ---- browser notification layer (#186): opt-in, poll-driven, no push service ----
+// Decide + fire for one freshly-seen message. Never notifies own messages or system
+// lines; @mentions always notify when enabled, other messages only in "all" scope.
+// When the tab is focused the human is already looking, so nothing fires.
+function maybeNotify(message) {
+  if (!state.notify.enabled || !state.notify.ready) return;
+  if (message.type === "system") return;
+  if (state.profile && message.from === state.profile.alias) return;
+  const mentioned =
+    Array.isArray(message.mentions) && state.profile !== null && message.mentions.includes(state.profile.alias);
+  if (!mentioned && state.notify.scope !== "all") return;
+  if (state.notify.focused) return;
+  state.notify.unread += 1;
+  updateUnreadIndicators();
+  fireOsNotification(message, mentioned);
+}
+
+// OS notification, only when permission is actually granted. Permission-denied (or
+// no Notification API) degrades silently to the title badge handled above. The body
+// is the message text truncated — never a token or invite URL.
+function fireOsNotification(message, mentioned) {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const sender = state.participantLabels.get(message.from) || message.from;
+  const room = state.roomName || "the room";
+  const title = mentioned ? `${sender} mentioned you in ${room}` : `${sender} in ${room}`;
+  try {
+    // tag keyed by message id → the OS coalesces, so a message never double-notifies.
+    new Notification(title, { body: truncateNotifyBody(message.text), tag: `agentgather-${message.id}` });
+  } catch {
+    // A hostile browser or blocked context must not break the poll loop.
+  }
+}
+
+function truncateNotifyBody(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > 120 ? `${clean.slice(0, 119)}…` : clean;
+}
+
+// Title unread count + favicon dot, shown only while unfocused. Both clear on focus.
+function updateUnreadIndicators() {
+  const show = state.notify.unread > 0 && !state.notify.focused;
+  document.title = show ? `(${state.notify.unread}) ${baseTitle}` : baseTitle;
+  applyFavicon(show);
+}
+
+function applyFavicon(showDot) {
+  if (!faviconLink || originalFavicon === null) return;
+  if (showDot && dottedFavicon !== null) faviconLink.setAttribute("href", dottedFavicon);
+  else faviconLink.setAttribute("href", originalFavicon);
+}
+
+// Compose an accent dot onto the existing favicon once, cached. Same-origin image →
+// the canvas is not tainted, so toDataURL works; any failure degrades to title only.
+function ensureDottedFavicon() {
+  if (dottedFavicon !== null || faviconLink === null || originalFavicon === null) return;
+  const image = new Image();
+  image.onload = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) return;
+      ctx.drawImage(image, 0, 0, 32, 32);
+      const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#ec5c94";
+      ctx.beginPath();
+      ctx.arc(24, 8, 7, 0, Math.PI * 2);
+      ctx.fillStyle = accent;
+      ctx.fill();
+      dottedFavicon = canvas.toDataURL("image/png");
+      applyFavicon(state.notify.unread > 0 && !state.notify.focused);
+    } catch {
+      // Leave dottedFavicon null → title badge still works.
+    }
+  };
+  image.src = originalFavicon;
+}
+
+function onWindowFocus() {
+  state.notify.focused = true;
+  state.notify.unread = 0;
+  updateUnreadIndicators();
+}
+
+function onWindowBlur() {
+  state.notify.focused = false;
+}
+
+async function toggleNotify() {
+  if (state.notify.enabled) {
+    setNotifyEnabled(false);
+    return;
+  }
+  // Requesting permission needs this click as the user gesture. Enable regardless of
+  // the outcome: granted → OS notifications, denied/unsupported → title badge only.
+  if (typeof Notification !== "undefined" && Notification.permission === "default") {
+    try {
+      await Notification.requestPermission();
+    } catch {
+      // Older callback-only browsers or a hostile override — treat as no decision.
+    }
+  }
+  setNotifyEnabled(true);
+}
+
+function setNotifyEnabled(enabled) {
+  state.notify.enabled = enabled;
+  if (enabled) {
+    ensureDottedFavicon();
+  } else {
+    state.notify.unread = 0;
+    updateUnreadIndicators();
+  }
+  persistNotifyPrefs();
+  updateNotifyUi();
+}
+
+function toggleNotifyScope() {
+  state.notify.scope = state.notify.scope === "all" ? "mentions" : "all";
+  persistNotifyPrefs();
+  updateNotifyUi();
+}
+
+function updateNotifyUi() {
+  const on = state.notify.enabled;
+  notifyToggle.setAttribute("aria-pressed", String(on));
+  notifyToggle.textContent = on ? "🔔 on" : "🔔 off";
+  const blocked = typeof Notification !== "undefined" && Notification.permission === "denied";
+  notifyToggle.title = on
+    ? blocked
+      ? "Notifications are blocked by the browser — showing an unread badge only"
+      : "Notifying on new messages while this tab is open"
+    : "Notify me of new messages while this tab is open";
+  notifyScope.hidden = !on;
+  notifyScope.textContent = state.notify.scope === "all" ? "all" : "mentions";
+  notifyScope.setAttribute("aria-pressed", String(state.notify.scope === "all"));
+}
+
+function notifyStorageKey() {
+  return `agentgather.notify.${state.roomName || "room"}`;
+}
+
+function persistNotifyPrefs() {
+  try {
+    sessionStorage.setItem(
+      notifyStorageKey(),
+      JSON.stringify({ enabled: state.notify.enabled, scope: state.notify.scope })
+    );
+  } catch {
+    // Private-mode storage failures must not break notifications.
+  }
+}
+
+function hydrateNotifyPrefs() {
+  state.notify.focused = document.hasFocus();
+  try {
+    const raw = sessionStorage.getItem(notifyStorageKey());
+    if (raw) {
+      const prefs = JSON.parse(raw);
+      state.notify.enabled = Boolean(prefs.enabled);
+      state.notify.scope = prefs.scope === "all" ? "all" : "mentions";
+    }
+  } catch {
+    // Ignore malformed stored prefs; fall back to the defaults (off / mentions).
+  }
+  if (state.notify.enabled) ensureDottedFavicon();
+  updateNotifyUi();
 }
 
 function isForegroundState(value) {
