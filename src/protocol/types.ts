@@ -82,6 +82,12 @@ export interface Participant {
   // Forum review task (V2 T10): the forum channel this agent was invited to
   // review/respond on. Drives the Attend Card's forum-review section.
   forum_review_channel?: string;
+  // Duplicate concurrent-join detection (V2 D, #163): an opaque, client-supplied
+  // marker for the joining session. Persisted on join so a single session that
+  // re-joins while still fresh (same marker) is treated as a reconnect, while a
+  // *different* session joining the same still-attended alias is flagged. Absent
+  // for legacy clients; detection then falls back to attendance_state + last-seen.
+  session_id?: string;
 }
 
 export interface Invite {
