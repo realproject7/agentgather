@@ -97,8 +97,11 @@ test("broker forwards GET /card and renders the broker public URL", async () => 
     const response = await fixture.fetchThroughBroker(`/card?participant=reviewer&token=${fixture.reviewerToken}`);
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.equal(text.includes(`${fixture.publicBaseUrl}/wait`), true);
-    assert.equal(text.includes(`${fixture.publicBaseUrl}/messages`), true);
+    // #109: the broker URL is rendered once via the AG_BASE export; the card's
+    // commands reference $AG_BASE rather than repeating the absolute broker URL.
+    assert.equal(text.includes(`AG_BASE='${fixture.publicBaseUrl}'`), true);
+    assert.equal(text.includes("$AG_BASE/wait"), true);
+    assert.equal(text.includes("$AG_BASE/messages"), true);
   } finally {
     await fixture.close();
   }

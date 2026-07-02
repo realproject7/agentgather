@@ -110,8 +110,10 @@ test("tunnel start publishes the broker URL into room state, invite cards, /card
     stdout.reset();
     await runRoomCommand(["invite-card", "reviewer"], context);
     const card = stdout.text();
-    assert.equal(card.includes(`${publicBaseUrl}/card`), true);
-    assert.equal(card.includes(`${publicBaseUrl}/wait`), true);
+    // #109: the broker URL is rendered once via the AG_BASE export; the curls
+    // reference $AG_BASE rather than repeating the absolute broker URL.
+    assert.equal(card.includes(`AG_BASE='${publicBaseUrl}'`), true);
+    assert.equal(card.includes("$AG_BASE/wait"), true);
 
     // Server-rendered /card and /wait.next_cmd also use the broker URL.
     const roomServer = await startRoomServer(context.home, "demo-room", "http://127.0.0.1:8787");
@@ -119,7 +121,7 @@ test("tunnel start publishes the broker URL into room state, invite cards, /card
       const cardResponse = await fetch(`${roomServer.baseUrl}/card?participant=reviewer&token=${invite.token}`);
       const cardText = await cardResponse.text();
       assert.equal(cardResponse.status, 200);
-      assert.equal(cardText.includes(`${publicBaseUrl}/card`), true);
+      assert.equal(cardText.includes(`AG_BASE='${publicBaseUrl}'`), true);
       assert.equal(cardText.includes("8787"), false);
 
       const waitResponse = await fetch(`${roomServer.baseUrl}/wait?participant=reviewer&since_id=0`, {
@@ -155,7 +157,7 @@ test("invite output keeps the broker URL after room serve rewrites current state
     stdout.reset();
     await runRoomCommand(["invite-card", "reviewer"], context);
     const card = stdout.text();
-    assert.equal(card.includes(`${publicBaseUrl}/card`), true);
+    assert.equal(card.includes(`AG_BASE='${publicBaseUrl}'`), true);
     assert.equal(card.includes("8787"), false);
 
     stdout.reset();

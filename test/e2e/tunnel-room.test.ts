@@ -84,14 +84,16 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     // Invite card generated after tunnel start uses the broker URL.
     stdout.reset();
     await runRoomCommand(["invite-card", "curl-agent"], context);
-    assert.equal(stdout.chunks.join("").includes(`${publicBaseUrl}/wait`), true);
+    // #109: the broker URL is rendered once via the AG_BASE export.
+    assert.equal(stdout.chunks.join("").includes(`AG_BASE='${publicBaseUrl}'`), true);
 
     // Curl-style remote agent: fetch card, join, send, read, wait through the broker.
     const card = await fetch(`${publicBaseUrl}/card?participant=curl-agent&token=${curlToken}`);
     const cardText = await card.text();
     assert.equal(card.status, 200);
     assert.match(cardText, /Forward through the broker\./);
-    assert.equal(cardText.includes(`${publicBaseUrl}/messages`), true);
+    assert.equal(cardText.includes(`AG_BASE='${publicBaseUrl}'`), true);
+    assert.equal(cardText.includes("$AG_BASE/messages"), true);
 
     const joined = await fetch(`${publicBaseUrl}/join`, {
       method: "POST",
