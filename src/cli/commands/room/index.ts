@@ -88,6 +88,10 @@ async function roomStart(argv: string[], context: CliContext): Promise<number> {
   const token = createToken();
   const briefBody = flagString(args, "brief") ?? "";
   const expiresAt = flagString(args, "expires-at");
+  // Host kind is modeled separately from the host role (V2 #169): an agent host
+  // keeps is_host/ownership but groups under AGENTS. Defaults to human, so
+  // existing rooms and the no-flag path are unchanged.
+  const kind = parseKind(flagString(args, "kind") ?? "human");
   await createRoom({
     root: context.home,
     roomId,
@@ -96,10 +100,10 @@ async function roomStart(argv: string[], context: CliContext): Promise<number> {
     attendancePolicy: parseAttendancePolicy(flagString(args, "attendance") ?? "manual-ok"),
     ...(expiresAt === undefined ? {} : { expiresAt: new Date(expiresAt) })
   });
-  await writeParticipants(context.home, roomId, [participant(alias, "human", true, token)]);
+  await writeParticipants(context.home, roomId, [participant(alias, kind, true, token)]);
   await writeToken(context.home, roomId, alias, token);
   await writeCurrent(context.home, { roomId, alias, token, baseUrl });
-  return emit(context, flagBoolean(args, "json"), { ok: true, room: roomId, alias, token, baseUrl });
+  return emit(context, flagBoolean(args, "json"), { ok: true, room: roomId, alias, kind, token, baseUrl });
 }
 
 // Host create-boardroom flow (T7): create the room + host participant like
@@ -116,6 +120,8 @@ async function roomCreateBoardroom(argv: string[], context: CliContext): Promise
   const expiresAt = flagString(args, "expires-at");
   const now = new Date();
   const channels = parseChannelSpec(flagString(args, "channels"), now.toISOString());
+  // Host kind modeled separately from the host role (V2 #169); defaults to human.
+  const kind = parseKind(flagString(args, "kind") ?? "human");
   await createRoom({
     root: context.home,
     roomId,
@@ -124,7 +130,7 @@ async function roomCreateBoardroom(argv: string[], context: CliContext): Promise
     attendancePolicy: parseAttendancePolicy(flagString(args, "attendance") ?? "manual-ok"),
     ...(expiresAt === undefined ? {} : { expiresAt: new Date(expiresAt) })
   });
-  await writeParticipants(context.home, roomId, [participant(alias, "human", true, token)]);
+  await writeParticipants(context.home, roomId, [participant(alias, kind, true, token)]);
   await writeToken(context.home, roomId, alias, token);
   await writeCurrent(context.home, { roomId, alias, token, baseUrl });
   const boardroomOptions: { name?: string; channels: Channel[] } = { channels };
@@ -137,7 +143,7 @@ async function roomCreateBoardroom(argv: string[], context: CliContext): Promise
   return emit(
     context,
     flagBoolean(args, "json"),
-    { ok: true, room: roomId, alias, baseUrl, boardroom },
+    { ok: true, room: roomId, alias, kind, baseUrl, boardroom },
     `Boardroom ${roomId} created with channels: ${boardroom.channels.map((c) => `#${c.id} (${c.type})`).join(", ")}\n` +
       "Host credentials saved locally. Use `room invite <name>` to invite participants.\n"
   );

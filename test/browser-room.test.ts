@@ -625,6 +625,62 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
   }
 });
 
+test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    // an agent host (kind=agent, is_host=true) alongside a human participant
+    await writeParticipants(fixture.root, fixture.roomId, [
+      { ...participant("host", "agent", true, fixture.hostToken), display_name: "Agent Host" },
+      participant("guest", "human", false, "guest-token")
+    ]);
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector(".participant[data-host='true']");
+
+    // the host row keeps its host role but is grouped + badged by its actual kind
+    const host = page.locator(".participant[data-host='true']");
+    assert.equal(await host.getAttribute("data-kind"), "agent");
+    assert.match(await host.innerText(), /agent · host/);
+
+    // grouping: the agent host sits under the AGENTS header, not HUMANS
+    const grouping = await page.evaluate(() => {
+      const out: Record<string, string> = {};
+      let group = "";
+      for (const li of document.querySelectorAll<HTMLLIElement>("#participant-list > li")) {
+        if (li.classList.contains("rail-group")) {
+          group = (li.firstChild?.textContent || "").trim();
+        } else {
+          out[li.querySelector("strong")?.textContent || ""] = group;
+        }
+      }
+      return out;
+    });
+    assert.equal(grouping["Agent Host"], "agents");
+    assert.equal(grouping["guest"], "humans");
+
+    // host controls still belong to the host (role is independent of kind)
+    assert.equal(await page.isHidden("#host-controls"), false);
+
+    // no horizontal overflow at desktop or mobile
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      true,
+      "no horizontal overflow at 1280"
+    );
+    await page.setViewportSize({ width: 390, height: 760 });
+    await page.waitForTimeout(150);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      true,
+      "no horizontal overflow at 390"
+    );
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("code-block copy writes the raw body only (#120/#117)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();

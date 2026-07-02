@@ -226,6 +226,35 @@ test("human invites print a browser-openable fragment URL", async () => {
   assert.doesNotMatch(card, /\/wait/);
 });
 
+test("room start --kind persists the host kind separately from the host role (V2 #169)", async () => {
+  const { context, stdout } = await makeContext();
+
+  // explicit agent host: kind persists as agent, is_host stays true
+  await runRoomCommand(["start", "agent-host-room", "--alias", "operator", "--kind", "agent", "--json"], context);
+  const started = stdout.json<{ ok: true; alias: string; kind: string }>();
+  assert.equal(started.kind, "agent");
+  const agentHosts = await readParticipants(roomPaths(context.home, "agent-host-room"));
+  const agentHost = agentHosts.find((p) => p.alias === "operator");
+  assert.equal(agentHost?.kind, "agent");
+  assert.equal(agentHost?.is_host, true);
+
+  // default (no --kind) stays human — backward compatible
+  stdout.chunks = [];
+  await runRoomCommand(["start", "human-host-room", "--json"], context);
+  const defaulted = stdout.json<{ kind: string }>();
+  assert.equal(defaulted.kind, "human");
+  const humanHosts = await readParticipants(roomPaths(context.home, "human-host-room"));
+  const humanHost = humanHosts.find((p) => p.is_host);
+  assert.equal(humanHost?.kind, "human");
+  assert.equal(humanHost?.is_host, true);
+
+  // an invalid kind is rejected
+  await assert.rejects(
+    runRoomCommand(["start", "bad-kind-room", "--kind", "robot", "--json"], context),
+    /kind must be agent or human/
+  );
+});
+
 test("room serve requires explicit secure remote opt-in", async () => {
   const { context, stdout } = await makeContext();
   await runRoomCommand(["start", "remote-room", "--alias", "operator", "--json"], context);

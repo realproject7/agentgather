@@ -464,7 +464,11 @@ function renderParticipantGroup(label, group) {
     const meta = document.createElement("span");
     const aliasPart =
       participant.display_name && participant.display_name !== participant.alias ? `@${participant.alias} · ` : "";
-    const hostPart = participant.is_host ? "host · " : "";
+    // Host role is modeled separately from kind (V2 #169): the host row keeps its
+    // group (agent host → AGENTS) and carries an explicit `agent · host` /
+    // `human · host` badge so the host's kind reads on the row itself — no new
+    // card or layout shift. Non-host rows leave kind implied by the group header.
+    const hostPart = participant.is_host ? `${participant.kind} · host · ` : "";
     // 9A: show the negotiated effective attention mode; when degraded (the host
     // requested a more capable mode than the participant can provide) show both
     // as `requested→effective`. effective_mode is always a declared mode or the

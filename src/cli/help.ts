@@ -66,7 +66,7 @@ export function buildHelpText(): string {
     "Usage:",
     "  agentgather --help",
     "  agentgather --version",
-    "  agentgather room start <room> [--alias host] [--brief text] [--attendance manual-ok|agents-foreground|all-foreground|host-directed] [--url http://127.0.0.1:8787] [--json]",
+    "  agentgather room start <room> [--alias host] [--kind agent|human] [--brief text] [--attendance manual-ok|agents-foreground|all-foreground|host-directed] [--url http://127.0.0.1:8787] [--json]",
     "  agentgather room serve [--port 8787] [--host 127.0.0.1] [--url URL] [--allow-remote]",
     "  agentgather room brief view|set [--body text] [--json]",
     "  agentgather room attendance view|set [--policy agents-foreground] [--json]",
