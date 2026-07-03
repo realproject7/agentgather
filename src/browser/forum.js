@@ -347,10 +347,22 @@ async function selectPost(id) {
   shell.dataset.view = "thread";
   syncSelectionUrl(id);
   setRailActive();
-  el("detail").hidden = true;
-  el("detail-state").hidden = false;
-  el("detail-state").textContent = "Loading thread…";
+  const cached = state.posts.find((post) => String(post.id) === String(id));
   el("detail-state").classList.remove("error");
+  if (cached) {
+    el("detail-state").hidden = true;
+    el("detail").hidden = false;
+    el("detail-title").textContent = cached.title;
+    el("crumb-title").textContent = cached.title;
+    el("detail-by").replaceChildren(span("Loading thread…"));
+    el("detail-tags").replaceChildren(...tagNodes(cached.tags));
+    el("detail-body").replaceChildren();
+    el("comments").replaceChildren();
+  } else {
+    el("detail").hidden = true;
+    el("detail-state").hidden = false;
+    el("detail-state").textContent = "Loading thread…";
+  }
   try {
     const res = await authFetch(`/forum/post?channel=${encodeURIComponent(channel)}&post=${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(`status ${res.status}`);
