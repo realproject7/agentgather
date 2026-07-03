@@ -514,3 +514,49 @@ test("a tokened single-room link renders one room without a multi-room list", as
     await room.close();
   }
 });
+
+test("the owner shell renders the three history-source states through the platform server (#176)", async () => {
+  const root = await makeRoot();
+  // alpha: active + a real host log → "live host room".
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
+  await createRoom({ root, roomId: "alpha", hostAlias: "host", briefBody: "go" });
+  await appendServerMessage({ root, roomId: "alpha", from: "system", text: "alpha live line" });
+  // beta: registered + active but NO host log → host offline, nothing cached.
+  await createControlPlaneRoom(root, roomInput({ room_id: "beta", title: "Beta", status: "active" }));
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".room-row");
+
+    // 1) Live from host: the live host log is surfaced.
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector('#history-source[data-source="live"]');
+    await page.waitForSelector("text=History: live host room");
+    await page.waitForSelector("text=alpha live line");
+
+    // 2) Host offline: registered room, host log unavailable, nothing cached.
+    await page.click('.room-row[data-room-id="beta"]');
+    await page.waitForSelector('#history-source[data-source="empty"]');
+    await page.waitForSelector("text=Host is offline");
+
+    // 3) Local snapshot: alpha was cached live; now the host log goes offline, so the
+    //    shell falls back to this browser's cached copy.
+    await page.route("**/rooms/alpha/messages*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, messages: [], next_since_id: 0, host_log_available: false })
+      })
+    );
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector('#history-source[data-source="cache"]');
+    await page.waitForSelector("text=History: local cache (host offline)");
+    await page.waitForSelector("text=alpha live line");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
