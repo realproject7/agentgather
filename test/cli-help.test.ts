@@ -14,5 +14,5 @@ test("help text describes the Agent Gather CLI", () => {
 });
 
 test("version is the package version", () => {
-  assert.equal(VERSION, "0.1.0");
+  assert.equal(VERSION, "0.2.0");
 });
