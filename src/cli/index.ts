@@ -10,6 +10,7 @@ import { runInstructionsCommand } from "./commands/instructions/index.js";
 import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } from "./commands/message/index.js";
 import { runRoomCommand } from "./commands/room/index.js";
 import { runTunnelCommand } from "./commands/tunnel/index.js";
+import { runWakeAdapterCommand } from "./commands/wake-adapter/index.js";
 import { runWatchCommand } from "./commands/watch/index.js";
 
 async function main(argv: string[]): Promise<number> {
@@ -47,6 +48,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === "reply") return runReplyCommand(rest, createCliContext());
   if (command === "watch") return runWatchCommand(rest, createCliContext());
   if (command === "attend") return runAttendCommand(rest, createCliContext());
+  if (command === "wake-adapter") return runWakeAdapterCommand(rest, createCliContext());
   if (command === "handoff") return runHandoffCommand(rest, createCliContext());
   if (command === "export") return runExportCommand(rest, createCliContext());
   if (command === "doctor") return runDoctorCommand(rest, createCliContext());
