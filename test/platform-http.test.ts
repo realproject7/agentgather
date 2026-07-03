@@ -7,7 +7,8 @@ import path from "node:path";
 import test from "node:test";
 import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
-import { appendServerMessage, createRoom } from "../src/storage/index.js";
+import { appendServerMessage, createRoom, recordJoinedRoom } from "../src/storage/index.js";
+import { createRoomHttpServer } from "../src/server/index.js";
 
 function requestWithHost(baseUrl: string, hostHeader: string): Promise<{ status: number; body: string }> {
   const url = new URL("/rooms", baseUrl);
@@ -173,5 +174,37 @@ test("a non-localhost Host header is rejected", async () => {
     assert.equal(JSON.parse(response.body).error, "insecure_remote");
   } finally {
     await fixture.close();
+  }
+});
+
+test("/joined-rooms returns device-local joined rooms with honest reachability and no tokens (#178)", async () => {
+  const root = await makeRoot();
+
+  // A live room server to probe (its GET / serves the browser shell, unauthenticated).
+  await createRoom({ root, roomId: "live-room", hostAlias: "host", briefBody: "go" });
+  const roomServer = createRoomHttpServer({ root, roomId: "live-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 });
+  const livePort = await getFreePort();
+  await new Promise<void>((resolve) => roomServer.listen(livePort, "127.0.0.1", resolve));
+  const liveUrl = `http://127.0.0.1:${livePort}`;
+  const deadUrl = `http://127.0.0.1:${await getFreePort()}`; // nothing is listening here
+
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, { roomId: "live-room", title: "Live Room", alias: "me", baseUrl: liveUrl, joinedAt: now, lastSeen: now });
+  await recordJoinedRoom(root, { roomId: "gone-room", title: "Gone Room", alias: "me", baseUrl: deadUrl, joinedAt: now, lastSeen: now });
+
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const res = await fetch(`${fixture.baseUrl}/joined-rooms`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { ok: boolean; rooms: Array<{ roomId: string; reachability: string }> };
+    assert.equal(body.ok, true);
+    const byId = Object.fromEntries(body.rooms.map((room) => [room.roomId, room]));
+    assert.equal(byId["live-room"]?.reachability, "live");
+    assert.equal(byId["gone-room"]?.reachability, "unreachable");
+    // Metadata only — no token anywhere in the response.
+    assert.equal(/tgl_|Bearer|"token"/i.test(JSON.stringify(body)), false);
+  } finally {
+    await fixture.close();
+    await new Promise<void>((resolve) => roomServer.close(() => resolve()));
   }
 });

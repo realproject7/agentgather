@@ -55,7 +55,7 @@ import {
 import { readPublicBaseUrl } from "../../../tunnel/index.js";
 import { parseArgs, flagBoolean, flagString, type ParsedArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
-import { readCurrent, readToken, writeCurrent, writeToken } from "../../state.js";
+import { readCurrent, readToken, recordJoinedRoom, writeCurrent, writeToken } from "../../state.js";
 
 // Printed to stderr whenever `room serve --allow-remote` starts (#180). Assumes
 // HTTPS is terminated at the edge (tunnel/reverse proxy); Agent Gather adds no
@@ -711,6 +711,10 @@ async function roomJoin(argv: string[], context: CliContext): Promise<number> {
   }
   await writeCurrent(context.home, { roomId, alias, token, baseUrl });
   await writeToken(context.home, roomId, alias, token);
+  // Device-local joined-room record (#178): metadata only, never the token. This
+  // is what the owner dashboard's "Rooms I'm in" reads; it never leaves the device.
+  const now = new Date().toISOString();
+  await recordJoinedRoom(context.home, { roomId, title: roomId, alias, baseUrl, joinedAt: now, lastSeen: now });
   return emit(context, flagBoolean(args, "json"), { ok: true, room: roomId, alias, baseUrl });
 }
 

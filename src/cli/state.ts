@@ -13,6 +13,11 @@ export interface RoomTokenStore {
   tokens: Record<string, string>;
 }
 
+// Device-local joined-room history (#178) lives in the storage layer so both the
+// CLI (write on `room join`) and the platform shell (read for "Rooms I'm in")
+// share one token-free implementation.
+export { joinedRoomsPath, readJoinedRooms, recordJoinedRoom, type JoinedRoom } from "../storage/index.js";
+
 export function currentPath(home: string): string {
   return path.join(home, "current-room.json");
 }

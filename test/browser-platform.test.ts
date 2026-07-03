@@ -7,7 +7,7 @@ import test from "node:test";
 import { chromium } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
 import { createPlatformHttpServer, createControlPlaneRoom } from "../src/platform/index.js";
-import { appendServerMessage, createRoom, writeParticipants } from "../src/storage/index.js";
+import { appendServerMessage, createRoom, recordJoinedRoom, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Server } from "node:http";
 
@@ -555,6 +555,53 @@ test("the owner shell renders the three history-source states through the platfo
     await page.waitForSelector('#history-source[data-source="cache"]');
     await page.waitForSelector("text=History: local cache (host offline)");
     await page.waitForSelector("text=alpha live line");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+test("the dashboard shows device-local joined rooms and clears browser-added ones gracefully (#178)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
+  const now = new Date().toISOString();
+  // A CLI-recorded joined room (device file), pointing at an unreachable URL.
+  await recordJoinedRoom(root, {
+    roomId: "joined-cli",
+    title: "Joined via CLI",
+    alias: "me",
+    baseUrl: "http://127.0.0.1:9",
+    joinedAt: now,
+    lastSeen: now
+  });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+
+    // Same-device round-trip: the CLI-recorded join appears in "Rooms I'm in" with
+    // honest (unreachable) reachability.
+    await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
+    await page.waitForSelector("text=Joined via CLI");
+
+    // Add a browser-recorded join from a tokenized invite link.
+    await page.fill("#joined-input", "http://127.0.0.1:8787/#token=tgl_secret_xyz987");
+    await page.click("#joined-add-button");
+    await page.waitForSelector('.joined-row[data-reachability="saved"]');
+
+    // The token was stripped: localStorage holds metadata only, never the secret.
+    const stored = await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"));
+    assert.ok(stored);
+    assert.equal(/tgl_|token=|Bearer/i.test(stored || ""), false);
+
+    // Clearing browser storage drops the browser-added entry gracefully; the CLI
+    // record (device file, not browser storage) is unaffected.
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
+    await page.waitForSelector("text=Joined via CLI");
+    assert.equal(await page.locator('.joined-row[data-reachability="saved"]').count(), 0);
   } finally {
     await browser.close();
     await platform.close();

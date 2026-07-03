@@ -13,7 +13,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
-import { readMessages } from "../storage/index.js";
+import { readJoinedRooms, readMessages } from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
 
@@ -69,6 +69,13 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
     return;
   }
 
+  // "Rooms I'm in" (#178): device-local joined-room metadata (never a token), with
+  // honest, token-free reachability probed live per request. No central copy.
+  if (url.pathname === "/joined-rooms") {
+    await sendJoinedRooms(options, res);
+    return;
+  }
+
   const messagesMatch = /^\/rooms\/([^/]+)\/messages$/.exec(url.pathname);
   if (messagesMatch !== null) {
     await sendRoomMessages(options, decodeURIComponent(messagesMatch[1] ?? ""), url, res);
@@ -119,6 +126,46 @@ async function sendRoomMessages(
     next_since_id: messages.at(-1)?.id ?? sinceId,
     host_log_available: true
   });
+}
+
+// Surface the device-local joined-room list for the owner shell's "Rooms I'm in"
+// section. Metadata only (the JoinedRoom record holds no token), plus a live,
+// token-free reachability probe so the shell can show honest live/unreachable/
+// expired states without ever needing the participant's credential.
+async function sendJoinedRooms(options: PlatformHttpServerOptions, res: ServerResponse): Promise<void> {
+  const rooms = await readJoinedRooms(options.root);
+  const withReachability = await Promise.all(
+    rooms.map(async (room) => ({ ...room, reachability: await probeReachability(room.baseUrl) }))
+  );
+  sendJson(res, 200, { ok: true, rooms: withReachability });
+}
+
+// Token-free reachability: GET the room's base URL (the unauthenticated browser
+// shell / broker route). A 2xx means live; a 410 or a broker route_expired/closed
+// body means the route is gone; anything else — including a network failure or the
+// 1.5s timeout — is treated as unreachable.
+async function probeReachability(baseUrl: string): Promise<"live" | "unreachable" | "expired"> {
+  const target = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(target, { method: "GET", signal: controller.signal });
+    if (response.ok) return "live";
+    if (response.status === 410) return "expired";
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body.error === "route_expired" || body.error === "route_closed" || body.error === "route_not_found") {
+        return "expired";
+      }
+    } catch {
+      // Non-JSON error body — fall through to unreachable.
+    }
+    return "unreachable";
+  } catch {
+    return "unreachable";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function sendAsset(res: ServerResponse, file: string, contentType: string): Promise<void> {
