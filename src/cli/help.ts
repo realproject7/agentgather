@@ -4,6 +4,7 @@ export const KNOWN_COMMANDS = new Set([
   "room",
   "tunnel",
   "broker",
+  "platform",
   "send",
   "messages",
   "read",
@@ -56,6 +57,17 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "Serve the managed tunnel broker (operators)."
   ].join("\n"),
+  platform: [
+    "agentgather platform serve [--port 8788] [--host 127.0.0.1] [--allow-remote] [--json]",
+    "",
+    "Start the control-plane owner shell (dashboard) against your local home.",
+    "Localhost-only by default; --allow-remote is an explicit opt-in. --json prints",
+    "the bind coordinates without secrets.",
+    "",
+    "Boundary: the control plane serves room METADATA only (registry + status).",
+    "The chat pane reads the host-owned message log live — it is never stored",
+    "centrally, and no tokens or invite URLs are exposed here."
+  ].join("\n"),
   doctor: [
     "agentgather doctor [--json]",
     "",
@@ -99,6 +111,7 @@ export function buildHelpText(): string {
     "  agentgather tunnel start --room current --broker <url> --subdomain <slug> [--target http://127.0.0.1:8787] [--json]",
     "  agentgather tunnel run --room current --broker <url> --subdomain <slug> [--target http://127.0.0.1:8787]",
     "  agentgather broker serve [--host 127.0.0.1] [--port 8799] [--public-url https://rooms.agentgather.dev]",
+    "  agentgather platform serve [--port 8788] [--host 127.0.0.1] [--allow-remote] [--json]",
     "  agentgather send <alias> <message> [--client-msg-id id] [--json]",
     "  agentgather messages [--since id] [--json]",
     "  agentgather read [--since id] [--json]",
@@ -115,6 +128,7 @@ export function buildHelpText(): string {
     "  room        Create/serve/invite/close rooms; manage boardroom channels + forum posts",
     "  tunnel      Publish the current room through a local broker",
     "  broker      Serve the managed tunnel broker (operators)",
+    "  platform    Serve the control-plane owner shell (metadata only; chat reads host logs live)",
     "  send        Send a room message",
     "  messages    Read room messages",
     "  watch       Run one wait turn",

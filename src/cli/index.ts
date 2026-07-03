@@ -8,6 +8,7 @@ import { runExportCommand } from "./commands/export/index.js";
 import { runHandoffCommand } from "./commands/handoff/index.js";
 import { runInstructionsCommand } from "./commands/instructions/index.js";
 import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } from "./commands/message/index.js";
+import { runPlatformCommand } from "./commands/platform/index.js";
 import { runRoomCommand } from "./commands/room/index.js";
 import { runTunnelCommand } from "./commands/tunnel/index.js";
 import { runWakeAdapterCommand } from "./commands/wake-adapter/index.js";
@@ -35,6 +36,9 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === "room") {
     return runRoomCommand(rest, createCliContext());
+  }
+  if (command === "platform") {
+    return runPlatformCommand(rest, createCliContext());
   }
   if (command === "tunnel") {
     return runTunnelCommand(rest, createCliContext());
