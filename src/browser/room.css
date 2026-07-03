@@ -970,6 +970,48 @@ pre {
   color: var(--muted);
 }
 
+/* "Rooms I'm in" (#178): device-local same-origin join history, in the roster. */
+.joined-section .joined-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.joined-row {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--chip);
+}
+
+.joined-row .joined-name {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.joined-row .joined-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.joined-section .joined-note {
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
 /* host controls (#116): room-state segment + action grid, host-only */
 .rail-state {
   display: grid;

@@ -111,6 +111,11 @@ const historySourceNote = document.getElementById("history-source-note");
 const historySummary = document.getElementById("history-summary");
 const historyFootNote = document.getElementById("history-foot-note");
 const historyKv = document.getElementById("history-kv");
+const joinedSection = document.getElementById("joined-section");
+const joinedList = document.getElementById("joined-list");
+// "Rooms I'm in" (#178): device-local, same-origin join history. Metadata only —
+// the token (state.token) is NEVER written here.
+const JOINED_KEY = "agentgather.joinedRooms";
 
 init().catch((error) => showError(error instanceof Error ? error.message : String(error)));
 
@@ -148,6 +153,10 @@ async function enterRoom() {
   joinPanel.hidden = true;
   await Promise.all([loadBrief(), loadStatus()]);
   hydrateNotifyPrefs();
+  // Record this successful join in the device-local, same-origin history and show
+  // it in the roster (metadata only — never the token).
+  recordJoinedRoomLocal();
+  renderJoinedRooms();
   // The first poll loads existing history; notifications stay off for it and only
   // arm (ready) afterwards so the backlog never fires a burst of notifications.
   await pollMessages();
@@ -546,6 +555,79 @@ function hydrateNotifyPrefs() {
   }
   if (state.notify.enabled) ensureDottedFavicon();
   updateNotifyUi();
+}
+
+// ---- "Rooms I'm in" (#178): device-local same-origin join history ----
+// The platform dashboard is a different origin than the room, so a browser join is
+// recorded here (room origin) — metadata only. The base URL is the room's own
+// origin+path; the token in state.token is never persisted, matching the notify /
+// cache invariant that localStorage holds no bearer token.
+function recordJoinedRoomLocal() {
+  if (!state.profile || !state.roomName) return;
+  let baseUrl;
+  try {
+    const url = new URL(document.baseURI);
+    baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
+  } catch {
+    return;
+  }
+  const now = new Date().toISOString();
+  const rooms = readJoinedLocal().filter((room) => room.baseUrl !== baseUrl);
+  const existing = readJoinedLocal().find((room) => room.baseUrl === baseUrl);
+  rooms.push({
+    roomId: state.roomName,
+    title: state.roomName,
+    alias: state.profile.alias,
+    baseUrl,
+    joinedAt: existing ? existing.joinedAt : now,
+    lastSeen: now
+  });
+  writeJoinedLocal(rooms);
+}
+
+function renderJoinedRooms() {
+  const rooms = readJoinedLocal();
+  joinedSection.hidden = rooms.length === 0;
+  joinedList.replaceChildren();
+  for (const room of rooms) {
+    const item = document.createElement("li");
+    item.className = "joined-row";
+    const name = document.createElement("span");
+    name.className = "joined-name";
+    name.textContent = room.title || room.roomId || room.baseUrl;
+    const sub = document.createElement("span");
+    sub.className = "joined-sub";
+    sub.textContent = room.alias ? `${room.alias} · ${hostLabel(room.baseUrl)}` : hostLabel(room.baseUrl);
+    item.append(name, sub);
+    joinedList.append(item);
+  }
+}
+
+function hostLabel(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl || "";
+  }
+}
+
+function readJoinedLocal() {
+  try {
+    const raw = window.localStorage.getItem(JOINED_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.rooms) ? parsed.rooms : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeJoinedLocal(rooms) {
+  try {
+    window.localStorage.setItem(JOINED_KEY, JSON.stringify({ rooms }));
+  } catch {
+    // Private-mode / full storage: the list simply will not persist.
+  }
 }
 
 function isForegroundState(value) {

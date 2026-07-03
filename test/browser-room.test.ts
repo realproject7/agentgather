@@ -1191,3 +1191,30 @@ test("a notification body never carries an invite URL or token from the message 
     await fixture.close();
   }
 });
+
+test("a browser room join is recorded in the device-local 'Rooms I'm in' list, token-free (#178)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // The successful join surfaces in the roster's "Rooms I'm in" section.
+    await page.waitForSelector("#joined-section:not([hidden])");
+    await page.waitForSelector("#joined-list .joined-row .joined-name");
+    assert.match((await page.textContent("#joined-list .joined-row .joined-name")) || "", new RegExp(fixture.roomId));
+
+    // The persisted record is metadata only — never the token or a #token= URL.
+    const stored = await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"));
+    assert.ok(stored);
+    assert.equal(/tgl_|Bearer|#token=|token=/i.test(stored || ""), false);
+    assert.equal((stored || "").includes(fixture.hostToken), false);
+    const parsed = JSON.parse(stored || "{}") as { rooms: Array<{ baseUrl: string; alias: string }> };
+    assert.equal(parsed.rooms[0]?.baseUrl, fixture.baseUrl);
+    assert.equal(parsed.rooms[0]?.alias, "host");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
