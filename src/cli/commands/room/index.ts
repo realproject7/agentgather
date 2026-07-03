@@ -57,6 +57,17 @@ import { parseArgs, flagBoolean, flagString, type ParsedArgs } from "../../args.
 import type { CliContext } from "../../context.js";
 import { readCurrent, readToken, writeCurrent, writeToken } from "../../state.js";
 
+// Printed to stderr whenever `room serve --allow-remote` starts (#180). Assumes
+// HTTPS is terminated at the edge (tunnel/reverse proxy); Agent Gather adds no
+// TLS of its own. See docs/self-tunnel.md for the full BYO-tunnel trust boundary.
+export const ALLOW_REMOTE_WARNING = [
+  "⚠ --allow-remote: HTTPS must be terminated at the edge (your tunnel/reverse proxy).",
+  "  Agent Gather adds no TLS. Never expose plain http:// on the open internet.",
+  "  Bearer tokens transit your tunnel provider in request headers and Attend Card",
+  "  URLs — same trust class as the managed relay. Keep the local bind on 127.0.0.1",
+  "  and let the tunnel own public TLS. See docs/self-tunnel.md."
+].join("\n");
+
 export async function runRoomCommand(argv: string[], context: CliContext): Promise<number> {
   const [subcommand, ...rest] = argv;
   if (subcommand === "start") return roomStart(rest, context);
@@ -890,6 +901,10 @@ async function roomServe(argv: string[], context: CliContext): Promise<number> {
     server.listen(port, host, resolve);
   });
   await writeCurrent(context.home, { ...current, baseUrl: localBaseUrl });
+  // Sharp guardrail (#180): --allow-remote assumes HTTPS is terminated at the
+  // edge (tunnel/reverse proxy). Warn loudly so nobody exposes plain HTTP or
+  // forgets that tokens transit the provider.
+  if (allowRemote) context.stderr.write(`${ALLOW_REMOTE_WARNING}\n`);
   context.stdout.write(`Serving ${current.roomId} at ${localBaseUrl}\n`);
   await new Promise<void>((resolve) => {
     const stop = (): void => {
