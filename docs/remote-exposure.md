@@ -5,6 +5,9 @@ message log, and issues participant tokens. Remote exposure only changes how
 participants reach that host server; it does not add Agent Gather cloud storage,
 durable wake, or end-to-end encryption.
 
+For a step-by-step "bring your own tunnel" recipe (ngrok / Cloudflare Tunnel)
+with the exact trust statement, see [`docs/self-tunnel.md`](./self-tunnel.md).
+
 ## Security Rules
 
 - Keep the Agent Gather listener on `127.0.0.1` unless you deliberately need a
