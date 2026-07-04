@@ -208,3 +208,73 @@ test("/joined-rooms returns device-local joined rooms with honest reachability a
     await new Promise<void>((resolve) => roomServer.close(() => resolve()));
   }
 });
+
+function postJoinedRoom(baseUrl: string, origin: string, body: string): Promise<{ status: number; body: string }> {
+  const url = new URL("/joined-rooms", baseUrl);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: "POST",
+        headers: { origin, "content-type": "text/plain" }
+      },
+      (res) => {
+        let payload = "";
+        res.on("data", (chunk) => {
+          payload += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: payload }));
+      }
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+test("the joined-rooms bridge rejects a non-loopback Origin and persists nothing (#178)", async () => {
+  const root = await makeRoot();
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const res = await postJoinedRoom(
+      fixture.baseUrl,
+      "http://evil.com",
+      JSON.stringify({ roomId: "x", baseUrl: "http://127.0.0.1:8787" })
+    );
+    assert.equal(res.status, 403);
+    assert.equal(JSON.parse(res.body).error, "bad_origin");
+    // The forged cross-origin write left no record.
+    const list = (await (await fetch(`${fixture.baseUrl}/joined-rooms`)).json()) as { rooms: unknown[] };
+    assert.equal(list.rooms.length, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the joined-rooms bridge persists only sanitized metadata from a loopback Origin (#178)", async () => {
+  const root = await makeRoot();
+  const fixture = await startServer(root, "owner-1");
+  try {
+    // A hostile body: a token field + a #token= in the URL. Neither may survive.
+    const body = JSON.stringify({
+      roomId: "demo",
+      title: "Demo",
+      alias: "me",
+      baseUrl: "http://127.0.0.1:8787/#token=tgl_secret_leak",
+      token: "tgl_should_be_dropped"
+    });
+    const res = await postJoinedRoom(fixture.baseUrl, "http://127.0.0.1:5555", body);
+    assert.equal(res.status, 200);
+    const list = (await (await fetch(`${fixture.baseUrl}/joined-rooms`)).json()) as {
+      rooms: Array<{ baseUrl: string }>;
+    };
+    assert.equal(list.rooms.length, 1);
+    // baseUrl reduced to origin (fragment dropped); no token field anywhere.
+    assert.equal(list.rooms[0]?.baseUrl, "http://127.0.0.1:8787");
+    assert.equal(/tgl_|"token"|Bearer/i.test(JSON.stringify(list.rooms)), false);
+  } finally {
+    await fixture.close();
+  }
+});

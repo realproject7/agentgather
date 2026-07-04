@@ -1238,3 +1238,26 @@ test("a browser join with an unreachable dashboard bridge degrades silently (#17
     await fixture.close();
   }
 });
+
+test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leaves the browser (#178)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const bridgePosts: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && /joined-rooms/.test(req.url())) bridgePosts.push(req.url());
+    });
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("https://evil.com")}#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    // Give any (wrongly) scheduled bridge POST time to fire.
+    await page.waitForTimeout(500);
+    // The non-loopback target is refused client-side: no bridge POST at all.
+    assert.deepEqual(bridgePosts, []);
+    // The room-origin record is still kept (local-only).
+    await page.waitForSelector("#joined-list .joined-row");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
