@@ -1218,3 +1218,23 @@ test("a browser room join is recorded in the device-local 'Rooms I'm in' list, t
     await fixture.close();
   }
 });
+
+test("a browser join with an unreachable dashboard bridge degrades silently (#178)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(String(error)));
+    // Point the same-device bridge at a dead local port: the POST fails, but the
+    // join still succeeds and the room-origin "Rooms I'm in" record is kept.
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("http://127.0.0.1:1")}#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("#joined-section:not([hidden])");
+    await page.waitForSelector("#joined-list .joined-row");
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

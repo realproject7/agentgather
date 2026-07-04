@@ -583,6 +583,41 @@ function recordJoinedRoomLocal() {
     lastSeen: now
   });
   writeJoinedLocal(rooms);
+  bridgeJoinToDashboard(baseUrl);
+}
+
+// Same-device bridge (#178): localStorage is origin-scoped, so the owner dashboard
+// (a different origin) can't see this room-origin record. When the room was opened
+// from the dashboard it carries `?dashboard=<origin>`; POST the token-free metadata
+// there so the join also appears in the dashboard's "Rooms I'm in". Fire-and-forget
+// and no-cors — we never read the response, and only metadata (never the token) is
+// sent.
+function bridgeJoinToDashboard(baseUrl) {
+  const dashboard = new URLSearchParams(window.location.search).get("dashboard");
+  if (!dashboard || !state.profile || !state.roomName) return;
+  let target;
+  try {
+    target = new URL("joined-rooms", dashboard.endsWith("/") ? dashboard : `${dashboard}/`);
+  } catch {
+    return;
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") return;
+  // The platform dashboard is same-device (localhost). Refuse any non-loopback
+  // target so a hostile ?dashboard= can never exfiltrate the join metadata off-box.
+  if (!isLoopbackHost(target.hostname)) return;
+  const body = JSON.stringify({ roomId: state.roomName, title: state.roomName, alias: state.profile.alias, baseUrl });
+  void fetch(target.toString(), {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body
+  }).catch(() => {
+    // Best-effort: no dashboard reachable → the room-roster list still has it.
+  });
+}
+
+function isLoopbackHost(hostname) {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
 }
 
 function renderJoinedRooms() {

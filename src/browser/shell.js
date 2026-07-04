@@ -256,7 +256,9 @@ function renderDetail(room) {
   routeHost.dataset.on = String(Boolean(health.host_connected));
   routeHost.textContent = health.host_connected ? "host connected" : "host offline";
   if (room.route_url) {
-    openRoom.href = room.route_url;
+    // Carry this dashboard's origin so a join made after opening the room bridges
+    // back into "Rooms I'm in" (#178). Token-free — only our own origin is added.
+    openRoom.href = withDashboardHint(room.route_url);
     openRoom.hidden = false;
     routeVisibility.textContent = room.route_url;
   } else {
@@ -815,6 +817,19 @@ function hostLabel(baseUrl) {
     return new URL(baseUrl).host;
   } catch {
     return baseUrl || "";
+  }
+}
+
+// Append this dashboard's origin as ?dashboard= so the room, once joined, can POST
+// its token-free join back to /joined-rooms (the same-device bridge). Only our own
+// origin is added — never a token.
+function withDashboardHint(routeUrl) {
+  try {
+    const url = new URL(routeUrl);
+    url.searchParams.set("dashboard", window.location.origin);
+    return url.toString();
+  } catch {
+    return routeUrl;
   }
 }
 

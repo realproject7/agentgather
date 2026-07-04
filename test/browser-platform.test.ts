@@ -607,3 +607,46 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     await platform.close();
   }
 });
+
+test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' token-free (#178)", async () => {
+  const root = await makeRoot();
+  // A hosted room keeps the dashboard in its populated (non-welcome) view.
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
+
+  // The actual room the user joins in the browser, with a real host log.
+  const hostToken = "host-bridge-tok";
+  await createRoom({ root, roomId: "bridge-room", hostAlias: "host", briefBody: "Bridge test brief." });
+  await writeParticipants(root, "bridge-room", [
+    { ...participant("host", "human", true, hostToken), display_name: "Host" }
+  ]);
+  const roomEntry = await listen(createRoomHttpServer({ root, roomId: "bridge-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 }));
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+
+  const browser = await chromium.launch();
+  try {
+    // Open the tokenized invite in the browser, carrying this dashboard's origin.
+    const roomPage = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await roomPage.goto(`${roomEntry.baseUrl}/?dashboard=${encodeURIComponent(platform.baseUrl)}#token=${hostToken}`);
+    await roomPage.waitForSelector("text=Bridge test brief.");
+
+    // The join bridged token-free metadata to the platform; the dashboard lists it.
+    const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await dashPage.goto(platform.baseUrl);
+    await dashPage.waitForFunction(
+      () => [...document.querySelectorAll("#joined-list .joined-name")].some((n) => (n.textContent || "").includes("bridge-room")),
+      { timeout: 15000 }
+    );
+
+    // The bridged record carries no token (not the value, not a #token=/tgl_/Bearer form).
+    const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as {
+      rooms: Array<{ roomId: string; baseUrl: string }>;
+    };
+    assert.equal(api.rooms.some((room) => room.roomId === "bridge-room"), true);
+    assert.equal(/tgl_|Bearer|token=|host-bridge-tok/i.test(JSON.stringify(api)), false);
+    assert.equal(api.rooms.find((room) => room.roomId === "bridge-room")?.baseUrl, roomEntry.baseUrl);
+  } finally {
+    await browser.close();
+    await platform.close();
+    await roomEntry.close();
+  }
+});

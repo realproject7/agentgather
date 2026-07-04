@@ -13,7 +13,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
-import { readJoinedRooms, readMessages } from "../storage/index.js";
+import { readJoinedRooms, recordJoinedRoom, readMessages } from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
 
@@ -50,12 +50,22 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
     sendJson(res, 403, { ok: false, error: "insecure_remote", message: "platform shell is localhost-only" });
     return;
   }
+
+  const url = new URL(req.url ?? "/", "http://platform.local");
+  // Same-device bridge (#178): a browser room join (different origin, localStorage
+  // is origin-scoped) POSTs its token-free metadata here so it appears in the
+  // owner dashboard's "Rooms I'm in" alongside CLI joins. Localhost-only (the gate
+  // above), metadata-only (the handler strips anything token-like) — the one write
+  // on this otherwise read-only surface.
+  if (req.method === "POST" && url.pathname === "/joined-rooms") {
+    await recordJoinedRoomFromRequest(options, req, res);
+    return;
+  }
   if (req.method !== "GET") {
     sendJson(res, 405, { ok: false, error: "method_not_allowed", message: "read-only surface" });
     return;
   }
 
-  const url = new URL(req.url ?? "/", "http://platform.local");
   const asset = ASSETS[url.pathname];
   if (asset !== undefined) {
     await sendAsset(res, asset.file, asset.contentType);
@@ -138,6 +148,92 @@ async function sendJoinedRooms(options: PlatformHttpServerOptions, res: ServerRe
     rooms.map(async (room) => ({ ...room, reachability: await probeReachability(room.baseUrl) }))
   );
   sendJson(res, 200, { ok: true, rooms: withReachability });
+}
+
+// Record a browser join into the device-local store (the same-device bridge). The
+// record is rebuilt from a strict metadata allowlist and the base URL is reduced to
+// origin+path, so a token in any field or in the URL (?token=/#token=) can never be
+// persisted. Bad input is a 400; it never throws the request open.
+async function recordJoinedRoomFromRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  // Minimal CSRF hardening for the same-device bridge: the caller is a browser room
+  // page on the same box, so its Origin must be loopback. Cross-site/off-box origins
+  // (the CSRF/exfil vector) are refused; the bridge stays local-only.
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "joined-room bridge is loopback-only" });
+    return;
+  }
+  let body: { roomId?: unknown; title?: unknown; alias?: unknown; baseUrl?: unknown };
+  try {
+    body = JSON.parse(await readRequestBody(req)) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_json", message: "body must be JSON" });
+    return;
+  }
+  const baseUrl = sanitizeBaseUrl(body.baseUrl);
+  if (baseUrl === null) {
+    sendJson(res, 400, { ok: false, error: "invalid_base_url", message: "baseUrl must be an http(s) URL" });
+    return;
+  }
+  const now = new Date().toISOString();
+  await recordJoinedRoom(options.root, {
+    roomId: shortString(body.roomId) ?? baseUrl,
+    title: shortString(body.title) ?? shortString(body.roomId) ?? baseUrl,
+    alias: shortString(body.alias) ?? "",
+    baseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  sendJson(res, 200, { ok: true });
+}
+
+// Reduce a candidate URL to origin + path, dropping any query/hash so a token in
+// ?token= / #token= can never survive into the stored record.
+function sanitizeBaseUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
+}
+
+// The bridge accepts writes only from a same-device (loopback) browser origin. An
+// absent Origin (non-browser caller) is rejected too — a browser fetch always sends
+// one. Legitimate local rooms are served from loopback, so this never blocks them.
+function isLoopbackOrigin(origin: string | undefined): boolean {
+  if (typeof origin !== "string" || origin.length === 0) return false;
+  try {
+    const host = new URL(origin).hostname;
+    return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function shortString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.slice(0, 200);
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+    size += buffer.length;
+    if (size > 8_192) throw new Error("body too large");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 // Token-free reachability: GET the room's base URL (the unauthenticated browser
