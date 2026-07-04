@@ -1191,3 +1191,73 @@ test("a notification body never carries an invite URL or token from the message 
     await fixture.close();
   }
 });
+
+test("a browser room join is recorded in the device-local 'Rooms I'm in' list, token-free (#178)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // The successful join surfaces in the roster's "Rooms I'm in" section.
+    await page.waitForSelector("#joined-section:not([hidden])");
+    await page.waitForSelector("#joined-list .joined-row .joined-name");
+    assert.match((await page.textContent("#joined-list .joined-row .joined-name")) || "", new RegExp(fixture.roomId));
+
+    // The persisted record is metadata only — never the token or a #token= URL.
+    const stored = await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"));
+    assert.ok(stored);
+    assert.equal(/tgl_|Bearer|#token=|token=/i.test(stored || ""), false);
+    assert.equal((stored || "").includes(fixture.hostToken), false);
+    const parsed = JSON.parse(stored || "{}") as { rooms: Array<{ baseUrl: string; alias: string }> };
+    assert.equal(parsed.rooms[0]?.baseUrl, fixture.baseUrl);
+    assert.equal(parsed.rooms[0]?.alias, "host");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a browser join with an unreachable dashboard bridge degrades silently (#178)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(String(error)));
+    // Point the same-device bridge at a dead local port: the POST fails, but the
+    // join still succeeds and the room-origin "Rooms I'm in" record is kept.
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("http://127.0.0.1:1")}#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("#joined-section:not([hidden])");
+    await page.waitForSelector("#joined-list .joined-row");
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leaves the browser (#178)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const bridgePosts: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && /joined-rooms/.test(req.url())) bridgePosts.push(req.url());
+    });
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("https://evil.com")}#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    // Give any (wrongly) scheduled bridge POST time to fire.
+    await page.waitForTimeout(500);
+    // The non-loopback target is refused client-side: no bridge POST at all.
+    assert.deepEqual(bridgePosts, []);
+    // The room-origin record is still kept (local-only).
+    await page.waitForSelector("#joined-list .joined-row");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

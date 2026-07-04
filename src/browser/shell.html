@@ -65,6 +65,25 @@
           <ul id="room-list" class="room-list"></ul>
           <div id="rooms-error" class="rail-error" role="alert" hidden></div>
 
+          <!-- Rooms I'm in (#178): device-local joined-room history, metadata only. -->
+          <section class="joined-section" aria-label="Rooms I'm in">
+            <div class="joined-head">
+              <div id="joined-title" class="rail-title">Rooms I'm in</div>
+            </div>
+            <ul id="joined-list" class="joined-list"></ul>
+            <p id="joined-empty" class="joined-empty">
+              No joined rooms tracked on this device yet. Paste an invite link to remember one
+              (metadata only — the token is never stored).
+            </p>
+            <form id="joined-add" class="joined-add">
+              <input id="joined-input" class="joined-input" type="text" autocomplete="off"
+                placeholder="paste an invite link" aria-label="Invite link for a room you joined">
+              <button id="joined-add-button" class="joined-add-button" type="submit">remember</button>
+            </form>
+            <div id="joined-error" class="rail-error" role="alert" hidden></div>
+            <p class="joined-note">Same-device only — never synced or copied to any server.</p>
+          </section>
+
           <div class="status-legend" aria-label="Room status legend">
             <div class="legend-title">room status</div>
             <ul class="legend-list">

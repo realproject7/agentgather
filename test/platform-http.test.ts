@@ -7,7 +7,8 @@ import path from "node:path";
 import test from "node:test";
 import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
-import { appendServerMessage, createRoom } from "../src/storage/index.js";
+import { appendServerMessage, createRoom, recordJoinedRoom } from "../src/storage/index.js";
+import { createRoomHttpServer } from "../src/server/index.js";
 
 function requestWithHost(baseUrl: string, hostHeader: string): Promise<{ status: number; body: string }> {
   const url = new URL("/rooms", baseUrl);
@@ -171,6 +172,108 @@ test("a non-localhost Host header is rejected", async () => {
     const response = await requestWithHost(fixture.baseUrl, "platform.example.com");
     assert.equal(response.status, 403);
     assert.equal(JSON.parse(response.body).error, "insecure_remote");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("/joined-rooms returns device-local joined rooms with honest reachability and no tokens (#178)", async () => {
+  const root = await makeRoot();
+
+  // A live room server to probe (its GET / serves the browser shell, unauthenticated).
+  await createRoom({ root, roomId: "live-room", hostAlias: "host", briefBody: "go" });
+  const roomServer = createRoomHttpServer({ root, roomId: "live-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 });
+  const livePort = await getFreePort();
+  await new Promise<void>((resolve) => roomServer.listen(livePort, "127.0.0.1", resolve));
+  const liveUrl = `http://127.0.0.1:${livePort}`;
+  const deadUrl = `http://127.0.0.1:${await getFreePort()}`; // nothing is listening here
+
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, { roomId: "live-room", title: "Live Room", alias: "me", baseUrl: liveUrl, joinedAt: now, lastSeen: now });
+  await recordJoinedRoom(root, { roomId: "gone-room", title: "Gone Room", alias: "me", baseUrl: deadUrl, joinedAt: now, lastSeen: now });
+
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const res = await fetch(`${fixture.baseUrl}/joined-rooms`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { ok: boolean; rooms: Array<{ roomId: string; reachability: string }> };
+    assert.equal(body.ok, true);
+    const byId = Object.fromEntries(body.rooms.map((room) => [room.roomId, room]));
+    assert.equal(byId["live-room"]?.reachability, "live");
+    assert.equal(byId["gone-room"]?.reachability, "unreachable");
+    // Metadata only — no token anywhere in the response.
+    assert.equal(/tgl_|Bearer|"token"/i.test(JSON.stringify(body)), false);
+  } finally {
+    await fixture.close();
+    await new Promise<void>((resolve) => roomServer.close(() => resolve()));
+  }
+});
+
+function postJoinedRoom(baseUrl: string, origin: string, body: string): Promise<{ status: number; body: string }> {
+  const url = new URL("/joined-rooms", baseUrl);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: "POST",
+        headers: { origin, "content-type": "text/plain" }
+      },
+      (res) => {
+        let payload = "";
+        res.on("data", (chunk) => {
+          payload += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: payload }));
+      }
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+test("the joined-rooms bridge rejects a non-loopback Origin and persists nothing (#178)", async () => {
+  const root = await makeRoot();
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const res = await postJoinedRoom(
+      fixture.baseUrl,
+      "http://evil.com",
+      JSON.stringify({ roomId: "x", baseUrl: "http://127.0.0.1:8787" })
+    );
+    assert.equal(res.status, 403);
+    assert.equal(JSON.parse(res.body).error, "bad_origin");
+    // The forged cross-origin write left no record.
+    const list = (await (await fetch(`${fixture.baseUrl}/joined-rooms`)).json()) as { rooms: unknown[] };
+    assert.equal(list.rooms.length, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the joined-rooms bridge persists only sanitized metadata from a loopback Origin (#178)", async () => {
+  const root = await makeRoot();
+  const fixture = await startServer(root, "owner-1");
+  try {
+    // A hostile body: a token field + a #token= in the URL. Neither may survive.
+    const body = JSON.stringify({
+      roomId: "demo",
+      title: "Demo",
+      alias: "me",
+      baseUrl: "http://127.0.0.1:8787/#token=tgl_secret_leak",
+      token: "tgl_should_be_dropped"
+    });
+    const res = await postJoinedRoom(fixture.baseUrl, "http://127.0.0.1:5555", body);
+    assert.equal(res.status, 200);
+    const list = (await (await fetch(`${fixture.baseUrl}/joined-rooms`)).json()) as {
+      rooms: Array<{ baseUrl: string }>;
+    };
+    assert.equal(list.rooms.length, 1);
+    // baseUrl reduced to origin (fragment dropped); no token field anywhere.
+    assert.equal(list.rooms[0]?.baseUrl, "http://127.0.0.1:8787");
+    assert.equal(/tgl_|"token"|Bearer/i.test(JSON.stringify(list.rooms)), false);
   } finally {
     await fixture.close();
   }

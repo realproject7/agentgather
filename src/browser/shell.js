@@ -19,6 +19,9 @@ const state = {
 // non-secret message fields — never bearer tokens or invite URLs.
 const HISTORY_PREFIX = "agentgather.history.";
 const EXPORT_PREFIX = "agentgather.exported.";
+// "Rooms I'm in" (#178): browser-recorded joined rooms. Metadata only — a token is
+// never written here (parseInviteToMeta strips it), matching the cache invariant.
+const JOINED_KEY = "agentgather.joinedRooms";
 
 const shell = document.querySelector(".platform-shell");
 const ownerLabel = document.getElementById("owner-label");
@@ -46,6 +49,11 @@ const roster = document.getElementById("shell-roster");
 const clearCacheButton = document.getElementById("clear-cache-button");
 const historySource = document.getElementById("history-source");
 const historySourceLabel = document.getElementById("history-source-label");
+const joinedList = document.getElementById("joined-list");
+const joinedEmpty = document.getElementById("joined-empty");
+const joinedForm = document.getElementById("joined-add");
+const joinedInput = document.getElementById("joined-input");
+const joinedError = document.getElementById("joined-error");
 
 // Create-room shell (no central API: the form composes the host CLI command).
 const createOverlay = document.getElementById("create-overlay");
@@ -82,9 +90,15 @@ async function init() {
     if (!createOverlay.hidden) closeCreateRoom();
     if (!inviteOverlay.hidden) closeInviteCards();
   });
+  joinedForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    addJoinedFromInput();
+  });
   await loadRooms();
+  await loadJoinedRooms();
   shell.dataset.state = "ready";
   setInterval(() => void loadRooms(), 5000);
+  setInterval(() => void loadJoinedRooms(), 5000);
 }
 
 async function loadRooms() {
@@ -242,7 +256,9 @@ function renderDetail(room) {
   routeHost.dataset.on = String(Boolean(health.host_connected));
   routeHost.textContent = health.host_connected ? "host connected" : "host offline";
   if (room.route_url) {
-    openRoom.href = room.route_url;
+    // Carry this dashboard's origin so a join made after opening the room bridges
+    // back into "Rooms I'm in" (#178). Token-free — only our own origin is added.
+    openRoom.href = withDashboardHint(room.route_url);
     openRoom.hidden = false;
     routeVisibility.textContent = room.route_url;
   } else {
@@ -725,6 +741,155 @@ function readCache(roomId) {
   } catch {
     return [];
   }
+}
+
+// ---- "Rooms I'm in" (#178): device-local joined-room history ----
+// Merges CLI-recorded joins (the platform /joined-rooms file, with live server-side
+// reachability) with this browser's own localStorage entries (reachability unknown
+// — a saved pointer). Both are metadata only; neither ever holds a token.
+async function loadJoinedRooms() {
+  let fromCli = [];
+  try {
+    const payload = await apiFetch("./joined-rooms");
+    if (Array.isArray(payload.rooms)) fromCli = payload.rooms;
+  } catch {
+    // The joined-rooms endpoint is best-effort; the browser list still renders.
+  }
+  const fromBrowser = readJoinedLocal().map((entry) => ({ ...entry, source: "browser", reachability: "saved" }));
+  // De-dup by baseUrl (a CLI record supersedes a browser pointer to the same room).
+  const seen = new Set(fromCli.map((room) => room.baseUrl));
+  const merged = [...fromCli.map((room) => ({ ...room, source: "cli" })), ...fromBrowser.filter((room) => !seen.has(room.baseUrl))];
+  renderJoined(merged);
+}
+
+function renderJoined(entries) {
+  joinedList.replaceChildren();
+  joinedEmpty.hidden = entries.length > 0;
+  for (const entry of entries) {
+    const item = document.createElement("li");
+    item.className = "joined-row";
+    item.dataset.reachability = entry.reachability || "saved";
+
+    const main = document.createElement("span");
+    main.className = "joined-main";
+    const name = document.createElement("span");
+    name.className = "joined-name";
+    name.textContent = entry.title || entry.roomId || entry.baseUrl;
+    const sub = document.createElement("span");
+    sub.className = "joined-sub";
+    const alias = entry.alias ? `${entry.alias} · ` : "";
+    sub.textContent = `${alias}${hostLabel(entry.baseUrl)}`;
+    main.append(name, sub);
+
+    const aside = document.createElement("span");
+    aside.className = "joined-aside";
+    const badge = document.createElement("span");
+    badge.className = "joined-reach";
+    badge.dataset.reachability = entry.reachability || "saved";
+    badge.textContent = reachabilityLabel(entry.reachability);
+    aside.append(badge);
+
+    // Browser-recorded pointers can be forgotten locally; CLI records are managed
+    // by the CLI state file, so no destructive control is offered for them here.
+    if (entry.source === "browser") {
+      const forget = document.createElement("button");
+      forget.type = "button";
+      forget.className = "joined-forget";
+      forget.textContent = "forget";
+      forget.addEventListener("click", () => forgetJoined(entry.baseUrl));
+      aside.append(forget);
+    }
+
+    item.append(main, aside);
+    joinedList.append(item);
+  }
+}
+
+function reachabilityLabel(reachability) {
+  if (reachability === "live") return "live";
+  if (reachability === "expired") return "expired route";
+  if (reachability === "unreachable") return "unreachable";
+  return "saved locally";
+}
+
+function hostLabel(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl || "";
+  }
+}
+
+// Append this dashboard's origin as ?dashboard= so the room, once joined, can POST
+// its token-free join back to /joined-rooms (the same-device bridge). Only our own
+// origin is added — never a token.
+function withDashboardHint(routeUrl) {
+  try {
+    const url = new URL(routeUrl);
+    url.searchParams.set("dashboard", window.location.origin);
+    return url.toString();
+  } catch {
+    return routeUrl;
+  }
+}
+
+function readJoinedLocal() {
+  try {
+    const raw = window.localStorage.getItem(JOINED_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.rooms) ? parsed.rooms : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeJoinedLocal(rooms) {
+  try {
+    window.localStorage.setItem(JOINED_KEY, JSON.stringify({ rooms }));
+  } catch {
+    // Storage may be unavailable or full; the list simply will not persist.
+  }
+}
+
+function addJoinedFromInput() {
+  joinedError.hidden = true;
+  const meta = parseInviteToMeta(joinedInput.value);
+  if (meta === null) {
+    joinedError.hidden = false;
+    joinedError.textContent = "Enter a valid room or invite URL (http/https).";
+    return;
+  }
+  const rooms = readJoinedLocal().filter((room) => room.baseUrl !== meta.baseUrl);
+  rooms.push(meta);
+  writeJoinedLocal(rooms);
+  joinedInput.value = "";
+  void loadJoinedRooms();
+}
+
+// Extract device-local metadata from a pasted room/invite URL. The token (in the
+// #token= fragment, ?token=, or a tgl_ value) is NEVER read into the stored record
+// — only the origin+path base URL and a slug survive.
+function parseInviteToMeta(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return null;
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
+  const slug = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+  const now = new Date().toISOString();
+  // No token, no alias, no message content — metadata only.
+  return { roomId: slug, title: slug, alias: "", baseUrl, joinedAt: now, lastSeen: now };
+}
+
+function forgetJoined(baseUrl) {
+  writeJoinedLocal(readJoinedLocal().filter((room) => room.baseUrl !== baseUrl));
+  void loadJoinedRooms();
 }
 
 // Redact secrets that can appear inside a message body before it is persisted.
