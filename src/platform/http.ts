@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { VERSION } from "../cli/help.js";
+import { writeToken } from "../cli/state.js";
 import { readJoinedRooms, recordJoinedRoom, readMessages } from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
@@ -61,6 +62,10 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
   // on this otherwise read-only surface.
   if (req.method === "POST" && url.pathname === "/joined-rooms") {
     await recordJoinedRoomFromRequest(options, req, res);
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/joined-rooms/remember") {
+    await rememberJoinedRoomFromInviteRequest(options, req, res);
     return;
   }
   if (req.method !== "GET") {
@@ -309,6 +314,53 @@ async function recordJoinedRoomFromRequest(
   sendJson(res, 200, { ok: true });
 }
 
+async function rememberJoinedRoomFromInviteRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "invite remember is loopback-only" });
+    return;
+  }
+  let body: { inviteUrl?: unknown };
+  try {
+    body = JSON.parse(await readRequestBody(req)) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_json", message: "body must be JSON" });
+    return;
+  }
+  const parsed = parseTokenizedInviteUrl(body.inviteUrl);
+  if (parsed === null) {
+    sendJson(res, 400, { ok: false, error: "invalid_invite_url", message: "invite URL must include a local room token" });
+    return;
+  }
+  const status = await fetchInviteStatus(parsed.baseUrl, parsed.token);
+  if (status === null) {
+    sendJson(res, 502, {
+      ok: false,
+      error: "invite_unreachable",
+      message: "Could not verify that invite with the room host. Open the invite once or ask the host to restart the room."
+    });
+    return;
+  }
+  const now = new Date().toISOString();
+  const title = status.boardroom?.name ?? status.room;
+  await recordJoinedRoom(options.root, {
+    roomId: status.room,
+    title,
+    alias: status.me,
+    baseUrl: parsed.baseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await writeToken(options.root, status.room, status.me, parsed.token);
+  sendJson(res, 200, {
+    ok: true,
+    room: { roomId: status.room, title, alias: status.me, baseUrl: parsed.baseUrl, joinedAt: now, lastSeen: now }
+  });
+}
+
 // Reduce a candidate URL to origin + path, dropping any query/hash so a token in
 // ?token= / #token= can never survive into the stored record.
 function sanitizeBaseUrl(value: unknown): string | null {
@@ -321,6 +373,68 @@ function sanitizeBaseUrl(value: unknown): string | null {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   return `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
+}
+
+function parseTokenizedInviteUrl(value: unknown): { baseUrl: string; token: string } | null {
+  if (typeof value !== "string") return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const token = inviteToken(url);
+  if (token === null) return null;
+  const path = url.pathname === "/card" ? "" : url.pathname;
+  const baseUrl = `${url.origin}${path}`.replace(/\/+$/, "") || url.origin;
+  return { baseUrl, token };
+}
+
+function inviteToken(url: URL): string | null {
+  const queryToken = url.searchParams.get("token");
+  if (isInviteToken(queryToken)) return queryToken;
+  if (url.hash.startsWith("#")) {
+    const hash = new URLSearchParams(url.hash.slice(1));
+    const hashToken = hash.get("token");
+    if (isInviteToken(hashToken)) return hashToken;
+  }
+  return null;
+}
+
+function isInviteToken(value: string | null): value is string {
+  return typeof value === "string" && /^tgl_[A-Za-z0-9_-]{12,}$/.test(value);
+}
+
+async function fetchInviteStatus(
+  baseUrl: string,
+  token: string
+): Promise<{ room: string; me: string; boardroom?: { name?: string } } | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const target = new URL(baseUrl.endsWith("/") ? `${baseUrl}status` : `${baseUrl}/status`);
+    const response = await fetch(target, {
+      headers: { accept: "application/json", authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as {
+      ok?: unknown;
+      room?: unknown;
+      me?: unknown;
+      boardroom?: { name?: unknown };
+    };
+    const room = shortString(payload.room);
+    const me = shortString(payload.me);
+    if (payload.ok !== true || room === undefined || me === undefined || !isSafeRoomId(room) || !isSafeAlias(me)) return null;
+    const name = shortString(payload.boardroom?.name);
+    return name === undefined ? { room, me } : { room, me, boardroom: { name } };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // The bridge accepts writes only from a same-device (loopback) browser origin. An

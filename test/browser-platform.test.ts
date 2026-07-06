@@ -602,8 +602,8 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     assert.equal(redirect.status, 302);
     assert.match(redirect.headers.get("location") ?? "", /^http:\/\/127\.0\.0\.1:9\/?\?dashboard=.*#token=tgl_joined_cli_secret$/);
 
-    // Add a browser-recorded join from a tokenized invite link.
-    await page.fill("#joined-input", "http://127.0.0.1:8787/#token=tgl_secret_xyz987");
+    // Add a browser-recorded token-free pointer.
+    await page.fill("#joined-input", "http://127.0.0.1:8787/saved-room");
     await page.click("#joined-add-button");
     await page.waitForSelector('.joined-row[data-reachability="saved"]');
 
@@ -627,6 +627,50 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
   } finally {
     await browser.close();
     await platform.close();
+  }
+});
+
+test("the dashboard remembers tokenized root invite links as real joined rooms", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
+  const inviteToken = "tgl_invite_root_secret";
+  await createRoom({ root, roomId: "remember-room", hostAlias: "host", briefBody: "Remember root invite." });
+  await writeParticipants(root, "remember-room", [
+    participant("host", "agent", true, "host-token"),
+    { ...participant("project7", "human", false, inviteToken), display_name: "project7" }
+  ]);
+  const roomEntry = await listen(createRoomHttpServer({ root, roomId: "remember-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 }));
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+
+    await page.fill("#joined-input", `${roomEntry.baseUrl}/#token=${inviteToken}`);
+    await page.click("#joined-add-button");
+    await page.waitForSelector('.joined-row[data-reachability="live"]');
+    await page.waitForSelector("text=remember-room");
+
+    const stored = await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"));
+    assert.equal(/tgl_|token=|Bearer/i.test(stored || ""), false);
+    assert.equal(await page.locator('.joined-row[data-reachability="saved"]').count(), 0);
+
+    const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as {
+      rooms: Array<{ roomId: string; alias: string; baseUrl: string }>;
+    };
+    assert.equal(api.rooms.some((room) => room.roomId === "remember-room" && room.alias === "project7"), true);
+    assert.equal(/tgl_|Bearer|token=|invite_root_secret/i.test(JSON.stringify(api)), false);
+
+    const openUrl = new URL(`${platform.baseUrl}/joined-rooms/open`);
+    openUrl.searchParams.set("room_id", "remember-room");
+    openUrl.searchParams.set("base_url", roomEntry.baseUrl);
+    const redirect = await fetch(openUrl, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    assert.match(redirect.headers.get("location") ?? "", /#token=tgl_invite_root_secret$/);
+  } finally {
+    await browser.close();
+    await platform.close();
+    await roomEntry.close();
   }
 });
 
