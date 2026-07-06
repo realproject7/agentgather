@@ -144,9 +144,8 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
 
     const page = await browser.newPage({ viewport: { width: 980, height: 720 } });
     await page.goto(`${baseUrl}/#token=${started.token}`);
-    await page.waitForSelector("text=Choose your display name");
-    await page.fill("#display-name", "Operator");
-    await page.click("#join-button");
+    // The host human token auto-claims the alias as its display name; guests
+    // still use the display-name chooser in the browser-focused tests.
     await page.waitForSelector("text=Final release check.");
     await page.fill("#message-text", "@reviewer browser human here");
     await page.click("#send-button");

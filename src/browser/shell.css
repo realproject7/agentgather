@@ -162,6 +162,19 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--chip);
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.joined-row:hover,
+.joined-row:focus-visible {
+  border-color: var(--accent-line);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.joined-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .joined-main {

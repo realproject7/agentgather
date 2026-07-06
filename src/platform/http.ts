@@ -12,6 +12,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { URL } from "node:url";
 import { readJoinedRooms, recordJoinedRoom, readMessages } from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
@@ -81,6 +82,10 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
 
   // "Rooms I'm in" (#178): device-local joined-room metadata (never a token), with
   // honest, token-free reachability probed live per request. No central copy.
+  if (url.pathname === "/joined-rooms/open") {
+    await openJoinedRoom(options, req, url, res);
+    return;
+  }
   if (url.pathname === "/joined-rooms") {
     await sendJoinedRooms(options, res);
     return;
@@ -148,6 +153,114 @@ async function sendJoinedRooms(options: PlatformHttpServerOptions, res: ServerRe
     rooms.map(async (room) => ({ ...room, reachability: await probeReachability(room.baseUrl) }))
   );
   sendJson(res, 200, { ok: true, rooms: withReachability });
+}
+
+// Browser dashboard convenience for token-free joined-room records. The dashboard
+// list itself never stores tokens; on click this localhost-only endpoint resolves
+// the matching alias in the local token store and redirects the new tab to the
+// room with a fragment token. If the token is unavailable, show a purpose-built
+// explanation instead of sending the user to the room's generic auth error.
+async function openJoinedRoom(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  url: URL,
+  res: ServerResponse
+): Promise<void> {
+  const roomId = url.searchParams.get("room_id") ?? "";
+  const baseUrl = sanitizeBaseUrl(url.searchParams.get("base_url"));
+  if (baseUrl === null || !isSafeRoomId(roomId)) {
+    sendJoinedOpenHelp(res, 400, "This saved room pointer is malformed.");
+    return;
+  }
+  const joined = (await readJoinedRooms(options.root)).find((room) => room.roomId === roomId && room.baseUrl === baseUrl);
+  if (joined === undefined) {
+    sendJoinedOpenHelp(res, 404, "This room is not tracked on this device.");
+    return;
+  }
+  if (!joined.alias) {
+    sendJoinedOpenHelp(res, 409, "This saved room has no participant alias. Paste the invite link again to refresh it.");
+    return;
+  }
+  const token = await readStoredParticipantToken(options.root, joined.roomId, joined.alias);
+  if (token === null) {
+    sendJoinedOpenHelp(
+      res,
+      409,
+      `No local token is stored for ${joined.alias}. Paste the invite link again or re-run the room join command.`
+    );
+    return;
+  }
+  const target = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  target.searchParams.set("dashboard", dashboardOrigin(req));
+  target.hash = `token=${encodeURIComponent(token)}`;
+  res.writeHead(302, {
+    location: target.toString(),
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store"
+  });
+  res.end();
+}
+
+async function readStoredParticipantToken(root: string, roomId: string, alias: string): Promise<string | null> {
+  if (!isSafeRoomId(roomId) || !isSafeAlias(alias)) return null;
+  try {
+    const raw = await readFile(path.join(root, "rooms", roomId, "tokens.json"), "utf8");
+    const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
+    const token = store.tokens?.[alias];
+    return typeof token === "string" && token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSafeRoomId(value: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value);
+}
+
+function isSafeAlias(value: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value);
+}
+
+function dashboardOrigin(req: IncomingMessage): string {
+  return `http://${req.headers.host || "127.0.0.1"}`;
+}
+
+function sendJoinedOpenHelp(res: ServerResponse, status: number, message: string): void {
+  const body = `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invite link required</title>
+<style>
+body{margin:0;background:#161619;color:#d8d9dd;font:16px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;place-items:center;min-height:100vh}
+main{max-width:520px;border:1px solid rgba(255,255,255,.09);border-radius:12px;background:#1f1f23;padding:22px;box-shadow:0 24px 80px rgba(0,0,0,.35)}
+h1{margin:0 0 10px;font-size:18px;color:#fff}
+p{margin:0 0 12px;color:#989aa3}
+.hint{color:#d8d9dd}
+</style>
+<main>
+  <h1>Invite link required</h1>
+  <p>${escapeHtml(message)}</p>
+  <p class="hint">Agent Gather remembers joined-room metadata on this device, but it does not sync or store invite tokens in the dashboard list.</p>
+  <p>Paste the room's invite link into the dashboard again, or ask the host for a fresh browser invite URL.</p>
+</main>
+</html>`;
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store"
+  });
+  res.end(body);
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    if (char === "&") return "&amp;";
+    if (char === "<") return "&lt;";
+    if (char === ">") return "&gt;";
+    if (char === '"') return "&quot;";
+    return "&#39;";
+  });
 }
 
 // Record a browser join into the device-local store (the same-device bridge). The

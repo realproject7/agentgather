@@ -7,6 +7,7 @@
 
 const state = {
   rooms: [],
+  joinedRooms: [],
   activeRoomId: null,
   chatCursor: 0,
   seen: new Set(),
@@ -112,13 +113,17 @@ async function loadRooms() {
   roomsError.hidden = true;
   state.rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
   ownerLabel.textContent = state.rooms[0]?.owner_user_id || "owner";
-  shell.dataset.view = state.rooms.length === 0 ? "empty" : "rooms";
+  updateShellView();
   railTitle.textContent = `Your rooms · ${state.rooms.length}`;
   renderRoomList();
   if (state.activeRoomId !== null) {
     const active = state.rooms.find((room) => room.room_id === state.activeRoomId);
     if (active) renderDetail(active);
   }
+}
+
+function updateShellView() {
+  shell.dataset.view = state.rooms.length === 0 && state.joinedRooms.length === 0 ? "empty" : "rooms";
 }
 
 function renderRoomList() {
@@ -763,12 +768,24 @@ async function loadJoinedRooms() {
 }
 
 function renderJoined(entries) {
+  state.joinedRooms = entries;
+  updateShellView();
   joinedList.replaceChildren();
   joinedEmpty.hidden = entries.length > 0;
   for (const entry of entries) {
     const item = document.createElement("li");
     item.className = "joined-row";
     item.dataset.reachability = entry.reachability || "saved";
+    item.dataset.openHref = joinedOpenUrl(entry);
+    item.tabIndex = 0;
+    item.setAttribute("role", "link");
+    item.setAttribute("aria-label", `Open ${entry.title || entry.roomId || entry.baseUrl}`);
+    item.addEventListener("click", () => openJoinedRoom(entry));
+    item.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openJoinedRoom(entry);
+    });
 
     const main = document.createElement("span");
     main.className = "joined-main";
@@ -796,13 +813,28 @@ function renderJoined(entries) {
       forget.type = "button";
       forget.className = "joined-forget";
       forget.textContent = "forget";
-      forget.addEventListener("click", () => forgetJoined(entry.baseUrl));
+      forget.addEventListener("click", (event) => {
+        event.stopPropagation();
+        forgetJoined(entry.baseUrl);
+      });
       aside.append(forget);
     }
 
     item.append(main, aside);
     joinedList.append(item);
   }
+}
+
+function openJoinedRoom(entry) {
+  if (!entry?.baseUrl) return;
+  window.location.assign(joinedOpenUrl(entry));
+}
+
+function joinedOpenUrl(entry) {
+  const url = new URL("./joined-rooms/open", window.location.href);
+  url.searchParams.set("room_id", entry.roomId || "");
+  url.searchParams.set("base_url", entry.baseUrl);
+  return url.toString();
 }
 
 function reachabilityLabel(reachability) {

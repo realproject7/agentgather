@@ -286,6 +286,54 @@ test("browser bare URL explains invite requirement and human token claims displa
   }
 });
 
+test("browser auto-claims a missing host human display name from the alias", async () => {
+  const root = await makeRoot();
+  const roomId = `browser-${Math.random().toString(36).slice(2, 10)}`;
+  const hostToken = `host-${roomId}`;
+  await createRoom({
+    root,
+    roomId,
+    hostAlias: "ag-lead",
+    briefBody: "Host display fallback."
+  });
+  await writeParticipants(root, roomId, [participant("ag-lead", "human", true, hostToken)]);
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const server = createRoomHttpServer({ root, roomId, baseUrl, rateLimitPerMinute: 1_000 });
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    await page.goto(`${baseUrl}/#token=${hostToken}`);
+    await page.waitForSelector("text=Host display fallback.");
+    assert.equal(await page.locator("#join-panel").isVisible(), false);
+    const participants = JSON.parse(await readFile(path.join(root, "rooms", roomId, "participants.json"), "utf8")) as Participant[];
+    assert.equal(participants.find((entry) => entry.alias === "ag-lead")?.display_name, "ag-lead");
+  } finally {
+    await browser.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("room opened from the dashboard exposes a same-tab dashboard home link", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("http://127.0.0.1:8788")}#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    const home = page.locator("#dashboard-home");
+    await home.waitFor();
+    assert.equal(await home.isVisible(), true);
+    assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788/");
+    assert.equal(await page.locator("#brand-static").isHidden(), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("browser reply affordance: per-message reply button, clearable composer indicator, reply_to send + timeline context (#113)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
@@ -1250,6 +1298,8 @@ test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leav
     });
     await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("https://evil.com")}#token=${fixture.hostToken}`);
     await page.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(await page.locator("#dashboard-home").isVisible(), false);
+    assert.equal(await page.locator("#brand-static").isVisible(), true);
     // Give any (wrongly) scheduled bridge POST time to fire.
     await page.waitForTimeout(500);
     // The non-loopback target is refused client-side: no bridge POST at all.
