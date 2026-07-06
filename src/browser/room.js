@@ -50,6 +50,8 @@ const joinPanel = document.getElementById("join-panel");
 const joinForm = document.getElementById("join-form");
 const displayNameInput = document.getElementById("display-name");
 const joinError = document.getElementById("join-error");
+const dashboardHome = document.getElementById("dashboard-home");
+const brandStatic = document.getElementById("brand-static");
 const roomTitle = document.getElementById("room-title");
 const roomStatus = document.getElementById("room-status");
 const attendancePolicy = document.getElementById("attendance-policy");
@@ -120,6 +122,7 @@ const JOINED_KEY = "agentgather.joinedRooms";
 init().catch((error) => showError(error instanceof Error ? error.message : String(error)));
 
 async function init() {
+  hydrateDashboardHome();
   const token = tokenFromFragment() || sessionStorage.getItem("agentgather.token");
   if (!token) {
     authError.hidden = false;
@@ -136,11 +139,40 @@ async function init() {
   await startWithToken(token);
 }
 
+function hydrateDashboardHome() {
+  if (!dashboardHome || !brandStatic) return;
+  const dashboard = dashboardUrlFromQuery();
+  if (dashboard === null) return;
+  dashboardHome.href = dashboard;
+  dashboardHome.hidden = false;
+  brandStatic.hidden = true;
+}
+
+function dashboardUrlFromQuery() {
+  const raw = new URLSearchParams(window.location.search).get("dashboard");
+  if (!raw) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (!isLoopbackHost(url.hostname)) return null;
+  return url.toString();
+}
+
 async function startWithToken(token) {
   state.token = token;
   sessionStorage.setItem("agentgather.token", state.token);
   state.profile = (await authFetch("/profile")).participant;
   if (state.profile.kind === "human" && !state.profile.display_name) {
+    if (state.profile.is_host && state.profile.alias) {
+      await claimDisplayName(state.profile.alias);
+      await enterRoom();
+      return;
+    }
+    displayNameInput.value = state.profile.alias || "";
     joinPanel.hidden = false;
     shell.dataset.state = "joining";
     bindJoinForm();
@@ -178,16 +210,20 @@ async function submitProfile() {
   const displayName = displayNameInput.value.trim();
   if (!displayName) return;
   try {
-    const payload = await authFetch("/profile", {
-      method: "POST",
-      body: JSON.stringify({ display_name: displayName })
-    });
-    state.profile = payload.participant;
+    await claimDisplayName(displayName);
     await enterRoom();
   } catch (error) {
     joinError.hidden = false;
     joinError.textContent = error instanceof Error ? error.message : String(error);
   }
+}
+
+async function claimDisplayName(displayName) {
+  const payload = await authFetch("/profile", {
+    method: "POST",
+    body: JSON.stringify({ display_name: displayName })
+  });
+  state.profile = payload.participant;
 }
 
 function bindEvents() {

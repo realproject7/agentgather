@@ -31,6 +31,35 @@ body {
   gap: 9px;
 }
 
+.dashboard-home {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: var(--r-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.dashboard-home[hidden] {
+  display: none;
+}
+
+a.dashboard-home {
+  padding: 4px 6px;
+  margin-left: -6px;
+}
+
+a.dashboard-home:hover,
+a.dashboard-home:focus-visible {
+  background: var(--chip);
+}
+
+a.dashboard-home:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .brand-mark {
   width: 22px;
   height: 22px;

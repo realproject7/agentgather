@@ -9,6 +9,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createPlatformHttpServer, createControlPlaneRoom } from "../src/platform/index.js";
 import { appendServerMessage, createRoom, recordJoinedRoom, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
+import { writeToken } from "../src/cli/state.js";
 import type { Server } from "node:http";
 
 async function makeRoot(): Promise<string> {
@@ -574,6 +575,7 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     joinedAt: now,
     lastSeen: now
   });
+  await writeToken(root, "joined-cli", "me", "tgl_joined_cli_secret");
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
@@ -586,6 +588,17 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.waitForSelector("text=Joined via CLI");
 
+    const cliOpenHref = (await page.locator('.joined-row[data-reachability="unreachable"]').getAttribute("data-open-href")) ?? "";
+    assert.match(cliOpenHref, /\/joined-rooms\/open\?/);
+    assert.equal(/tgl_|token=|Bearer/i.test(cliOpenHref), false);
+
+    const openUrl = new URL(`${platform.baseUrl}/joined-rooms/open`);
+    openUrl.searchParams.set("room_id", "joined-cli");
+    openUrl.searchParams.set("base_url", "http://127.0.0.1:9");
+    const redirect = await fetch(openUrl, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    assert.match(redirect.headers.get("location") ?? "", /^http:\/\/127\.0\.0\.1:9\/?\?dashboard=.*#token=tgl_joined_cli_secret$/);
+
     // Add a browser-recorded join from a tokenized invite link.
     await page.fill("#joined-input", "http://127.0.0.1:8787/#token=tgl_secret_xyz987");
     await page.click("#joined-add-button");
@@ -596,12 +609,45 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     assert.ok(stored);
     assert.equal(/tgl_|token=|Bearer/i.test(stored || ""), false);
 
+    const savedOpenHref = (await page.locator('.joined-row[data-reachability="saved"]').getAttribute("data-open-href")) ?? "";
+    assert.match(savedOpenHref, /\/joined-rooms\/open\?/);
+    assert.equal(/tgl_|token=|Bearer/i.test(savedOpenHref), false);
+
+    await page.click('.joined-row[data-reachability="saved"] .joined-forget');
+
     // Clearing browser storage drops the browser-added entry gracefully; the CLI
     // record (device file, not browser storage) is unaffected.
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
     await page.waitForSelector("text=Joined via CLI");
     assert.equal(await page.locator('.joined-row[data-reachability="saved"]').count(), 0);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+test("the dashboard shows joined rooms even when the user hosts no rooms (#178)", async () => {
+  const root = await makeRoot();
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "joined-only",
+    title: "Joined Only",
+    alias: "me",
+    baseUrl: "http://127.0.0.1:9",
+    joinedAt: now,
+    lastSeen: now
+  });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+
+    await page.waitForSelector("text=Joined Only");
+    assert.equal(await page.locator("#welcome").isVisible(), false);
+    assert.equal(await page.locator(".platform-body").isVisible(), true);
   } finally {
     await browser.close();
     await platform.close();
