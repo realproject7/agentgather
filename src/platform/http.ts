@@ -14,6 +14,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
+import { VERSION } from "../cli/help.js";
 import { readJoinedRooms, recordJoinedRoom, readMessages } from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
@@ -77,6 +78,11 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
   if (url.pathname === "/rooms") {
     const result = await listRoomsResponse(options.root, query);
     sendJson(res, result.status, result.body);
+    return;
+  }
+
+  if (url.pathname === "/version") {
+    sendJson(res, 200, { ok: true, name: "agentgather", version: VERSION });
     return;
   }
 

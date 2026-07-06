@@ -55,6 +55,7 @@ const joinedEmpty = document.getElementById("joined-empty");
 const joinedForm = document.getElementById("joined-add");
 const joinedInput = document.getElementById("joined-input");
 const joinedError = document.getElementById("joined-error");
+const platformVersionValue = document.getElementById("platform-version-value");
 
 // Create-room shell (no central API: the form composes the host CLI command).
 const createOverlay = document.getElementById("create-overlay");
@@ -97,9 +98,20 @@ async function init() {
   });
   await loadRooms();
   await loadJoinedRooms();
+  void loadVersion();
   shell.dataset.state = "ready";
   setInterval(() => void loadRooms(), 5000);
   setInterval(() => void loadJoinedRooms(), 5000);
+}
+
+async function loadVersion() {
+  try {
+    const payload = await apiFetch("./version");
+    const version = typeof payload.version === "string" && payload.version.trim() ? payload.version : "unknown";
+    platformVersionValue.textContent = `v${version}`;
+  } catch {
+    platformVersionValue.textContent = "version unavailable";
+  }
 }
 
 async function loadRooms() {
