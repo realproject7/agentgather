@@ -5,6 +5,7 @@ import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { VERSION } from "../src/cli/help.js";
 import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
 import { appendServerMessage, createRoom, recordJoinedRoom } from "../src/storage/index.js";
@@ -87,6 +88,9 @@ test("serves the owner shell assets", async () => {
     const manifest = await fetch(`${fixture.baseUrl}/manifest.webmanifest`);
     assert.equal(manifest.status, 200);
     assert.equal((await manifest.json()).short_name, "Agent Gather");
+    const version = await fetch(`${fixture.baseUrl}/version`);
+    assert.equal(version.status, 200);
+    assert.equal((await version.json()).version, VERSION);
   } finally {
     await fixture.close();
   }

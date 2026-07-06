@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
+import { VERSION } from "../src/cli/help.js";
 import type { Participant } from "../src/protocol/index.js";
 import { createPlatformHttpServer, createControlPlaneRoom } from "../src/platform/index.js";
 import { appendServerMessage, createRoom, recordJoinedRoom, writeParticipants } from "../src/storage/index.js";
@@ -110,6 +111,8 @@ test("owner shell renders the room list, status, live chat, and human-vs-agent r
     await page.goto(platform.baseUrl);
 
     await page.waitForSelector(".room-row");
+    await page.waitForSelector("#platform-version-value");
+    assert.equal(await page.locator("#platform-version-value").textContent(), `v${VERSION}`);
     assert.equal(await page.locator(".room-row").count(), 2);
     await page.waitForSelector('.room-row[data-status="active"]');
     await page.waitForSelector('.room-row[data-status="paused"]');

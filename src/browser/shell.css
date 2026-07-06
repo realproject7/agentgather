@@ -88,6 +88,8 @@ body {
 
 .room-rail {
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: auto;
   padding: 16px;
   border-right: 1px solid var(--line);
@@ -946,6 +948,22 @@ body {
   flex: 0 0 auto;
 }
 
+.platform-version {
+  margin-top: auto;
+  padding-top: 16px;
+  display: grid;
+  gap: 3px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+.platform-version span:first-child {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 /* ---- overlays (create-room, invite cards) ---- */
 .overlay {
   position: fixed;
@@ -1450,7 +1468,7 @@ body {
   }
 
   .platform-shell.rooms-open .room-rail {
-    display: block;
+    display: flex;
   }
 
   .detail {
