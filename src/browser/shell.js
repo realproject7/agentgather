@@ -102,6 +102,10 @@ const inviteOverlay = document.getElementById("invite-overlay");
 const inviteRoomLabel = document.getElementById("invite-room");
 const inviteCards = document.getElementById("invite-cards");
 
+// About Agent Gather overlay (#215) — discoverable from the topbar in any state.
+const aboutOverlay = document.getElementById("about-overlay");
+const aboutOpen = document.getElementById("about-open");
+
 // Goal placeholders the welcome templates prefill into the create-room shell.
 // Launch templates (#214): each is a real preset — distinct channels and a
 // scenario-specific Room Brief starter — that prefills room creation, instead of
@@ -164,10 +168,12 @@ async function init() {
   clearCacheButton.addEventListener("click", clearActiveCache);
   wireCreateRoom();
   wireInviteCards();
+  wireAbout();
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!createOverlay.hidden) closeCreateRoom();
     if (!inviteOverlay.hidden) closeInviteCards();
+    if (!aboutOverlay.hidden) closeAbout();
   });
   joinedForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -801,6 +807,24 @@ function openInviteCards() {
 
 function closeInviteCards() {
   inviteOverlay.hidden = true;
+}
+
+// ---- About Agent Gather overlay (#215) ----
+function wireAbout() {
+  aboutOpen.addEventListener("click", openAbout);
+  document.getElementById("about-close").addEventListener("click", closeAbout);
+  aboutOverlay.addEventListener("click", (event) => {
+    if (event.target === aboutOverlay) closeAbout();
+  });
+}
+
+function openAbout() {
+  aboutOverlay.hidden = false;
+  document.getElementById("about-close").focus();
+}
+
+function closeAbout() {
+  aboutOverlay.hidden = true;
 }
 
 function renderInviteCards(room) {
