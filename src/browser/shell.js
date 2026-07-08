@@ -882,9 +882,25 @@ function readJoinedLocal() {
     const raw = window.localStorage.getItem(JOINED_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed.rooms) ? parsed.rooms : [];
+    if (!Array.isArray(parsed.rooms)) return [];
+    const rooms = parsed.rooms.filter(isUsableJoinedLocal);
+    if (rooms.length !== parsed.rooms.length) writeJoinedLocal(rooms);
+    return rooms;
   } catch {
     return [];
+  }
+}
+
+function isUsableJoinedLocal(entry) {
+  if (entry === null || typeof entry !== "object" || typeof entry.baseUrl !== "string" || typeof entry.roomId !== "string") {
+    return false;
+  }
+  try {
+    const url = new URL(entry.baseUrl);
+    if ((url.pathname === "" || url.pathname === "/") && entry.roomId === url.hostname) return false;
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -896,12 +912,24 @@ function writeJoinedLocal(rooms) {
   }
 }
 
-function addJoinedFromInput() {
+async function addJoinedFromInput() {
   joinedError.hidden = true;
-  const meta = parseInviteToMeta(joinedInput.value);
+  const raw = joinedInput.value;
+  if (hasInviteToken(raw)) {
+    try {
+      await apiPost("./joined-rooms/remember", { inviteUrl: raw });
+      joinedInput.value = "";
+      void loadJoinedRooms();
+    } catch (error) {
+      joinedError.hidden = false;
+      joinedError.textContent = error instanceof Error ? error.message : String(error);
+    }
+    return;
+  }
+  const meta = parseInviteToMeta(raw);
   if (meta === null) {
     joinedError.hidden = false;
-    joinedError.textContent = "Enter a valid room or invite URL (http/https).";
+    joinedError.textContent = "Enter a valid room URL, or paste an invite link while the host room is running.";
     return;
   }
   const rooms = readJoinedLocal().filter((room) => room.baseUrl !== meta.baseUrl);
@@ -925,10 +953,23 @@ function parseInviteToMeta(raw) {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   const baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
-  const slug = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+  const slug = url.pathname.split("/").filter(Boolean).pop();
+  if (!slug) return null;
   const now = new Date().toISOString();
   // No token, no alias, no message content — metadata only.
   return { roomId: slug, title: slug, alias: "", baseUrl, joinedAt: now, lastSeen: now };
+}
+
+function hasInviteToken(raw) {
+  let url;
+  try {
+    url = new URL(String(raw || "").trim());
+  } catch {
+    return false;
+  }
+  if (url.searchParams.get("token")) return true;
+  if (!url.hash.startsWith("#")) return false;
+  return new URLSearchParams(url.hash.slice(1)).has("token");
 }
 
 function forgetJoined(baseUrl) {
@@ -1000,6 +1041,19 @@ async function apiFetch(path) {
   const response = await fetch(target, { headers: { Accept: "application/json" } });
   const body = await response.text();
   const payload = body ? JSON.parse(body) : {};
+  if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
+  return payload;
+}
+
+async function apiPost(path, body) {
+  const target = new URL(path.replace(/^\.\//, ""), document.baseURI);
+  const response = await fetch(target, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
   return payload;
 }
