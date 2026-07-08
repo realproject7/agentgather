@@ -209,14 +209,22 @@
           <div class="overlay-body">
             <p class="create-sub">A room runs from your machine. The cloud only tracks status &amp; invites — never your messages.</p>
 
+            <!-- Template preview (#214): the selected preset's default channels,
+                 shown so the user sees the room setup before running the command.
+                 Hidden for a blank room. -->
+            <div id="create-preview" class="create-preview" role="note" hidden>
+              <span class="create-preview-head">Template · <b id="create-preview-label">Debug room</b></span>
+              <div id="create-channels" class="create-channels" aria-label="Default channels"></div>
+            </div>
+
             <label class="field">
               <span class="field-label">room name</span>
               <span class="field-input"><span class="field-pre">rooms.agentgather.dev/</span><input id="create-name" type="text" autocomplete="off" spellcheck="false" placeholder="h402-review"></span>
             </label>
 
             <label class="field">
-              <span class="field-label">goal <span class="field-opt">· shown to every participant</span></span>
-              <textarea id="create-goal" rows="2" placeholder="review the h402 pricing edge cases before merge &amp; produce follow-up tickets."></textarea>
+              <span class="field-label">room brief <span class="field-opt">· shown to every participant</span></span>
+              <textarea id="create-goal" rows="4" placeholder="review the h402 pricing edge cases before merge &amp; produce follow-up tickets."></textarea>
             </label>
 
             <div class="field">

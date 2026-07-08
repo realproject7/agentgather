@@ -1084,3 +1084,60 @@ test("the first-run empty state is a polished, responsive product screen (#213)"
     await platform.close();
   }
 });
+
+// #214 — dashboard templates are real presets: each prefills a distinct Room Brief
+// and distinct default channels and composes the create-boardroom command; the
+// blank-room path still composes room start. All template content is token-free.
+test("dashboard templates prefill distinct briefs + channels and compose create-boardroom; blank stays room start (#214)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".welcome-template");
+
+    const channelSets = new Set<string>();
+    const briefs = new Set<string>();
+    const secret = /tgl_|token=|Bearer|\/Users\/|\/home\/|[A-Za-z]:\\/;
+    for (const t of ["debug", "review", "planning", "product"]) {
+      await page.click(`.welcome-template[data-template="${t}"]`);
+      await page.waitForSelector("#create-overlay:not([hidden])");
+      await page.waitForSelector("#create-preview:not([hidden])");
+
+      const cmd = (await page.locator("#create-command").textContent()) ?? "";
+      const brief = await page.locator("#create-goal").inputValue();
+      const channels = ((await page.locator("#create-channels").textContent()) ?? "").replace(/\s+/g, "");
+
+      // The command uses create-boardroom with a channel spec and the template brief.
+      assert.match(cmd, /room create-boardroom \S+ --channels \S+/);
+      assert.ok(brief.trim().length > 0, `${t} brief is empty`);
+      // Token-free and private-path-free content everywhere it could leak.
+      assert.equal(secret.test(`${cmd}\n${brief}\n${channels}`), false, `${t} payload leaked a secret/path`);
+
+      channelSets.add(channels);
+      briefs.add(brief);
+
+      // Clear the brief while the overlay is still open (visible) so the next
+      // template's starter prefills, then close to reach the next card.
+      await page.fill("#create-goal", "");
+      await page.click("#create-close");
+    }
+    assert.equal(channelSets.size, 4, "template channel sets are not distinct");
+    assert.equal(briefs.size, 4, "template briefs are not distinct");
+
+    // Blank-room path preserved: creating without a template shows no preview and
+    // composes the simpler room start command. (The loop already left the brief empty.)
+    await page.click("#welcome-create");
+    await page.waitForSelector("#create-overlay:not([hidden])");
+    assert.equal(await page.locator("#create-preview").isHidden(), true);
+    assert.match((await page.locator("#create-command").textContent()) ?? "", /room start \S+/);
+
+    // No horizontal page overflow with the overlay open (long command wraps).
+    const noHScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+    assert.equal(noHScroll, true, "create overlay caused horizontal overflow");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
