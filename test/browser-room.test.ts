@@ -1384,15 +1384,19 @@ test("a direct room URL keeps the roster right panel in one independent scroll c
     await page.waitForSelector("#roster .rail-scroll #host-controls:not([hidden])");
     const scroll = await page.evaluate(() => {
       const s = document.querySelector("#roster .rail-scroll") as HTMLElement;
-      const roster = document.getElementById("roster")!.getBoundingClientRect();
+      const rosterEl = document.getElementById("roster")!;
       return {
         overflowing: s.scrollHeight > s.clientHeight,
         overflowY: getComputedStyle(s).overflowY,
-        withinViewport: roster.bottom <= window.innerHeight + 1
+        // The OUTER roster must NOT be the scroll boundary — it clips to itself so
+        // .rail-scroll is the single scroll container.
+        outerScrolls: rosterEl.scrollHeight > rosterEl.clientHeight + 1,
+        withinViewport: rosterEl.getBoundingClientRect().bottom <= window.innerHeight + 1
       };
     });
     assert.equal(scroll.overflowY, "auto");
     assert.equal(scroll.overflowing, true, "roster did not overflow at a short viewport");
+    assert.equal(scroll.outerScrolls, false, "the outer roster is still a scroll boundary");
     assert.equal(scroll.withinViewport, true, "roster clipped past the viewport bottom");
 
     // Scrolling the panel reveals the host controls at the bottom (not clipped off).

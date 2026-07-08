@@ -144,6 +144,9 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Bounded flex column that clips its own overflow, so the single .info-scroll
+     child is the ONE scroll boundary (matches the boardroom roster fix). */
+  overflow: hidden;
   border-left: 1px solid var(--line);
   background: rgba(20, 20, 24, 0.94);
 }

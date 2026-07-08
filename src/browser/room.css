@@ -838,9 +838,14 @@ pre {
    when the chat is sparse, with the host controls pinned to the bottom (#112).
    The rail shell (flex column + left border + wash) comes from the .k-rail
    primitive; only room-specific rail content lives below. */
-/* #218b clipping fix: a single scroll child holds all roster content so the
-   panel fills the column height and scrolls as one context — nothing (including
-   the fixed host-control section below) can clip past the viewport bottom. */
+/* #218b clipping fix: the roster is a bounded flex column (via .k-rail) that
+   clips its own overflow, so the single .rail-scroll child below is the ONE
+   scroll boundary — nothing (including the fixed host-control section) can clip
+   past the viewport bottom. */
+.roster {
+  overflow: hidden;
+}
+
 .roster .rail-scroll {
   flex: 1;
   min-height: 0;

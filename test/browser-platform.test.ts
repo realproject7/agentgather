@@ -922,15 +922,18 @@ test("the dashboard mounts a right info panel in the three-panel state, hides it
     // scroll context, and the panel bottom stays within the viewport (no clip).
     const scroll = await page.evaluate(() => {
       const s = document.querySelector("#info-panel .info-scroll") as HTMLElement;
-      const panel = document.getElementById("info-panel")!.getBoundingClientRect();
+      const panel = document.getElementById("info-panel")!;
       return {
         overflowing: s.scrollHeight > s.clientHeight,
         overflowY: getComputedStyle(s).overflowY,
-        withinViewport: panel.bottom <= window.innerHeight + 1
+        // The outer .info panel must NOT scroll — .info-scroll is the sole boundary.
+        outerScrolls: panel.scrollHeight > panel.clientHeight + 1,
+        withinViewport: panel.getBoundingClientRect().bottom <= window.innerHeight + 1
       };
     });
     assert.equal(scroll.overflowing, true, "info panel did not overflow with 31 participants");
     assert.equal(scroll.overflowY, "auto");
+    assert.equal(scroll.outerScrolls, false, "the outer info panel is still a scroll boundary");
     assert.equal(scroll.withinViewport, true, "info panel clipped past the viewport bottom");
 
     // No raw token in the panel or the breadcrumb.
