@@ -535,15 +535,28 @@ test("a join system line flips to 'now attending' once the participant is foregr
   }
 });
 
-test("route failures show a degraded reconnecting banner and recover to live", async () => {
+// #211 — when the host goes unreachable mid-session, the room falls back to a
+// read-only local backup: the loaded messages stay readable, the composer is
+// disabled (no fake offline sends), an honest notice names the device-local
+// snapshot, and live is restored (composer re-enabled) when the host recovers.
+test("host-offline mid-session falls back to a read-only local backup and recovers to live (#211)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await postMessage(fixture, fixture.hostToken, "backed-up hello");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("text=backed-up hello");
 
-    // Simulate the broker reporting the host tunnel as unavailable on later polls.
+    // The loaded message is persisted into a redacted, room-origin local backup.
+    const backup = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      return key ? (JSON.parse(window.localStorage.getItem(key) as string) as { messages: Array<{ text: string }> }) : null;
+    });
+    assert.ok(backup && backup.messages.some((m) => m.text === "backed-up hello"), "message not saved to local backup");
+
+    // Host goes unreachable → read-only local-backup mode.
     await page.route(/\/(messages|status)(\?|$)/, (route) =>
       route.fulfill({
         status: 504,
@@ -552,12 +565,18 @@ test("route failures show a degraded reconnecting banner and recover to live", a
       })
     );
     await page.waitForSelector('#room-banner[data-kind="degraded"]');
-    await page.waitForSelector("text=Reconnecting…");
-    await page.waitForSelector("text=host_unavailable");
+    await page.waitForSelector("text=Host offline — local backup");
+    await page.waitForSelector("#backup-notice:not([hidden])");
+    assert.match((await page.locator("#backup-notice").textContent()) ?? "", /can't be sent until the host resumes/);
+    // Composer is disabled (no fake offline sends); cached message stays readable.
+    await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === true);
+    assert.ok((await page.locator("text=backed-up hello").count()) > 0);
 
-    // When the route recovers, the banner clears on the next successful poll.
+    // Recovery: banner clears, composer re-enables, live authoritative again.
     await page.unroute(/\/(messages|status)(\?|$)/);
     await page.waitForSelector("#room-banner", { state: "hidden" });
+    await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === false);
+    await page.waitForSelector("#backup-notice", { state: "hidden" });
   } finally {
     await browser.close();
     await fixture.close();
@@ -1434,6 +1453,84 @@ test("a browser join records the boardroom display title in Rooms I'm in, token-
     assert.equal(entry?.title, "Agent Gather Launch"); // display title, not the slug
     assert.notEqual(entry?.title, fixture.roomId);
     assert.equal(/tgl_|token=|Bearer|host-/i.test(stored ?? ""), false);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+// #211 — the local backup is bounded (oldest dropped past the cap).
+test("the local backup is bounded — oldest messages are dropped past the cap (#211)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const key = `agentgather.backup.${fixture.roomId}`;
+    // Seed a backup already over the cap before the page scripts run.
+    await page.addInitScript((k) => {
+      const messages = Array.from({ length: 260 }, (_, i) => ({
+        id: i + 1,
+        from: "old",
+        ts: "2026-07-01T00:00:00.000Z",
+        type: "chat",
+        text: `old-${i}`
+      }));
+      window.localStorage.setItem(k, JSON.stringify({ messages }));
+    }, key);
+    await postMessage(fixture, fixture.hostToken, "newest-kept");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=newest-kept");
+
+    const backup = await page.evaluate((k) => JSON.parse(window.localStorage.getItem(k) as string), key);
+    assert.ok(backup.messages.length <= 250, `backup grew to ${backup.messages.length}`);
+    assert.equal(backup.messages.some((m: { text: string }) => m.text === "newest-kept"), true);
+    assert.equal(backup.messages.some((m: { text: string }) => m.text === "old-0"), false);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+// #211 — tokens and card URLs are redacted before being stored in the backup.
+test("the local backup redacts tokens and card URLs before storing (#211)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await postMessage(fixture, fixture.reviewerToken, "leak tgl_secret_abc123XYZ and https://host/card?token=tgl_zzz plus Bearer sk_live_qqq");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=leak");
+
+    const stored = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      return key ? (window.localStorage.getItem(key) as string) : "";
+    });
+    assert.equal(/tgl_secret_abc123XYZ|token=tgl_zzz|Bearer sk_live_qqq|\/card\?/.test(stored), false);
+    assert.match(stored, /redacted/);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+// #211 — host offline with no cached messages: empty read-only backup, composer disabled.
+test("host offline with no cached messages shows an empty read-only backup (#211)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.route(/\/(messages|status)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host tunnel did not respond" })
+      })
+    );
+    await page.waitForSelector("#backup-notice:not([hidden])");
+    assert.match((await page.locator("#backup-notice").textContent()) ?? "", /No messages are saved on this device yet/);
+    await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === true);
   } finally {
     await browser.close();
     await fixture.close();

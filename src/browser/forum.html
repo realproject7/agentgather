@@ -29,6 +29,10 @@
           </div>
           <button id="new-post" class="newpost" type="button">＋ New Post</button>
         </div>
+        <!-- #211: host-offline notice; forum mutations are disabled read-only. -->
+        <div id="forum-offline" class="forum-offline" role="status" aria-live="polite" hidden>
+          Host offline — this forum is read-only from your local view. New posts and comments can't be sent until the host resumes.
+        </div>
         <form id="new-post-form" class="new-post-form k-card" hidden>
           <input id="new-post-title" type="text" maxlength="200" placeholder="post title" autocomplete="off">
           <textarea id="new-post-body" rows="3" placeholder="post body — markdown supported"></textarea>

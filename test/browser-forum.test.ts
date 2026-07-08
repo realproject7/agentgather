@@ -207,3 +207,29 @@ test("forum UI shows an empty state for a forum with no posts", { timeout: 120_0
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+// #211 — when the host is unreachable, the forum is read-only: mutation controls
+// are disabled with an honest notice (no fake offline posts/comments).
+test("forum disables new-post/comment when the host is offline (#211)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // The forum assets load from the host, but the posts endpoint is unreachable.
+    await page.route(/\/forum\/posts(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host offline" })
+      })
+    );
+    await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum#token=${fixture.hostToken}`);
+    await page.waitForSelector("#forum-offline:not([hidden])");
+    assert.match((await page.locator("#forum-offline").textContent()) ?? "", /read-only|can't be sent/i);
+    await page.waitForFunction(() => (document.getElementById("new-post") as HTMLButtonElement).disabled === true);
+    assert.equal(await page.locator("#comment-text").isDisabled(), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
