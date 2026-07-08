@@ -293,7 +293,7 @@ async function selectRoom(roomId) {
 function enterRoomState(room) {
   lowerHome.hidden = true;
   lowerRoom.hidden = false;
-  renderChannelNav(room);
+  renderChannelNav();
   setBreadcrumb(room);
 }
 
@@ -333,8 +333,8 @@ function setBreadcrumb(room) {
 // plane, which carries no channel/forum list, so #218a renders the one channel
 // every room is guaranteed to have — #general chat. Real forum-channel
 // population arrives with #218b, when the room surfaces that own that data mount.
-function renderChannelNav(room) {
-  const channels = roomChannels(room);
+function renderChannelNav() {
+  const channels = [{ id: "general", name: "general", type: "chat" }];
   channelNav.replaceChildren();
   for (const [index, channel] of channels.entries()) {
     const item = document.createElement("li");
@@ -362,11 +362,6 @@ function renderChannelNav(room) {
     channelNav.append(item);
   }
   applyOverflow(channelNav, channelsMore);
-}
-
-// Baseline channel model available to the dashboard: every room has #general.
-function roomChannels(_room) {
-  return [{ id: "general", name: "general", type: "chat" }];
 }
 
 // Shared list overflow: once a list exceeds OVERFLOW_LIMIT rows, collapse the
