@@ -556,6 +556,15 @@ test("host-only mutation routes reject a non-host caller with 403 host_required,
     assert.equal(attendance.status, 403);
     assert.equal(attendance.body.error, "host_required");
 
+    // The session lifecycle route is host-only too (a valid start body still can't
+    // get past the authorization gate for a non-host).
+    const session = await jsonFetch(fixture, "POST", "/session", fixture.agentToken, {
+      action: "start",
+      expected_duration_m: 20
+    });
+    assert.equal(session.status, 403);
+    assert.equal(session.body.error, "host_required");
+
     // The gate is specific to host-only actions: a participant-safe write (posting
     // a message) still succeeds for the same non-host token, so this is authorization
     // scoping, not a blanket block. The room is still open (close was refused above).
