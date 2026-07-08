@@ -435,6 +435,13 @@ body {
   border-top: 1px solid var(--line);
 }
 
+.joined-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .joined-list {
   list-style: none;
   margin: 0 0 8px;
@@ -456,10 +463,13 @@ body {
   color: var(--faint);
 }
 
+/* Stacked in the narrow (264px) rail: title/sub on top, then the metadata +
+   lifecycle controls on their own line (#210) so the name keeps full width. */
 .joined-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -481,7 +491,6 @@ body {
 
 .joined-main {
   min-width: 0;
-  flex: 1;
   display: grid;
   gap: 2px;
 }
@@ -515,7 +524,9 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .joined-reach {
@@ -545,18 +556,81 @@ body {
   color: var(--danger);
 }
 
-.joined-forget {
+/* Device-local lifecycle controls (#210): archive / delete on joined rows only. */
+.joined-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.joined-ctl {
   padding: 2px 8px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--muted);
+  font-family: var(--font);
   font-size: var(--fs-xs);
+  cursor: pointer;
 }
 
-.joined-forget:hover {
+.joined-ctl:hover {
   border-color: var(--accent-line);
   color: var(--accent);
+}
+
+.joined-ctl:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.joined-ctl-danger:hover {
+  border-color: rgba(var(--danger-rgb), 0.5);
+  color: var(--danger);
+}
+
+/* Inline delete confirmation — replaces the row content (never a native dialog). */
+.joined-confirm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.joined-confirm-msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* Archived rows read as dimmed/recoverable when revealed via the toggle. */
+.joined-row[data-archived="true"] {
+  opacity: 0.62;
+}
+
+.joined-archived-toggle {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--faint);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.joined-archived-toggle:hover {
+  color: var(--text-soft);
+  background: var(--chip);
+}
+
+.joined-archived-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .joined-add {

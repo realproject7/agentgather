@@ -15,7 +15,9 @@ const state = {
   cacheRendered: false,
   pollTimer: null,
   // Selected launch template (#214), or null for a blank room.
-  createTemplate: null
+  createTemplate: null,
+  // Whether archived "Rooms I'm in" entries are shown (#210); default hidden.
+  showArchived: false
 };
 
 // Browser-local, per-room cache namespaces. Stores only already-received,
@@ -54,6 +56,7 @@ const historySource = document.getElementById("history-source");
 const historySourceLabel = document.getElementById("history-source-label");
 const joinedList = document.getElementById("joined-list");
 const joinedEmpty = document.getElementById("joined-empty");
+const joinedShowArchived = document.getElementById("joined-show-archived");
 const joinedForm = document.getElementById("joined-add");
 const joinedInput = document.getElementById("joined-input");
 const joinedError = document.getElementById("joined-error");
@@ -178,6 +181,10 @@ async function init() {
   joinedForm.addEventListener("submit", (event) => {
     event.preventDefault();
     addJoinedFromInput();
+  });
+  joinedShowArchived.addEventListener("click", () => {
+    state.showArchived = !state.showArchived;
+    renderJoined(state.joinedRooms);
   });
   await loadRooms();
   await loadJoinedRooms();
@@ -1054,18 +1061,32 @@ function renderJoined(entries) {
   state.joinedRooms = entries;
   updateShellView();
   joinedList.replaceChildren();
-  joinedEmpty.hidden = entries.length > 0;
-  for (const entry of entries) {
+
+  // Archived rows (#210) are hidden by default; the toggle appears only when some
+  // exist and reveals/hides them without touching the host room.
+  const archivedCount = entries.filter((entry) => entry.archived).length;
+  joinedShowArchived.hidden = archivedCount === 0;
+  joinedShowArchived.setAttribute("aria-pressed", String(state.showArchived));
+  joinedShowArchived.textContent = state.showArchived ? "hide archived" : `show archived (${archivedCount})`;
+
+  const visible = entries.filter((entry) => state.showArchived || !entry.archived);
+  joinedEmpty.hidden = visible.length > 0;
+  for (const entry of visible) {
     const item = document.createElement("li");
     item.className = "joined-row";
+    if (entry.archived) item.dataset.archived = "true";
     item.dataset.reachability = entry.reachability || "saved";
     item.dataset.openHref = joinedOpenUrl(entry);
     item.tabIndex = 0;
     item.setAttribute("role", "link");
     item.setAttribute("aria-label", `Open ${entry.title || entry.roomId || entry.baseUrl}`);
-    item.addEventListener("click", () => openJoinedRoom(entry));
+    item.addEventListener("click", () => {
+      if (item.dataset.confirming === "true") return; // don't open while confirming a delete
+      openJoinedRoom(entry);
+    });
     item.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
+      if (item.dataset.confirming === "true") return;
       event.preventDefault();
       openJoinedRoom(entry);
     });
@@ -1097,26 +1118,121 @@ function renderJoined(entries) {
     badge.className = "joined-reach";
     badge.dataset.reachability = entry.reachability || "saved";
     badge.textContent = reachabilityLabel(entry.reachability);
-    aside.append(badge);
-
-    // Browser-recorded pointers can be forgotten locally; CLI records are managed
-    // by the CLI state file, so no destructive control is offered for them here.
-    if (entry.source === "browser") {
-      const forget = document.createElement("button");
-      forget.type = "button";
-      forget.className = "joined-forget";
-      forget.textContent = "forget";
-      forget.addEventListener("click", (event) => {
-        event.stopPropagation();
-        forgetJoined(entry.baseUrl);
-      });
-      aside.append(forget);
-    }
+    aside.append(badge, buildJoinedControls(entry, item));
 
     item.append(main, aside);
     joinedList.append(item);
   }
   applyOverflow(joinedList, joinedMore);
+}
+
+// Device-local lifecycle controls for a joined-room row (#210). Archive hides the
+// row (recoverable); delete removes the local record + this room's browser cache
+// after an inline confirm. Only ever touches this device — never closes the host
+// room and never notifies anyone. Exposed only on joined rows, never host rooms.
+function buildJoinedControls(entry, item) {
+  const controls = document.createElement("span");
+  controls.className = "joined-controls";
+
+  const archiveBtn = document.createElement("button");
+  archiveBtn.type = "button";
+  archiveBtn.className = "joined-ctl";
+  archiveBtn.dataset.action = entry.archived ? "unarchive" : "archive";
+  archiveBtn.textContent = entry.archived ? "unarchive" : "archive";
+  archiveBtn.title = entry.archived
+    ? "Restore this room here (local only)"
+    : "Hide this room here — doesn't close the host room or notify anyone";
+  archiveBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void toggleArchiveJoined(entry);
+  });
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "joined-ctl joined-ctl-danger";
+  deleteBtn.dataset.action = "delete";
+  deleteBtn.textContent = "delete";
+  deleteBtn.title = "Remove this room from this device only";
+  deleteBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    showJoinedDeleteConfirm(entry, item);
+  });
+
+  controls.append(archiveBtn, deleteBtn);
+  return controls;
+}
+
+// Inline delete confirmation (never a native confirm() dialog): swap the row for
+// a confirm bar with an honest note that this only affects this device.
+function showJoinedDeleteConfirm(entry, item) {
+  item.dataset.confirming = "true";
+  item.replaceChildren();
+  const bar = document.createElement("span");
+  bar.className = "joined-confirm";
+  const msg = document.createElement("span");
+  msg.className = "joined-confirm-msg";
+  msg.textContent = "Remove from this device? It won't close the host room or notify anyone.";
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "joined-ctl joined-ctl-danger";
+  del.dataset.action = "confirm-delete";
+  del.textContent = "Delete";
+  del.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void deleteJoinedEntry(entry);
+  });
+  const keep = document.createElement("button");
+  keep.type = "button";
+  keep.className = "joined-ctl";
+  keep.dataset.action = "cancel-delete";
+  keep.textContent = "Keep";
+  keep.addEventListener("click", (event) => {
+    event.stopPropagation();
+    renderJoined(state.joinedRooms);
+  });
+  bar.append(msg, del, keep);
+  item.append(bar);
+}
+
+async function toggleArchiveJoined(entry) {
+  const archived = !entry.archived;
+  if (entry.source === "browser") {
+    setLocalArchived(entry.baseUrl, archived);
+  } else {
+    try {
+      await apiPost("./joined-rooms/archive", { roomId: entry.roomId, baseUrl: entry.baseUrl, archived });
+    } catch {
+      // Best-effort device-local write; the list still re-renders from state.
+    }
+  }
+  await loadJoinedRooms();
+}
+
+async function deleteJoinedEntry(entry) {
+  if (entry.source === "browser") {
+    writeJoinedLocal(readJoinedLocal().filter((room) => room.baseUrl !== entry.baseUrl));
+  } else {
+    try {
+      await apiPost("./joined-rooms/delete", { roomId: entry.roomId, baseUrl: entry.baseUrl });
+    } catch {
+      // Best-effort; loadJoinedRooms re-reads the authoritative device-local state.
+    }
+  }
+  // Clear this room's device-local message cache (never host data).
+  if (entry.roomId) clearCache(entry.roomId);
+  await loadJoinedRooms();
+}
+
+// Flip the archived flag on a browser-local joined record (device-local only).
+function setLocalArchived(baseUrl, archived) {
+  const rooms = readJoinedLocal().map((room) => {
+    if (room.baseUrl !== baseUrl) return room;
+    const next = { ...room };
+    if (archived) next.archived = true;
+    else delete next.archived;
+    return next;
+  });
+  writeJoinedLocal(rooms);
 }
 
 function openJoinedRoom(entry) {
@@ -1252,11 +1368,6 @@ function hasInviteToken(raw) {
   if (url.searchParams.get("token")) return true;
   if (!url.hash.startsWith("#")) return false;
   return new URLSearchParams(url.hash.slice(1)).has("token");
-}
-
-function forgetJoined(baseUrl) {
-  writeJoinedLocal(readJoinedLocal().filter((room) => room.baseUrl !== baseUrl));
-  void loadJoinedRooms();
 }
 
 // Redact secrets that can appear inside a message body before it is persisted.
