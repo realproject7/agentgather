@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
-import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
+import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 
 async function makeRoot(): Promise<string> {
@@ -1409,6 +1409,31 @@ test("a direct room URL keeps the roster right panel in one independent scroll c
       return c.bottom <= window.innerHeight + 1 && c.top >= 0;
     });
     assert.equal(controlsVisible, true, "host controls remained clipped after scrolling");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+// #216 — a browser join records the human-readable boardroom display title (from
+// /status) as the "Rooms I'm in" label, not the slug-like room id, and still
+// never persists a token in the device-local record.
+test("a browser join records the boardroom display title in Rooms I'm in, token-free (#216)", async () => {
+  const fixture = await startFixture();
+  await createBoardroom(fixture.root, fixture.roomId, { name: "Agent Gather Launch" });
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    const stored = await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"));
+    const parsed = JSON.parse(stored ?? "{}") as { rooms: Array<{ roomId: string; title: string }> };
+    const entry = parsed.rooms.find((room) => room.roomId === fixture.roomId);
+    assert.notEqual(entry, undefined);
+    assert.equal(entry?.title, "Agent Gather Launch"); // display title, not the slug
+    assert.notEqual(entry?.title, fixture.roomId);
+    assert.equal(/tgl_|token=|Bearer|host-/i.test(stored ?? ""), false);
   } finally {
     await browser.close();
     await fixture.close();

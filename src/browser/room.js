@@ -37,6 +37,9 @@ const state = {
   sessionInFlight: false,
   // Room name (from /status), used to key per-room notification prefs.
   roomName: null,
+  // Human-readable boardroom display title (from /status boardroom.name), used
+  // as the primary label when this join is recorded in "Rooms I'm in" (#216).
+  boardroomTitle: null,
   // Browser notification layer (#186): opt-in, poll-driven (no push/SSE/worker).
   // enabled + scope persist per-room in sessionStorage; unread drives the title
   // badge + favicon dot while the tab is unfocused. ready gates out the initial
@@ -349,6 +352,7 @@ async function loadStatus() {
   markConnectionLive();
   state.roomStatus = payload.room_status;
   state.roomName = payload.room;
+  state.boardroomTitle = payload.boardroom?.name ?? null;
   roomTitle.textContent = payload.room;
   briefRoomName.textContent = payload.room;
   roomStatus.textContent = payload.room_status;
@@ -610,9 +614,13 @@ function recordJoinedRoomLocal() {
   const now = new Date().toISOString();
   const rooms = readJoinedLocal().filter((room) => room.baseUrl !== baseUrl);
   const existing = readJoinedLocal().find((room) => room.baseUrl === baseUrl);
+  // Primary label is the human-readable boardroom title (#216); the slug-like
+  // room id is only the fallback when no display title is known. Keep a real
+  // title already stored locally rather than downgrading it to the slug.
+  const title = state.boardroomTitle || (existing && existing.title !== state.roomName ? existing.title : state.roomName);
   rooms.push({
     roomId: state.roomName,
-    title: state.roomName,
+    title,
     alias: state.profile.alias,
     baseUrl,
     joinedAt: existing ? existing.joinedAt : now,
@@ -641,7 +649,12 @@ function bridgeJoinToDashboard(baseUrl) {
   // The platform dashboard is same-device (localhost). Refuse any non-loopback
   // target so a hostile ?dashboard= can never exfiltrate the join metadata off-box.
   if (!isLoopbackHost(target.hostname)) return;
-  const body = JSON.stringify({ roomId: state.roomName, title: state.roomName, alias: state.profile.alias, baseUrl });
+  const body = JSON.stringify({
+    roomId: state.roomName,
+    title: state.boardroomTitle || state.roomName,
+    alias: state.profile.alias,
+    baseUrl
+  });
   void fetch(target.toString(), {
     method: "POST",
     mode: "no-cors",

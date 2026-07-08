@@ -42,7 +42,11 @@ export async function recordJoinedRoom(home: string, entry: JoinedRoom): Promise
   const index = rooms.findIndex((room) => room.roomId === entry.roomId && room.baseUrl === entry.baseUrl);
   const record: JoinedRoom = {
     roomId: entry.roomId,
-    title: entry.title,
+    // Keep the best-known display title (#216): a re-record that only carries the
+    // slug-like fallback (empty or === roomId) must not overwrite a real title
+    // captured on an earlier join — so an offline refresh or a token-less re-add
+    // never downgrades "Agent Gather Launch" back to "ag-project-0706".
+    title: preferKnownTitle(entry.title, entry.roomId, index === -1 ? undefined : rooms[index]?.title),
     alias: entry.alias,
     baseUrl: entry.baseUrl,
     joinedAt: index === -1 ? entry.joinedAt : (rooms[index]?.joinedAt ?? entry.joinedAt),
@@ -51,4 +55,15 @@ export async function recordJoinedRoom(home: string, entry: JoinedRoom): Promise
   if (index === -1) rooms.push(record);
   else rooms[index] = record;
   await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms }, null, 2)}\n`);
+}
+
+// A title is "real" when it is non-empty and not just the slug-like roomId. Prefer
+// an incoming real title; otherwise keep an existing real title; otherwise fall
+// back to whatever we have (incoming, else the roomId).
+function preferKnownTitle(incoming: string, roomId: string, existing: string | undefined): string {
+  const isReal = (value: string | undefined): boolean =>
+    value !== undefined && value.length > 0 && value !== roomId;
+  if (isReal(incoming)) return incoming;
+  if (existing !== undefined && isReal(existing)) return existing;
+  return incoming.length > 0 ? incoming : roomId;
 }
