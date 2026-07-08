@@ -961,3 +961,68 @@ test("the dashboard mounts a right info panel in the three-panel state, hides it
     await platform.close();
   }
 });
+
+// #216 — the dashboard shows the human-readable display title as the primary
+// "Rooms I'm in" label, with the slug-like room id demoted to secondary/tooltip;
+// a room with no known title falls back cleanly to the id; long titles ellipsize.
+test("the dashboard labels joined rooms by display title, not slug, with the id as secondary/debug metadata (#216)", async () => {
+  const root = await makeRoot();
+  const now = new Date().toISOString();
+  // A joined room with a real display title (hydrated at join time).
+  await recordJoinedRoom(root, {
+    roomId: "ag-project-0706",
+    title: "Agent Gather Launch",
+    alias: "me",
+    baseUrl: "http://127.0.0.1:9",
+    joinedAt: now,
+    lastSeen: now
+  });
+  // A joined room whose title is only the slug (no display name known).
+  await recordJoinedRoom(root, {
+    roomId: "release-checklist-with-a-very-long-slug-that-should-ellipsize-in-the-rail",
+    title: "release-checklist-with-a-very-long-slug-that-should-ellipsize-in-the-rail",
+    alias: "me",
+    baseUrl: "http://127.0.0.1:8",
+    joinedAt: now,
+    lastSeen: now
+  });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".joined-row");
+
+    // Titled room: primary label is the display title, NOT the slug.
+    const titled = page.locator('.joined-row:has(.joined-name:text-is("Agent Gather Launch"))');
+    assert.equal(await titled.count(), 1);
+    assert.equal(await titled.locator(".joined-main").getAttribute("data-titled"), "true");
+    // The room id is available as secondary/debug metadata (sub line + tooltip).
+    assert.match((await titled.locator(".joined-sub").textContent()) ?? "", /ag-project-0706/);
+    assert.match((await titled.locator(".joined-name").getAttribute("title")) ?? "", /room id: ag-project-0706/);
+
+    // Untitled room: falls back to the slug as the primary label, flagged as a fallback.
+    const fallback = page.locator('.joined-row:has(.joined-main[data-titled="false"])');
+    assert.equal(await fallback.count(), 1);
+    assert.match((await fallback.locator(".joined-name").textContent()) ?? "", /^release-checklist-/);
+
+    // No raw token anywhere in the rendered rail or the token-free joined-rooms API.
+    const railHtml = (await page.locator(".room-rail").innerHTML()) ?? "";
+    assert.equal(/tgl_|token=|Bearer/i.test(railHtml), false);
+    const api = await (await fetch(`${platform.baseUrl}/joined-rooms`)).json();
+    assert.equal(/tgl_|token=|Bearer/i.test(JSON.stringify(api)), false);
+
+    // The long fallback slug ellipsizes and does not overflow the rail track.
+    const contained = await page.evaluate(() => {
+      const name = document.querySelector('.joined-main[data-titled="false"] .joined-name') as HTMLElement | null;
+      const rail = document.querySelector(".room-rail") as HTMLElement | null;
+      if (name === null || rail === null) return false;
+      return getComputedStyle(name).textOverflow === "ellipsis" && rail.scrollWidth <= rail.clientWidth + 1;
+    });
+    assert.equal(contained, true, "long joined-room slug overflowed the rail");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});

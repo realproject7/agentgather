@@ -53,3 +53,25 @@ test("re-joining the same room updates last_seen and does not duplicate the entr
   const raw = await readFile(joinedRoomsPath(home), "utf8");
   assert.equal(/tgl_/i.test(raw), false);
 });
+
+test("recordJoinedRoom keeps a known display title and never downgrades it to the slug (#216)", async () => {
+  const { recordJoinedRoom } = await import("../src/storage/index.js");
+  const home = await mkdtemp(path.join(os.tmpdir(), "agentgather-joined-title-"));
+  const base = { roomId: "ag-project-0706", alias: "me", baseUrl: "http://127.0.0.1:8787", joinedAt: "2026-07-01T00:00:00.000Z", lastSeen: "2026-07-01T00:00:00.000Z" };
+
+  // First join hydrated a real display title.
+  await recordJoinedRoom(home, { ...base, title: "Agent Gather Launch" });
+  assert.equal((await readJoinedRooms(home))[0]?.title, "Agent Gather Launch");
+
+  // A later offline / token-less re-record only carries the slug-like fallback
+  // (title === roomId): the known display title must survive.
+  await recordJoinedRoom(home, { ...base, title: base.roomId, lastSeen: "2026-07-02T00:00:00.000Z" });
+  const after = await readJoinedRooms(home);
+  assert.equal(after.length, 1);
+  assert.equal(after[0]?.title, "Agent Gather Launch");
+  assert.equal(after[0]?.lastSeen, "2026-07-02T00:00:00.000Z");
+
+  // A room that never had a title falls back cleanly to the room id.
+  await recordJoinedRoom(home, { roomId: "slug-only", title: "slug-only", alias: "me", baseUrl: "http://127.0.0.1:9", joinedAt: base.joinedAt, lastSeen: base.lastSeen });
+  assert.equal((await readJoinedRooms(home)).find((r) => r.roomId === "slug-only")?.title, "slug-only");
+});

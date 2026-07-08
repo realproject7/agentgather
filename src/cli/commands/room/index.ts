@@ -713,8 +713,27 @@ async function roomJoin(argv: string[], context: CliContext): Promise<number> {
   await writeToken(context.home, roomId, alias, token);
   // Device-local joined-room record (#178): metadata only, never the token. This
   // is what the owner dashboard's "Rooms I'm in" reads; it never leaves the device.
+  // The title is the human-readable boardroom name (#216), hydrated best-effort
+  // from the room the join already has a token for; it falls back to the room id.
+  // The token stays in the request header only — it is never persisted. Any
+  // failure (offline host, older server, no name) falls back to the room id and
+  // never blocks the join.
   const now = new Date().toISOString();
-  await recordJoinedRoom(context.home, { roomId, title: roomId, alias, baseUrl, joinedAt: now, lastSeen: now });
+  let title = roomId;
+  try {
+    const response = await fetch(roomUrl(baseUrl, "/status"), {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(3000)
+    });
+    if (response.ok) {
+      const payload = (await response.json()) as { boardroom?: { name?: unknown } };
+      const name = payload.boardroom?.name;
+      if (typeof name === "string" && name.trim().length > 0) title = name;
+    }
+  } catch {
+    // best-effort — keep the room-id fallback
+  }
+  await recordJoinedRoom(context.home, { roomId, title, alias, baseUrl, joinedAt: now, lastSeen: now });
   return emit(context, flagBoolean(args, "json"), { ok: true, room: roomId, alias, baseUrl });
 }
 

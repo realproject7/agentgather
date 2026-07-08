@@ -40,9 +40,23 @@ export async function recordJoinedRoom(home: string, entry: JoinedRoom): Promise
   await ensureSecureDir(home);
   const rooms = await readJoinedRooms(home);
   const index = rooms.findIndex((room) => room.roomId === entry.roomId && room.baseUrl === entry.baseUrl);
+  // Keep the best-known display title (#216): a re-record that only carries the
+  // slug-like fallback (empty or === roomId) must not overwrite a real title
+  // captured on an earlier join — so an offline refresh or a token-less re-add
+  // never downgrades "Agent Gather Launch" back to "ag-project-0706". A title is
+  // "real" when it is non-empty and not just the room id.
+  const existingTitle = index === -1 ? undefined : rooms[index]?.title;
+  const isRealTitle = (value: string | undefined): boolean =>
+    value !== undefined && value.length > 0 && value !== entry.roomId;
   const record: JoinedRoom = {
     roomId: entry.roomId,
-    title: entry.title,
+    title: isRealTitle(entry.title)
+      ? entry.title
+      : isRealTitle(existingTitle)
+        ? (existingTitle as string)
+        : entry.title.length > 0
+          ? entry.title
+          : entry.roomId,
     alias: entry.alias,
     baseUrl: entry.baseUrl,
     joinedAt: index === -1 ? entry.joinedAt : (rooms[index]?.joinedAt ?? entry.joinedAt),

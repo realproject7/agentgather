@@ -190,8 +190,10 @@ function renderRoomList() {
     title.className = "room-row-title";
     const name = document.createElement("span");
     name.className = "room-name";
+    // Primary label is the display title; the slug-like room id stays available as
+    // the debug tooltip and the fallback when no title is known (#216).
     name.textContent = room.title || room.room_id;
-    name.title = room.title || room.room_id;
+    name.title = `room id: ${room.room_id}`;
 
     const badge = document.createElement("span");
     badge.className = "status-badge";
@@ -949,13 +951,23 @@ function renderJoined(entries) {
 
     const main = document.createElement("span");
     main.className = "joined-main";
+    // Primary label is the human-readable display title (#216); the slug-like
+    // room id is only the fallback and otherwise lives as secondary/debug metadata
+    // (the sub line + tooltip). `hasTitle` drives the fallback styling hook.
+    const roomId = entry.roomId || "";
+    const hasTitle = Boolean(entry.title && entry.title !== roomId);
     const name = document.createElement("span");
     name.className = "joined-name";
-    name.textContent = entry.title || entry.roomId || entry.baseUrl;
+    name.textContent = hasTitle ? entry.title : roomId || entry.baseUrl;
+    name.title = roomId ? `room id: ${roomId}` : entry.baseUrl;
+    main.dataset.titled = String(hasTitle);
     const sub = document.createElement("span");
     sub.className = "joined-sub";
     const alias = entry.alias ? `${entry.alias} · ` : "";
-    sub.textContent = `${alias}${hostLabel(entry.baseUrl)}`;
+    // Show the room id as secondary/debug metadata only when the primary label is
+    // a real title (otherwise the primary already shows the id — no duplication).
+    const idMeta = hasTitle && roomId ? ` · ${roomId}` : "";
+    sub.textContent = `${alias}${hostLabel(entry.baseUrl)}${idMeta}`;
     main.append(name, sub);
 
     const aside = document.createElement("span");
