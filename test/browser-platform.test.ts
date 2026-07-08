@@ -1297,3 +1297,36 @@ test("deleting one browser-local joined room keeps a sibling on the same host (#
     await platform.close();
   }
 });
+
+// #211 × #210 — deleting a joined room disassociates its dashboard-origin cached
+// history (device-local), so no orphaned backup lingers after the row is removed.
+test("deleting a joined room clears its dashboard-origin cached history (#211/#210)", async () => {
+  const root = await makeRoot();
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, { roomId: "cached-room", title: "Cached Room", alias: "me", baseUrl: "http://127.0.0.1:9", joinedAt: now, lastSeen: now });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.joined-row:has(.joined-name:text-is("Cached Room"))');
+    // Seed a dashboard-origin cached-history entry for that room.
+    await page.evaluate(() =>
+      window.localStorage.setItem(
+        "agentgather.history.cached-room",
+        JSON.stringify({ messages: [{ id: 1, from: "a", ts: "2026-07-01T00:00:00.000Z", type: "chat", text: "hi" }] })
+      )
+    );
+
+    await page.locator('.joined-row:has(.joined-name:text-is("Cached Room"))').locator('[data-action="delete"]').click();
+    await page.click('[data-action="confirm-delete"]');
+    await page.waitForFunction(() => document.querySelectorAll(".joined-row").length === 0);
+
+    // The device-local cached history for that room is cleared (disassociation).
+    assert.equal(await page.evaluate(() => window.localStorage.getItem("agentgather.history.cached-room")), null);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});

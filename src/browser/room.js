@@ -40,6 +40,10 @@ const state = {
   // Human-readable boardroom display title (from /status boardroom.name), used
   // as the primary label when this join is recorded in "Rooms I'm in" (#216).
   boardroomTitle: null,
+  // #211 read-only local backup: highest message id saved into this device's
+  // bounded, redacted per-room snapshot. Drives the offline notice so the backup
+  // view never implies complete unseen history beyond this cursor.
+  backupCursor: 0,
   // Browser notification layer (#186): opt-in, poll-driven (no push/SSE/worker).
   // enabled + scope persist per-room in sessionStorage; unread drives the title
   // badge + favicon dot while the tab is unfocused. ready gates out the initial
@@ -104,6 +108,7 @@ const roomBanner = document.getElementById("room-banner");
 const bannerTitle = document.getElementById("banner-title");
 const bannerDetail = document.getElementById("banner-detail");
 const bannerAction = document.getElementById("banner-action");
+const backupNotice = document.getElementById("backup-notice");
 const sessionBanner = document.getElementById("session-banner");
 const sessionTitle = document.getElementById("session-title");
 const sessionDetail = document.getElementById("session-detail");
@@ -392,6 +397,52 @@ async function loadStatus() {
   applyRoomState();
 }
 
+// ---- #211 read-only local backup ----
+// A device-local, bounded, redacted snapshot of messages this participant has
+// already loaded from the host, kept per room on the room origin. When the host
+// goes offline mid-session the room falls back to this snapshot read-only (see
+// applyRoomState). Reuses the same redaction as the dashboard cache — a bearer
+// token, tgl_ token, invite URL, or card URL is never persisted here.
+const BACKUP_PREFIX = "agentgather.backup.";
+const BACKUP_MAX_MESSAGES = 250;
+const BACKUP_MAX_BYTES = 200_000;
+
+// Persist a bounded, redacted device-local backup of the messages we've loaded
+// (#211): read the current per-room snapshot, append the new messages with any
+// bearer/tgl_ token, token= param, invite URL, or card URL scrubbed out, drop the
+// oldest past the count/byte cap, and write it back. Single self-contained flow —
+// the redaction intentionally mirrors (does not import) the shell cache guard so
+// the room bundle stays standalone. Never stores a secret.
+function recordBackupBatch(messages) {
+  if (messages.length === 0) return;
+  const key = BACKUP_PREFIX + (state.roomName || "room");
+  let list;
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    list = parsed && Array.isArray(parsed.messages) ? parsed.messages : [];
+  } catch {
+    list = [];
+  }
+  for (const message of messages) {
+    const text = String(message.text)
+      .replace(/https?:\/\/(?=\S*(?:token=|tgl_|\/card))\S+/gi, "[redacted-url]")
+      .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+      .replace(/[#?&]?token=[^\s&#"']+/gi, "[redacted-token]")
+      .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]");
+    list.push({ id: message.id, from: message.from, ts: message.ts, type: message.type, text });
+    if (typeof message.id === "number" && message.id > state.backupCursor) state.backupCursor = message.id;
+  }
+  // Bound by message count, then by serialized size — oldest dropped first.
+  if (list.length > BACKUP_MAX_MESSAGES) list = list.slice(list.length - BACKUP_MAX_MESSAGES);
+  while (list.length > 1 && JSON.stringify({ messages: list }).length > BACKUP_MAX_BYTES) list = list.slice(1);
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ messages: list, updated_at: new Date().toISOString() }));
+  } catch {
+    // Storage full/unavailable — the live view is unaffected.
+  }
+}
+
 async function pollMessages() {
   // A closed room is loaded exactly once: GET /messages still serves the host's
   // read-only history (it never required the room to be open), but there is
@@ -411,14 +462,18 @@ async function pollMessages() {
   }
   markConnectionLive();
   state.historyAvailable = true;
+  const fresh = [];
   for (const message of payload.messages) {
     if (state.seen.has(message.id)) continue;
     state.seen.add(message.id);
     renderMessage(message);
+    fresh.push(message);
     // De-dup is inherent: the seen-set guard means each id reaches maybeNotify once.
     maybeNotify(message);
     if (message.ts) state.lastMessageTs = message.ts;
   }
+  // Persist the redacted, bounded local backup of what we've now loaded (#211).
+  recordBackupBatch(fresh);
   updateLastMessage();
   state.cursor = payload.next_since_id;
   emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
@@ -1337,12 +1392,27 @@ function setConnection(kind, code) {
 // room lifecycle (open/closed) and the route connection (live/degraded/quota).
 function applyRoomState() {
   const closed = state.roomStatus === "closed";
-  shell.dataset.state = closed ? "closed" : "open";
+  // Host unreachable (not closed) → read-only local-backup mode (#211): the
+  // composer is disabled and the timeline is an honest device-local snapshot.
+  const offline = !closed && state.connection === "degraded";
+  shell.dataset.state = closed ? "closed" : offline ? "backup" : "open";
   composer.hidden = closed;
-  setComposerDisabled(closed || state.sendInFlight);
+  setComposerDisabled(closed || state.sendInFlight || offline);
   renderBanner(closed);
   renderSession(closed);
   renderHistoryStrip(closed);
+  // Honest read-only backup notice (#211): name the device-local snapshot + its
+  // cursor so the offline view never implies complete/unseen history, and state
+  // that sending is paused until the host resumes.
+  if (backupNotice !== null) {
+    backupNotice.hidden = !offline;
+    if (offline) {
+      backupNotice.textContent =
+        state.seen.size > 0
+          ? `Local backup · the host server is offline. Showing messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
+          : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
+    }
+  }
 }
 
 // Active chat session surface (#183 / V2 T12): everyone sees the accent banner
@@ -1376,9 +1446,9 @@ function renderBanner(closed) {
   }
   if (state.connection === "degraded") {
     roomBanner.dataset.kind = "degraded";
-    bannerTitle.textContent = "Reconnecting…";
+    bannerTitle.textContent = "Host offline — local backup";
     const reason = state.connectionCode ? ` (${state.connectionCode})` : "";
-    bannerDetail.textContent = `the host tunnel isn't responding${reason}. Messages will send once the route recovers.`;
+    bannerDetail.textContent = `the host server isn't responding${reason}. You're viewing a read-only local backup; new messages can't be sent until the host resumes.`;
     bannerAction.hidden = true;
   } else if (state.connection === "quota") {
     roomBanner.dataset.kind = "quota";
@@ -1400,7 +1470,8 @@ function renderBanner(closed) {
 function renderHistoryStrip(closed) {
   if (!closed) {
     historyStrip.hidden = true;
-    historyKv.textContent = state.connection === "degraded" ? "reconnecting…" : "host live room";
+    // Source-state label (#211): live from host vs local snapshot when offline.
+    historyKv.textContent = state.connection === "degraded" ? "local snapshot · host offline" : "live from host";
     return;
   }
   const room = roomTitle.textContent || "room";

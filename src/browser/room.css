@@ -1489,6 +1489,22 @@ button:disabled {
   line-height: 1.45;
 }
 
+/* #211 read-only local-backup notice above the (disabled) composer. */
+.backup-notice {
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-band);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.backup-notice[hidden] {
+  display: none;
+}
+
 .room-banner[hidden] {
   display: none;
 }

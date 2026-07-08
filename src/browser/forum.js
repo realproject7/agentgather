@@ -52,7 +52,9 @@ const state = {
   sort: "newest",
   view: "feed",
   selected: null,
-  participants: new Map()
+  participants: new Map(),
+  // #211: host-offline read-only mode — forum mutations disabled.
+  offline: false
 };
 // Nested-post rail hooks, handed over by channel-rail.js once the rail loads.
 const rail = { subgroup: null, activeLink: null };
@@ -416,12 +418,32 @@ async function loadPosts() {
     const data = await res.json();
     // comment_count is a derived, response-only field on the list endpoint.
     state.posts = (data.posts || []).map((p) => ({ comment_count: 0, ...p }));
+    setForumOffline(false);
     renderFeed();
     renderRailPosts();
     setRailActive();
   } catch {
-    setListState("Could not load the forum. Check the channel and try again.", true);
+    // Host unreachable → read-only: forum mutations are disabled (#211). Live
+    // posting resumes when a later load succeeds.
+    setForumOffline(true);
+    setListState("Host offline — showing the forum read-only until the host resumes.", true);
   }
+}
+
+// Disable forum mutation actions when the host is offline (#211): no fake offline
+// posts/comments; a clear notice explains the read-only state. Re-enabled once a
+// load succeeds again.
+function setForumOffline(offline) {
+  state.offline = offline;
+  const notice = el("forum-offline");
+  if (notice !== null) notice.hidden = !offline;
+  const newPost = el("new-post");
+  if (newPost !== null) newPost.disabled = offline;
+  const commentText = el("comment-text");
+  if (commentText !== null) commentText.disabled = offline;
+  const commentSend = el("comment-form")?.querySelector("button[type=submit]");
+  if (commentSend) commentSend.disabled = offline;
+  if (offline) el("new-post-form").hidden = true;
 }
 
 async function submitComment(event) {
