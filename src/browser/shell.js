@@ -13,7 +13,9 @@ const state = {
   seen: new Set(),
   messages: [],
   cacheRendered: false,
-  pollTimer: null
+  pollTimer: null,
+  // Selected launch template (#214), or null for a blank room.
+  createTemplate: null
 };
 
 // Browser-local, per-room cache namespaces. Stores only already-received,
@@ -88,6 +90,11 @@ const createGoal = document.getElementById("create-goal");
 const createAttendance = document.getElementById("create-attendance");
 const createCommand = document.getElementById("create-command");
 const createCopy = document.getElementById("create-copy");
+// Template preview (#214): shows the selected template's default channels so the
+// user sees what the room will be set up with before running the command.
+const createPreview = document.getElementById("create-preview");
+const createPreviewLabel = document.getElementById("create-preview-label");
+const createChannels = document.getElementById("create-channels");
 
 // Role-specific invite-card preview overlay.
 const inviteButton = document.getElementById("invite-button");
@@ -96,11 +103,52 @@ const inviteRoomLabel = document.getElementById("invite-room");
 const inviteCards = document.getElementById("invite-cards");
 
 // Goal placeholders the welcome templates prefill into the create-room shell.
-const TEMPLATE_GOALS = {
-  debug: "diagnose the failure across machines and agree on the next fix.",
-  review: "review the change before merge and produce follow-up tickets.",
-  planning: "scope and sequence the work, then assign owners.",
-  product: "pressure-test the positioning and tighten the message."
+// Launch templates (#214): each is a real preset — distinct channels and a
+// scenario-specific Room Brief starter — that prefills room creation, instead of
+// sending every scenario to the same generic brief. Content is token-free and
+// private-path-free (no invite tokens, card URLs, bearer tokens, or local paths);
+// channels compose the existing `create-boardroom --channels` command.
+const TEMPLATES = {
+  debug: {
+    label: "Debug room",
+    channels: [
+      { id: "general", type: "chat" },
+      { id: "findings", type: "forum" }
+    ],
+    brief:
+      "Goal: diagnose the failure across machines and agree on the next fix.\n" +
+      "Share the error, repro steps, and what you've already ruled out in #general; capture root-cause notes as threads in #findings."
+  },
+  review: {
+    label: "Review room",
+    channels: [
+      { id: "general", type: "chat" },
+      { id: "review", type: "forum" }
+    ],
+    brief:
+      "Goal: review the change before merge and produce follow-up tickets.\n" +
+      "Walk the diff in #general; file blocking vs non-blocking findings as threads in #review."
+  },
+  planning: {
+    label: "Planning room",
+    channels: [
+      { id: "general", type: "chat" },
+      { id: "decisions", type: "forum" }
+    ],
+    brief:
+      "Goal: scope and sequence the work, then assign owners.\n" +
+      "Agree scope in #general; record each decision and its owner as a thread in #decisions."
+  },
+  product: {
+    label: "Product room",
+    channels: [
+      { id: "general", type: "chat" },
+      { id: "positioning", type: "forum" }
+    ],
+    brief:
+      "Goal: pressure-test the positioning and tighten the message.\n" +
+      "Debate in #general; capture the sharpened positioning and open questions in #positioning."
+  }
 };
 
 init().catch((error) => showRoomsError(error instanceof Error ? error.message : String(error)));
@@ -643,9 +691,12 @@ function wireCreateRoom() {
 }
 
 function openCreateRoom(template) {
-  if (template && TEMPLATE_GOALS[template] && createGoal.value.trim().length === 0) {
-    createGoal.value = TEMPLATE_GOALS[template];
+  const preset = template && TEMPLATES[template] ? template : null;
+  state.createTemplate = preset;
+  if (preset && createGoal.value.trim().length === 0) {
+    createGoal.value = TEMPLATES[preset].brief;
   }
+  renderTemplatePreview(preset);
   updateCreateCommand();
   createOverlay.hidden = false;
   createName.focus();
@@ -653,15 +704,61 @@ function openCreateRoom(template) {
 
 function closeCreateRoom() {
   createOverlay.hidden = true;
+  // Reset the preset so the next "new room" opens a blank room, not the last
+  // template. The typed name/goal are left as-is for a quick reopen.
+  state.createTemplate = null;
+  renderTemplatePreview(null);
 }
 
+// Show the selected template's default channels as a preview so the user sees the
+// room setup before running the command. Hidden for a blank room.
+function renderTemplatePreview(template) {
+  const preset = template && TEMPLATES[template] ? TEMPLATES[template] : null;
+  if (preset === null) {
+    createPreview.hidden = true;
+    createChannels.replaceChildren();
+    return;
+  }
+  createPreview.hidden = false;
+  createPreviewLabel.textContent = preset.label;
+  createChannels.replaceChildren();
+  for (const channel of preset.channels) {
+    const chip = document.createElement("span");
+    chip.className = "channel-chip";
+    chip.dataset.type = channel.type;
+    const hash = document.createElement("span");
+    hash.className = "channel-chip-hash";
+    hash.setAttribute("aria-hidden", "true");
+    hash.textContent = "#";
+    const name = document.createElement("span");
+    name.className = "channel-chip-name";
+    name.textContent = channel.id;
+    const type = document.createElement("span");
+    type.className = "channel-chip-type";
+    type.textContent = channel.type;
+    chip.append(hash, name, type);
+    createChannels.append(chip);
+  }
+}
+
+// Compose the exact host CLI command. A template uses `create-boardroom` so its
+// default channels are materialized; a blank room keeps the simpler `room start`
+// path. The brief is POSIX-quoted so nothing in it expands when pasted.
 function updateCreateCommand() {
   const slug = roomSlug(createName.value);
   const pressed = createAttendance.querySelector('.seg[aria-pressed="true"]');
   const policy = pressed?.dataset.policy || "agents-foreground";
   const goal = createGoal.value.trim().replace(/\s+/g, " ");
-  let command = `agentgather room start ${slug} --attendance ${policy}`;
-  if (goal.length > 0) command += ` --brief ${shellSingleQuote(goal)}`;
+  const preset = state.createTemplate ? TEMPLATES[state.createTemplate] : null;
+  let command;
+  if (preset) {
+    const channelSpec = preset.channels.map((channel) => `${channel.id}:${channel.type}`).join(",");
+    command = `agentgather room create-boardroom ${slug} --channels ${channelSpec} --attendance ${policy}`;
+    if (goal.length > 0) command += ` --brief ${shellSingleQuote(goal)}`;
+  } else {
+    command = `agentgather room start ${slug} --attendance ${policy}`;
+    if (goal.length > 0) command += ` --brief ${shellSingleQuote(goal)}`;
+  }
   createCommand.textContent = command;
 }
 

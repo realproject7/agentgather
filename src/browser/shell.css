@@ -1456,6 +1456,70 @@ body {
   line-height: 1.55;
 }
 
+/* Template preview (#214): a light banded note (not a nested card) showing the
+   preset's default channels before the room is created. */
+.create-preview {
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-band);
+}
+
+.create-preview[hidden] {
+  display: none;
+}
+
+.create-preview-head {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.create-preview-head b {
+  color: var(--text-soft);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.create-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.channel-chip-hash {
+  color: var(--accent);
+}
+
+.channel-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-chip-type {
+  color: var(--faint);
+  font-size: 10px;
+}
+
 .field {
   display: block;
   margin-bottom: 16px;
