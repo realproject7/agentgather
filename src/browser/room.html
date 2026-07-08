@@ -88,6 +88,10 @@
         </section>
 
         <aside id="roster" class="roster k-rail" aria-label="Participants">
+          <!-- #218b clipping fix: all roster content lives in ONE scroll child so
+               the panel fills the column height and scrolls independently instead
+               of clipping at the bottom when participants + host controls overflow. -->
+          <div class="rail-scroll">
           <section class="rail-section">
             <div class="rail-title">room</div>
             <div class="rail-kv">
@@ -142,6 +146,7 @@
             <div id="session-error" class="rail-note session-error-note" role="alert" hidden></div>
             <div id="invite-note" class="rail-note" hidden></div>
           </section>
+          </div>
         </aside>
       </section>
       </div>

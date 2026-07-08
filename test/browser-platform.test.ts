@@ -872,3 +872,92 @@ test("the room rail collapses a long list behind a stable overflow control and e
     await platform.close();
   }
 });
+
+// #218b — the selected-room state becomes a three-panel workspace with a right
+// info panel that fills the column height and scrolls independently; the home /
+// no-room state must NOT render it (the [hidden] override beats display:flex),
+// and it collapses at narrow width.
+test("the dashboard mounts a right info panel in the three-panel state, hides it at home and narrow width, and scrolls instead of clipping (#218b)", async () => {
+  const root = await makeRoot();
+  const roster: Array<Record<string, unknown>> = [{ alias: "host", kind: "human", role: "host", status: "attending" }];
+  for (let i = 0; i < 30; i++) roster.push({ alias: `member-${i}`, kind: "agent", role: "member", status: "attending" });
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha Room", status: "active", roster }));
+  await createRoom({ root, roomId: "alpha", hostAlias: "host", briefBody: "go" });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+
+    // No-room state: the right info panel must be display:none — the explicit
+    // display:flex would otherwise leak it into home (the [hidden] gotcha).
+    assert.equal(await page.locator("#info-panel").isHidden(), true);
+    assert.equal(
+      await page.evaluate(() => getComputedStyle(document.getElementById("info-panel")!).display),
+      "none"
+    );
+    assert.equal(
+      await page.evaluate(() => document.querySelector(".platform-shell")!.classList.contains("room-selected")),
+      false
+    );
+
+    // Select the room → three-panel: shell gains .room-selected, the body grid has
+    // three tracks, and the info panel shows the room summary + participants.
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector("#info-panel:not([hidden])");
+    assert.equal(
+      await page.evaluate(() => document.querySelector(".platform-shell")!.classList.contains("room-selected")),
+      true
+    );
+    assert.equal(
+      await page.evaluate(() => getComputedStyle(document.querySelector(".platform-body")!).gridTemplateColumns.split(" ").length),
+      3
+    );
+    assert.equal((await page.locator("#info-room-name").textContent())?.trim(), "Alpha Room");
+    await page.waitForSelector("#shell-roster .roster-entry");
+
+    // Clipping fix: the roster overflows, the single .info-scroll child is the
+    // scroll context, and the panel bottom stays within the viewport (no clip).
+    const scroll = await page.evaluate(() => {
+      const s = document.querySelector("#info-panel .info-scroll") as HTMLElement;
+      const panel = document.getElementById("info-panel")!;
+      return {
+        overflowing: s.scrollHeight > s.clientHeight,
+        overflowY: getComputedStyle(s).overflowY,
+        // The outer .info panel must NOT scroll — .info-scroll is the sole boundary.
+        outerScrolls: panel.scrollHeight > panel.clientHeight + 1,
+        withinViewport: panel.getBoundingClientRect().bottom <= window.innerHeight + 1
+      };
+    });
+    assert.equal(scroll.overflowing, true, "info panel did not overflow with 31 participants");
+    assert.equal(scroll.overflowY, "auto");
+    assert.equal(scroll.outerScrolls, false, "the outer info panel is still a scroll boundary");
+    assert.equal(scroll.withinViewport, true, "info panel clipped past the viewport bottom");
+
+    // No raw token in the panel or the breadcrumb.
+    const panelHtml = (await page.locator("#info-panel").innerHTML()) ?? "";
+    assert.equal(/tgl_|token=|Bearer/i.test(panelHtml), false);
+    assert.equal(/tgl_|token=/i.test((await page.locator("#crumb").textContent()) ?? ""), false);
+
+    // Narrow width hides the right panel even in the room state (spec).
+    await page.setViewportSize({ width: 820, height: 760 });
+    assert.equal(
+      await page.evaluate(() => getComputedStyle(document.getElementById("info-panel")!).display),
+      "none"
+    );
+
+    // Logo-home returns to no-room → panel display:none again.
+    await page.setViewportSize({ width: 1280, height: 760 });
+    await page.click("#brand-home");
+    await page.locator("#info-panel").waitFor({ state: "hidden" });
+    assert.equal(
+      await page.evaluate(() => getComputedStyle(document.getElementById("info-panel")!).display),
+      "none"
+    );
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
