@@ -834,14 +834,11 @@ pre {
   background: transparent;
 }
 
-/* deliberate two-pane section: a clearly bounded rail that fills its column even
-   when the chat is sparse, with the host controls pinned to the bottom (#112).
-   The rail shell (flex column + left border + wash) comes from the .k-rail
-   primitive; only room-specific rail content lives below. */
-/* #218b clipping fix: the roster is a bounded flex column (via .k-rail) that
-   clips its own overflow, so the single .rail-scroll child below is the ONE
-   scroll boundary — nothing (including the fixed host-control section) can clip
-   past the viewport bottom. */
+/* #218b clipping fix: the roster is a bounded flex column (via the .k-rail
+   primitive) that clips its own overflow, so the single .rail-scroll child below
+   is the ONE scroll boundary — all rail content (room info, participants, host
+   controls) scrolls together and nothing clips past the viewport bottom.
+   (This supersedes #112's sparse-state bottom-pin of the host controls.) */
 .roster {
   overflow: hidden;
 }
@@ -857,14 +854,7 @@ pre {
   border-bottom: 1px solid var(--border-soft);
 }
 
-/* Participants flow inside the single .rail-scroll context — no nested scroll. */
-.participants-section {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
 .host-controls {
-  flex: 0 0 auto;
   border-bottom: 0;
   border-top: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
