@@ -834,12 +834,17 @@ pre {
   background: transparent;
 }
 
-/* #218b clipping fix: the roster is a bounded flex column (via the .k-rail
-   primitive) that clips its own overflow, so the single .rail-scroll child below
-   is the ONE scroll boundary — all rail content (room info, participants, host
-   controls) scrolls together and nothing clips past the viewport bottom.
-   (This supersedes #112's sparse-state bottom-pin of the host controls.) */
+/* #218b clipping fix: the roster is a bounded flex column that clips its own
+   overflow, so the single .rail-scroll child below is the ONE scroll boundary —
+   all rail content (room info, participants, host controls) scrolls together and
+   nothing clips past the viewport bottom. The flex column is stated explicitly
+   here (it also comes from the shared .k-rail primitive in kit.css) so the scroll
+   architecture is self-contained. (This supersedes #112's sparse-state bottom-pin
+   of the host controls.) */
 .roster {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
