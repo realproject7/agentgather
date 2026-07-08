@@ -538,6 +538,47 @@ test("every room-server response carries the CSP + browser-hardening headers (#1
   }
 });
 
+test("host-only mutation routes reject a non-host caller with 403 host_required, even invoked directly (#212)", async () => {
+  const fixture = await startFixture();
+  try {
+    // The agent participant is a real, authenticated caller (valid bearer token)
+    // but is_host is false. Hitting the mutation routes directly — as a manually
+    // forged request would — must be refused server-side, not merely hidden in UI.
+    const close = await jsonFetch(fixture, "POST", "/close", fixture.agentToken);
+    assert.equal(close.status, 403);
+    assert.equal(close.body.error, "host_required");
+
+    const brief = await jsonFetch(fixture, "POST", "/brief", fixture.agentToken, { body: "hijack" });
+    assert.equal(brief.status, 403);
+    assert.equal(brief.body.error, "host_required");
+
+    const attendance = await jsonFetch(fixture, "POST", "/attendance", fixture.agentToken, { policy: "manual-ok" });
+    assert.equal(attendance.status, 403);
+    assert.equal(attendance.body.error, "host_required");
+
+    // The session lifecycle route is host-only too (a valid start body still can't
+    // get past the authorization gate for a non-host).
+    const session = await jsonFetch(fixture, "POST", "/session", fixture.agentToken, {
+      action: "start",
+      expected_duration_m: 20
+    });
+    assert.equal(session.status, 403);
+    assert.equal(session.body.error, "host_required");
+
+    // The gate is specific to host-only actions: a participant-safe write (posting
+    // a message) still succeeds for the same non-host token, so this is authorization
+    // scoping, not a blanket block. The room is still open (close was refused above).
+    const message = await jsonFetch(fixture, "POST", "/messages", fixture.agentToken, { text: "participant-safe write" });
+    assert.equal(message.status, 201);
+
+    // The host retains every host-owned control.
+    const hostClose = await jsonFetch(fixture, "POST", "/close", fixture.hostToken);
+    assert.equal(hostClose.status, 200);
+  } finally {
+    await fixture.close();
+  }
+});
+
 function participant(alias: string, kind: "agent" | "human", isHost: boolean, token: string): Participant {
   return {
     alias,

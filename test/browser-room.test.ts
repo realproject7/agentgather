@@ -1311,3 +1311,57 @@ test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leav
     await fixture.close();
   }
 });
+
+// #212 — host-only controls must be visible only to the actual host. A joined
+// participant sees none of them (close / invite / session / broadcast-shortcut /
+// export), in a live room and while the host is offline, while participant-safe
+// affordances (the composer and its broadcast toggle) stay usable.
+const HOST_ONLY_CONTROLS = ["#close-button", "#invite-button", "#session-toggle", "#rail-broadcast", "#export-button"];
+
+test("a joined participant never sees host-only controls, live or while the host is offline; the host does (#212)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    // Host-owned path: the host sees the host-controls section and every control in it.
+    const hostPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await hostPage.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await hostPage.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(await hostPage.isHidden("#host-controls"), false);
+    for (const control of HOST_ONLY_CONTROLS) {
+      assert.equal(await hostPage.isVisible(control), true, `host should see ${control}`);
+    }
+
+    // Joined-participant path: the non-host reviewer opens the same live room and
+    // sees no host-controls section and none of the individual host-only controls.
+    const guestPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    await guestPage.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
+    await guestPage.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(await guestPage.isHidden("#host-controls"), true);
+    for (const control of HOST_ONLY_CONTROLS) {
+      assert.equal(await guestPage.isHidden(control), true, `participant must not see ${control}`);
+    }
+    // Participant-safe affordances remain: the participant can still compose and
+    // reach the (participant-safe) broadcast toggle in the composer footer.
+    assert.equal(await guestPage.isVisible("#composer"), true);
+    assert.equal(await guestPage.isVisible("#broadcast-toggle"), true);
+
+    // Offline joined-room path: the host goes unreachable on later polls. The
+    // participant's view degrades to the reconnecting banner but never gains any
+    // host-only control — the section and every button stay hidden.
+    await guestPage.route(/\/(messages|status)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host tunnel did not respond" })
+      })
+    );
+    await guestPage.waitForSelector('#room-banner[data-kind="degraded"]');
+    assert.equal(await guestPage.isHidden("#host-controls"), true);
+    for (const control of HOST_ONLY_CONTROLS) {
+      assert.equal(await guestPage.isHidden(control), true, `offline participant must not see ${control}`);
+    }
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
