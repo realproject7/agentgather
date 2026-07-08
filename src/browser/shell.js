@@ -57,6 +57,24 @@ const joinedInput = document.getElementById("joined-input");
 const joinedError = document.getElementById("joined-error");
 const platformVersionValue = document.getElementById("platform-version-value");
 
+// Unified workspace shell (#218a): permanent logo-home + breadcrumb, and the
+// two-region left rail whose lower region swaps between Room Status guidance
+// (no room selected) and the selected room's channel navigation.
+const brandHome = document.getElementById("brand-home");
+const crumb = document.getElementById("crumb");
+const guideCreate = document.getElementById("guide-create");
+const lowerHome = document.getElementById("lower-home");
+const lowerRoom = document.getElementById("lower-room");
+const channelNav = document.getElementById("channel-nav");
+const roomsMore = document.getElementById("rooms-more");
+const joinedMore = document.getElementById("joined-more");
+const channelsMore = document.getElementById("channels-more");
+
+// Collapse a list's tail behind a stable show-more/show-less control once it
+// exceeds this many rows, so a long room/channel list never pushes the rest of
+// the rail off-screen and expanding never shifts the layout.
+const OVERFLOW_LIMIT = 6;
+
 // Create-room shell (no central API: the form composes the host CLI command).
 const createOverlay = document.getElementById("create-overlay");
 const createName = document.getElementById("create-name");
@@ -83,6 +101,11 @@ init().catch((error) => showRoomsError(error instanceof Error ? error.message : 
 
 async function init() {
   roomsToggle.addEventListener("click", () => shell.classList.toggle("rooms-open"));
+  brandHome.addEventListener("click", goHome);
+  guideCreate.addEventListener("click", () => openCreateRoom());
+  roomsMore.addEventListener("click", () => toggleOverflow(roomList, roomsMore));
+  joinedMore.addEventListener("click", () => toggleOverflow(joinedList, joinedMore));
+  channelsMore.addEventListener("click", () => toggleOverflow(channelNav, channelsMore));
   exportButton.addEventListener("click", exportTranscript);
   clearCacheButton.addEventListener("click", clearActiveCache);
   wireCreateRoom();
@@ -194,6 +217,7 @@ function renderRoomList() {
     item.append(button);
     roomList.append(item);
   }
+  applyOverflow(roomList, roomsMore);
 }
 
 // Two-character monogram for a room, from its title or id.
@@ -254,10 +278,122 @@ async function selectRoom(roomId) {
   const cached = readCache(roomId);
   for (const message of cached) renderMessage(message);
   state.cacheRendered = cached.length > 0;
-  if (room) renderDetail(room);
+  if (room) {
+    renderDetail(room);
+    enterRoomState(room);
+  }
   if (state.pollTimer !== null) clearInterval(state.pollTimer);
   await loadChat();
   state.pollTimer = setInterval(() => void loadChat(), 3000);
+}
+
+// Room-selected state (B): the lower rail swaps Room Status guidance for the
+// selected room's channel navigation and the breadcrumb names the room. The
+// shell grid/rail never remounts — only these panel contents change.
+function enterRoomState(room) {
+  lowerHome.hidden = true;
+  lowerRoom.hidden = false;
+  renderChannelNav(room);
+  setBreadcrumb(room);
+}
+
+// Dashboard-home state (A): deselect the room, restore Room Status guidance,
+// clear the breadcrumb, and stop chat polling. Reached from the permanent
+// top-left logo, which returns here from any room.
+function goHome() {
+  if (state.pollTimer !== null) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  state.activeRoomId = null;
+  state.messages = [];
+  state.seen = new Set();
+  state.cacheRendered = false;
+  timeline.replaceChildren();
+  shell.classList.remove("rooms-open");
+  detail.hidden = true;
+  detailEmpty.hidden = false;
+  lowerRoom.hidden = true;
+  lowerHome.hidden = false;
+  setBreadcrumb(null);
+  renderRoomList();
+}
+
+// Breadcrumb: "/ <room> / #<channel>" in room state, empty at home. Titles only
+// — never a token or invite URL (the raw slug is a tooltip, never the crumb).
+function setBreadcrumb(room) {
+  if (room === null) {
+    crumb.textContent = "";
+    return;
+  }
+  crumb.textContent = `/ ${room.title || room.room_id} / #general`;
+}
+
+// The selected room's channel navigation. The dashboard reads only the control
+// plane, which carries no channel/forum list, so #218a renders the one channel
+// every room is guaranteed to have — #general chat. Real forum-channel
+// population arrives with #218b, when the room surfaces that own that data mount.
+function renderChannelNav(room) {
+  const channels = roomChannels(room);
+  channelNav.replaceChildren();
+  for (const [index, channel] of channels.entries()) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `channel-row${index === 0 ? " on" : ""}`;
+    button.dataset.channel = channel.id;
+
+    const hash = document.createElement("span");
+    hash.className = "hash";
+    hash.setAttribute("aria-hidden", "true");
+    hash.textContent = "#";
+
+    const name = document.createElement("span");
+    name.className = "channel-name";
+    name.textContent = channel.name;
+    name.title = channel.name;
+
+    const type = document.createElement("span");
+    type.className = "channel-type";
+    type.textContent = channel.type;
+
+    button.append(hash, name, type);
+    item.append(button);
+    channelNav.append(item);
+  }
+  applyOverflow(channelNav, channelsMore);
+}
+
+// Baseline channel model available to the dashboard: every room has #general.
+function roomChannels(_room) {
+  return [{ id: "general", name: "general", type: "chat" }];
+}
+
+// Shared list overflow: once a list exceeds OVERFLOW_LIMIT rows, collapse the
+// tail behind a single-row "show N more" / "show less" control so a long list
+// never crowds out the rest of the rail and expanding causes no layout jump.
+// The control lives outside the list, so its expanded state survives re-renders.
+function applyOverflow(listEl, moreBtn) {
+  const items = [...listEl.children];
+  const overflow = Math.max(0, items.length - OVERFLOW_LIMIT);
+  if (overflow === 0) {
+    for (const item of items) item.classList.remove("is-collapsed");
+    moreBtn.hidden = true;
+    moreBtn.setAttribute("aria-expanded", "false");
+    return;
+  }
+  const expanded = moreBtn.getAttribute("aria-expanded") === "true";
+  items.forEach((item, index) => {
+    item.classList.toggle("is-collapsed", !expanded && index >= OVERFLOW_LIMIT);
+  });
+  moreBtn.hidden = false;
+  moreBtn.textContent = expanded ? "▾ show less" : `▸ show ${overflow} more…`;
+}
+
+function toggleOverflow(listEl, moreBtn) {
+  const expanded = moreBtn.getAttribute("aria-expanded") === "true";
+  moreBtn.setAttribute("aria-expanded", String(!expanded));
+  applyOverflow(listEl, moreBtn);
 }
 
 function renderDetail(room) {
@@ -835,6 +971,7 @@ function renderJoined(entries) {
     item.append(main, aside);
     joinedList.append(item);
   }
+  applyOverflow(joinedList, joinedMore);
 }
 
 function openJoinedRoom(entry) {

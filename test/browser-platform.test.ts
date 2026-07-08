@@ -743,3 +743,132 @@ test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' toke
     await roomEntry.close();
   }
 });
+
+// #218a / #221 — unified workspace shell: dashboard-home and selected-room states
+// render in one shell; the permanent top-left logo returns to dashboard home; the
+// lower rail swaps Room Status guidance for the selected room's channel nav.
+test("the unified shell swaps home guidance for the selected room's channel nav and returns via logo-home (#218a)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(
+    root,
+    roomInput({ room_id: "alpha", title: "Alpha Room", status: "active" })
+  );
+  await createRoom({ root, roomId: "alpha", hostAlias: "host", briefBody: "go" });
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "joined-only",
+    title: "Joined Only",
+    alias: "me",
+    baseUrl: "http://127.0.0.1:9",
+    joinedAt: now,
+    lastSeen: now
+  });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+
+    // Dashboard-home (no room selected): the top rail lists hosted + joined rooms,
+    // the lower rail shows Room Status guidance, and there is no breadcrumb.
+    await page.waitForSelector(".room-row");
+    await page.waitForSelector("text=Joined Only"); // joined room present in the top region
+    assert.equal(await page.locator("#lower-home").isVisible(), true);
+    assert.equal(await page.locator("#lower-room").isHidden(), true);
+    assert.equal(await page.locator("#lower-home .guide").isVisible(), true);
+    assert.equal((await page.locator("#crumb").textContent())?.trim(), "");
+    assert.equal(await page.locator("#detail-empty").isVisible(), true);
+    assert.equal(await page.locator("#detail").isHidden(), true);
+
+    // Selecting a room does NOT swap the page shell: same rail, same grid — only
+    // the lower region swaps to the channel nav and the breadcrumb names the room.
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector("#lower-room:not([hidden])");
+    assert.equal(await page.locator("#lower-home").isHidden(), true);
+    assert.equal(await page.locator("#detail").isVisible(), true);
+    // Channel nav shows the one channel every room has — #general chat — selected.
+    assert.equal(await page.locator("#channel-nav .channel-row").count(), 1);
+    assert.equal((await page.locator("#channel-nav .channel-name").textContent())?.trim(), "general");
+    assert.equal((await page.locator("#channel-nav .channel-type").textContent())?.trim(), "chat");
+    await page.waitForSelector("#channel-nav .channel-row.on");
+    assert.equal((await page.locator("#crumb").textContent())?.trim(), "/ Alpha Room / #general");
+
+    // The permanent top-left logo returns to dashboard home from the room state.
+    await page.click("#brand-home");
+    await page.waitForSelector("#lower-home:not([hidden])");
+    assert.equal(await page.locator("#lower-room").isHidden(), true);
+    assert.equal(await page.locator("#detail").isHidden(), true);
+    assert.equal(await page.locator("#detail-empty").isVisible(), true);
+    assert.equal((await page.locator("#crumb").textContent())?.trim(), "");
+    assert.equal(await page.locator(".room-row[aria-current='true']").count(), 0);
+
+    // No raw token appears in the rail lists or in any navigation href.
+    const railHtml = (await page.locator(".room-rail").innerHTML()) ?? "";
+    assert.equal(/tgl_|token=|Bearer/i.test(railHtml), false);
+    const openHrefs = await page.locator(".joined-row").evaluateAll((rows) =>
+      rows.map((row) => (row as HTMLElement).dataset.openHref ?? "")
+    );
+    assert.equal(openHrefs.some((href) => /tgl_|token=|Bearer/i.test(href)), false);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #218a / #221 — long room lists collapse behind a stable show-more/show-less
+// control (no layout jump) and long titles ellipsize without blowing out the grid.
+test("the room rail collapses a long list behind a stable overflow control and ellipsizes long titles (#218a)", async () => {
+  const root = await makeRoot();
+  const longTitle = "release-checklist-room-with-an-extremely-long-title-that-must-ellipsize-in-the-rail";
+  for (let i = 0; i < 9; i++) {
+    await createControlPlaneRoom(
+      root,
+      roomInput({ room_id: `room-${i}`, title: i === 0 ? longTitle : `room-${i}`, status: "active" })
+    );
+  }
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+    await page.waitForSelector("#rooms-more:not([hidden])");
+
+    // 9 rooms, budget 6 → 3 collapsed behind the control; only 6 rows are visible.
+    assert.equal(await page.locator(".room-list > li").count(), 9);
+    assert.equal(await page.locator(".room-list > li:not(.is-collapsed)").count(), 6);
+    assert.match((await page.locator("#rooms-more").textContent()) ?? "", /show 3 more/);
+
+    // Expand → all rows visible, control flips to "show less"; collapse → back to 6.
+    // The control keeps a stable single-row height, so neither shift jumps layout.
+    const barBefore = await page.locator("#rooms-more").boundingBox();
+    await page.click("#rooms-more");
+    assert.equal(await page.locator(".room-list > li:not(.is-collapsed)").count(), 9);
+    assert.match((await page.locator("#rooms-more").textContent()) ?? "", /show less/);
+    const barAfter = await page.locator("#rooms-more").boundingBox();
+    assert.equal(Math.round(barBefore?.height ?? 0), Math.round(barAfter?.height ?? -1));
+    await page.click("#rooms-more");
+    assert.equal(await page.locator(".room-list > li:not(.is-collapsed)").count(), 6);
+
+    // The long title ellipsizes: its name element is truncated (scrollWidth wider
+    // than its box) and never overflows the fixed-width rail track.
+    const truncation = await page.evaluate(() => {
+      const name = document.querySelector('.room-row[data-room-id="room-0"] .room-name') as HTMLElement | null;
+      const rail = document.querySelector(".room-rail") as HTMLElement | null;
+      if (name === null || rail === null) return { ellipsized: false, contained: false };
+      const style = getComputedStyle(name);
+      return {
+        ellipsized: style.textOverflow === "ellipsis" && name.scrollWidth > name.clientWidth,
+        contained: rail.scrollWidth <= rail.clientWidth + 1
+      };
+    });
+    assert.equal(truncation.ellipsized, true, "long room title did not ellipsize");
+    assert.equal(truncation.contained, true, "long title overflowed the rail track");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});

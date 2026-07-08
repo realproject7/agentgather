@@ -25,18 +25,41 @@ body {
   backdrop-filter: blur(16px);
 }
 
-.brand-slot {
+.brand-crumb {
   min-width: 0;
   flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-slot {
+  min-width: 0;
+  flex: 0 0 auto;
   min-height: 28px;
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
   color: var(--text);
+  font-family: var(--font);
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0;
   text-transform: uppercase;
+  cursor: pointer;
+}
+
+.brand-slot:hover {
+  background: var(--chip);
+}
+
+.brand-slot:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .brand-slot img {
@@ -44,6 +67,21 @@ body {
   height: 26px;
   display: block;
   border-radius: 7px;
+}
+
+/* Breadcrumb: "/ <room> / #<channel>" in the room-selected state; empty at home.
+   Never renders a token or invite URL — only display titles. */
+.crumb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.crumb:empty {
+  display: none;
 }
 
 .topbar-meta {
@@ -83,17 +121,177 @@ body {
 .platform-body {
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr);
+}
+
+/* Every grid child gets min-width/min-height:0 so long titles ellipsize inside
+   their track instead of blowing out the shell grid (#218a AC). */
+.platform-body > * {
+  min-width: 0;
+  min-height: 0;
 }
 
 .room-rail {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: auto;
-  padding: 16px;
+  overflow: hidden;
   border-right: 1px solid var(--line);
   background: rgba(20, 20, 24, 0.94);
+}
+
+/* Two functional regions, each with its own scroll context so a long room list
+   never pushes the contextual lower region off-screen. */
+.rail-rooms {
+  flex: 0 1 34%;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 16px 16px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rail-lower {
+  flex: 1 1 66%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+
+/* Overflow control: collapses a list tail behind a stable, single-row-height
+   "show N more" / "show less" toggle so expanding never shifts the layout. */
+.morebtn {
+  display: block;
+  width: 100%;
+  min-height: 26px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.morebtn:hover {
+  color: var(--text-soft);
+  background: var(--chip);
+}
+
+.morebtn[hidden] {
+  display: none;
+}
+
+/* Rows collapsed behind the overflow control (the whole list item is hidden so
+   no empty gap remains). */
+.room-list > li.is-collapsed,
+.joined-list > li.is-collapsed,
+.channel-nav > li.is-collapsed {
+  display: none;
+}
+
+/* Room Status guidance panel — lower region, home (no-room-selected) state only. */
+.guide {
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-band);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.guide b {
+  color: var(--text-soft);
+}
+
+.guide-cta {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  padding: 5px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--accent-text);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.guide-cta:hover {
+  background: var(--accent-soft);
+}
+
+/* Selected room's channel/forum navigation — lower region, room state only. */
+.channel-region[hidden] {
+  display: none;
+}
+
+.channel-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.channel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-soft);
+  font-family: var(--font);
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.channel-row:hover {
+  background: var(--chip);
+}
+
+.channel-row.on {
+  background: var(--accent-weak);
+  color: var(--text);
+}
+
+.channel-row .hash {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.channel-row.on .hash {
+  color: var(--accent);
+}
+
+.channel-row .channel-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-row .channel-type {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+
+.channel-note {
+  margin: 10px 8px 0;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 
 .rail-title {
@@ -949,10 +1147,11 @@ body {
 }
 
 .platform-version {
-  margin-top: auto;
-  padding-top: 16px;
+  flex: 0 0 auto;
+  padding: 12px 16px;
   display: grid;
   gap: 3px;
+  border-top: 1px solid var(--line);
   color: var(--faint);
   font-size: var(--fs-xs);
   line-height: 1.35;
