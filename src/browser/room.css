@@ -1491,8 +1491,8 @@ button:disabled {
 
 /* #211 read-only local-backup notice above the (disabled) composer. */
 .backup-notice {
-  margin: 0 14px 8px;
-  padding: 9px 12px;
+  margin: 0 16px 8px;
+  padding: 8px 12px;
   border: 1px solid var(--border-soft);
   border-radius: var(--r-md);
   background: var(--bg-band);

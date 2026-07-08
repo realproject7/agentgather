@@ -407,65 +407,40 @@ const BACKUP_PREFIX = "agentgather.backup.";
 const BACKUP_MAX_MESSAGES = 250;
 const BACKUP_MAX_BYTES = 200_000;
 
-function backupKey() {
-  return BACKUP_PREFIX + (state.roomName || "room");
-}
-
-// Drop the whole tokenized URL / credential, not just the value, so no invite,
-// card, or bearer shape survives in the snapshot (mirrors the shell cache guard).
-function redactForBackup(text) {
-  return String(text)
-    .replace(/https?:\/\/(?=\S*(?:token=|tgl_|\/card))\S+/gi, "[redacted-url]")
-    .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
-    .replace(/[#?&]?token=[^\s&#"']+/gi, "[redacted-token]")
-    .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]");
-}
-
-function readBackup() {
-  try {
-    const raw = window.localStorage.getItem(backupKey());
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed.messages) ? parsed.messages : [];
-  } catch {
-    return [];
-  }
-}
-
-// Bound the snapshot by both message count and serialized size so it can never
-// grow without limit; oldest messages are dropped first.
-function trimBackup(list) {
-  let trimmed = list.length > BACKUP_MAX_MESSAGES ? list.slice(list.length - BACKUP_MAX_MESSAGES) : list.slice();
-  while (trimmed.length > 1 && JSON.stringify({ messages: trimmed }).length > BACKUP_MAX_BYTES) {
-    trimmed = trimmed.slice(1);
-  }
-  return trimmed;
-}
-
-function writeBackup(list) {
-  try {
-    window.localStorage.setItem(backupKey(), JSON.stringify({ messages: list, updated_at: new Date().toISOString() }));
-  } catch {
-    // Storage may be full/unavailable; the live view is unaffected.
-  }
-}
-
-// Append already-received (non-secret) message fields to the snapshot, redacted
-// and bounded. Never stores a token.
+// Persist a bounded, redacted device-local backup of the messages we've loaded
+// (#211): read the current per-room snapshot, append the new messages with any
+// bearer/tgl_ token, token= param, invite URL, or card URL scrubbed out, drop the
+// oldest past the count/byte cap, and write it back. Single self-contained flow —
+// the redaction intentionally mirrors (does not import) the shell cache guard so
+// the room bundle stays standalone. Never stores a secret.
 function recordBackupBatch(messages) {
   if (messages.length === 0) return;
-  const list = readBackup();
+  const key = BACKUP_PREFIX + (state.roomName || "room");
+  let list;
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    list = parsed && Array.isArray(parsed.messages) ? parsed.messages : [];
+  } catch {
+    list = [];
+  }
   for (const message of messages) {
-    list.push({
-      id: message.id,
-      from: message.from,
-      ts: message.ts,
-      type: message.type,
-      text: redactForBackup(message.text)
-    });
+    const text = String(message.text)
+      .replace(/https?:\/\/(?=\S*(?:token=|tgl_|\/card))\S+/gi, "[redacted-url]")
+      .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+      .replace(/[#?&]?token=[^\s&#"']+/gi, "[redacted-token]")
+      .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]");
+    list.push({ id: message.id, from: message.from, ts: message.ts, type: message.type, text });
     if (typeof message.id === "number" && message.id > state.backupCursor) state.backupCursor = message.id;
   }
-  writeBackup(trimBackup(list));
+  // Bound by message count, then by serialized size — oldest dropped first.
+  if (list.length > BACKUP_MAX_MESSAGES) list = list.slice(list.length - BACKUP_MAX_MESSAGES);
+  while (list.length > 1 && JSON.stringify({ messages: list }).length > BACKUP_MAX_BYTES) list = list.slice(1);
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ messages: list, updated_at: new Date().toISOString() }));
+  } catch {
+    // Storage full/unavailable — the live view is unaffected.
+  }
 }
 
 async function pollMessages() {
@@ -1426,23 +1401,18 @@ function applyRoomState() {
   renderBanner(closed);
   renderSession(closed);
   renderHistoryStrip(closed);
-  renderBackupNotice(offline);
-}
-
-// Honest read-only backup notice (#211): names the device-local snapshot and its
-// cursor so the offline view never implies complete/unseen history, and states
-// that sending is paused until the host resumes.
-function renderBackupNotice(offline) {
-  if (backupNotice === null) return;
-  if (!offline) {
-    backupNotice.hidden = true;
-    return;
+  // Honest read-only backup notice (#211): name the device-local snapshot + its
+  // cursor so the offline view never implies complete/unseen history, and state
+  // that sending is paused until the host resumes.
+  if (backupNotice !== null) {
+    backupNotice.hidden = !offline;
+    if (offline) {
+      backupNotice.textContent =
+        state.seen.size > 0
+          ? `Local backup · the host server is offline. Showing messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
+          : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
+    }
   }
-  backupNotice.hidden = false;
-  backupNotice.textContent =
-    state.seen.size > 0
-      ? `Local backup · the host server is offline. Showing messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
-      : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
 }
 
 // Active chat session surface (#183 / V2 T12): everyone sees the accent banner
