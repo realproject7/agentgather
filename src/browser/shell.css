@@ -948,7 +948,7 @@ body {
   display: none;
 }
 
-/* ---- first-run welcome / empty state ---- */
+/* ---- first-run welcome / empty state (#213) ---- */
 .welcome {
   min-height: 0;
   overflow: auto;
@@ -960,45 +960,59 @@ body {
   text-align: center;
 }
 
+/* Layout container only (not a card) — groups the hero copy + first action. */
+.welcome-intro {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .welcome-logo {
-  width: 84px;
-  height: 84px;
-  border-radius: 18px;
-  margin-bottom: 22px;
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  margin-bottom: 20px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
 }
 
 .welcome-title {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
+  max-width: 460px;
   color: var(--text);
-  font-size: 19px;
+  font-size: 22px;
   font-weight: 700;
+  line-height: 1.3;
 }
 
 .welcome-copy {
   max-width: 440px;
-  margin: 0 0 24px;
+  margin: 0 0 22px;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.65;
 }
 
 .welcome-copy b {
-  color: var(--accent-strong);
+  color: var(--text-soft);
   font-weight: 700;
 }
 
 .welcome-cta {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   min-height: 44px;
   padding: 0 22px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--accent);
   color: var(--accent-text);
+  font-family: var(--font);
   font-size: 13.5px;
   font-weight: 700;
+  cursor: pointer;
   box-shadow: 0 6px 22px rgba(var(--accent-rgb), 0.32);
 }
 
@@ -1006,8 +1020,62 @@ body {
   background: var(--accent-hover);
 }
 
+.welcome-cta:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.welcome-cta .cta-glyph {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* "What happens when you create a room" — compact, product-like 3-step list. */
+.welcome-steps {
+  list-style: none;
+  width: 100%;
+  max-width: 430px;
+  margin: 22px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+  text-align: left;
+}
+
+.welcome-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.welcome-steps .step-text {
+  min-width: 0;
+}
+
+.welcome-steps b {
+  color: var(--text-soft);
+  font-weight: 700;
+}
+
+.welcome-steps .step-n {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .welcome-templates-label {
-  margin: 30px 0 12px;
+  margin: 34px 0 12px;
   color: var(--faint);
   font-size: 10.5px;
   font-weight: 700;
@@ -1020,40 +1088,60 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   width: 100%;
-  max-width: 560px;
+  max-width: 620px;
 }
 
 .welcome-template {
   display: grid;
-  gap: 3px;
-  padding: 14px 12px;
+  grid-auto-rows: min-content;
+  gap: 9px;
+  align-content: start;
+  min-height: 122px;
+  padding: 14px;
   border: 1px solid var(--line);
-  border-radius: 11px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.015);
   color: var(--text);
   text-align: left;
+  font-family: var(--font);
+  cursor: pointer;
 }
 
 .welcome-template:hover {
-  border-color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-weak);
 }
 
+.welcome-template:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Distinct symbol per template in a consistent accent icon chip — replaces the
+   bare diamond glyph. The chip is uniform; only the glyph differs per template. */
 .welcome-template .tpl-ic {
-  margin-bottom: 6px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--accent-weak);
   color: var(--accent);
   font-size: 15px;
+  line-height: 1;
 }
 
 .welcome-template .tpl-name {
   color: var(--text-soft);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
 .welcome-template .tpl-desc {
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 /* ---- rail header + new-room button ---- */
@@ -1722,6 +1810,22 @@ body {
 
   .invite-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Phone polish (#213): tighten the empty state so the hero + template grid stay
+   product-like and never overflow at 390px. */
+@media (max-width: 440px) {
+  .welcome {
+    padding: 32px 16px;
+  }
+
+  .welcome-title {
+    font-size: 20px;
+  }
+
+  .welcome-templates {
+    gap: 8px;
   }
 }
 
