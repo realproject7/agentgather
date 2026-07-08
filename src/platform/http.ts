@@ -16,7 +16,13 @@ import path from "node:path";
 import { URL } from "node:url";
 import { VERSION } from "../cli/help.js";
 import { writeToken } from "../cli/state.js";
-import { readJoinedRooms, recordJoinedRoom, readMessages } from "../storage/index.js";
+import {
+  readJoinedRooms,
+  recordJoinedRoom,
+  setJoinedRoomArchived,
+  deleteJoinedRoom,
+  readMessages
+} from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
 
@@ -66,6 +72,14 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
   }
   if (req.method === "POST" && url.pathname === "/joined-rooms/remember") {
     await rememberJoinedRoomFromInviteRequest(options, req, res);
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/joined-rooms/archive") {
+    await archiveJoinedRoomRequest(options, req, res);
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/joined-rooms/delete") {
+    await deleteJoinedRoomRequest(options, req, res);
     return;
   }
   if (req.method !== "GET") {
@@ -312,6 +326,64 @@ async function recordJoinedRoomFromRequest(
     lastSeen: now
   });
   sendJson(res, 200, { ok: true });
+}
+
+// Device-local archive/unarchive of a joined-room row (#210). Loopback-only, like
+// the other joined-room bridges; touches ONLY joined-rooms.json — never a host
+// room home or log. Token-free request/response.
+async function archiveJoinedRoomRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "joined-room archive is loopback-only" });
+    return;
+  }
+  let body: { roomId?: unknown; baseUrl?: unknown; archived?: unknown };
+  try {
+    body = JSON.parse(await readRequestBody(req)) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_json", message: "body must be JSON" });
+    return;
+  }
+  const baseUrl = sanitizeBaseUrl(body.baseUrl);
+  const roomId = shortString(body.roomId);
+  if (baseUrl === null || roomId === undefined) {
+    sendJson(res, 400, { ok: false, error: "invalid_target", message: "roomId and baseUrl are required" });
+    return;
+  }
+  const updated = await setJoinedRoomArchived(options.root, { roomId, baseUrl, archived: body.archived === true });
+  sendJson(res, 200, { ok: true, updated });
+}
+
+// Device-local hard-delete of a joined-room row (#210). Loopback-only; removes
+// ONLY the joined-rooms.json entry — it never deletes host-owned room data
+// (`rooms/<id>/`), host logs, or tokens. Token-free request/response.
+async function deleteJoinedRoomRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "joined-room delete is loopback-only" });
+    return;
+  }
+  let body: { roomId?: unknown; baseUrl?: unknown };
+  try {
+    body = JSON.parse(await readRequestBody(req)) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_json", message: "body must be JSON" });
+    return;
+  }
+  const baseUrl = sanitizeBaseUrl(body.baseUrl);
+  const roomId = shortString(body.roomId);
+  if (baseUrl === null || roomId === undefined) {
+    sendJson(res, 400, { ok: false, error: "invalid_target", message: "roomId and baseUrl are required" });
+    return;
+  }
+  const removed = await deleteJoinedRoom(options.root, { roomId, baseUrl });
+  sendJson(res, 200, { ok: true, removed });
 }
 
 async function rememberJoinedRoomFromInviteRequest(

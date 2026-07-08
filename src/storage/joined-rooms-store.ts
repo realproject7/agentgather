@@ -13,6 +13,10 @@ export interface JoinedRoom {
   baseUrl: string;
   joinedAt: string;
   lastSeen: string;
+  // Device-local lifecycle flag (#210): an archived entry is hidden from the
+  // dashboard by default but its metadata/history pointers are preserved for
+  // recovery. Purely local — it never closes the host room or notifies anyone.
+  archived?: boolean;
 }
 
 interface JoinedRoomsStore {
@@ -62,7 +66,44 @@ export async function recordJoinedRoom(home: string, entry: JoinedRoom): Promise
     joinedAt: index === -1 ? entry.joinedAt : (rooms[index]?.joinedAt ?? entry.joinedAt),
     lastSeen: entry.lastSeen
   };
+  // Preserve an existing archived flag across a re-record so re-joining doesn't
+  // silently un-archive a room the user chose to hide (#210).
+  const archived = entry.archived ?? (index === -1 ? undefined : rooms[index]?.archived);
+  if (archived) record.archived = true;
   if (index === -1) rooms.push(record);
   else rooms[index] = record;
   await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms }, null, 2)}\n`);
+}
+
+// Archive/unarchive one device-local joined-room record (#210). Writes ONLY the
+// joined-rooms.json store — it never touches host-owned room homes, host logs, or
+// any `rooms/<id>/` data. Returns true if a matching record was updated.
+export async function setJoinedRoomArchived(
+  home: string,
+  target: { roomId: string; baseUrl: string; archived: boolean }
+): Promise<boolean> {
+  const rooms = await readJoinedRooms(home);
+  const index = rooms.findIndex((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
+  const current = rooms[index];
+  if (index === -1 || current === undefined) return false;
+  if (target.archived) current.archived = true;
+  else delete current.archived;
+  await ensureSecureDir(home);
+  await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms }, null, 2)}\n`);
+  return true;
+}
+
+// Hard-delete one device-local joined-room record (#210). Removes ONLY the entry
+// from joined-rooms.json — it deletes no host-owned room data (`rooms/<id>/`),
+// host logs, or tokens. Returns true if a matching record was removed.
+export async function deleteJoinedRoom(
+  home: string,
+  target: { roomId: string; baseUrl: string }
+): Promise<boolean> {
+  const rooms = await readJoinedRooms(home);
+  const next = rooms.filter((room) => !(room.roomId === target.roomId && room.baseUrl === target.baseUrl));
+  if (next.length === rooms.length) return false;
+  await ensureSecureDir(home);
+  await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms: next }, null, 2)}\n`);
+  return true;
 }

@@ -616,14 +616,17 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     assert.match(savedOpenHref, /\/joined-rooms\/open\?/);
     assert.equal(/tgl_|token=|Bearer/i.test(savedOpenHref), false);
 
-    await page.click('.joined-row[data-reachability="saved"] .joined-forget');
+    // Delete the browser-added entry via the device-local delete control — an
+    // inline confirm (never a native dialog), then confirm.
+    await page.click('.joined-row[data-reachability="saved"] .joined-ctl-danger');
+    await page.click('.joined-row[data-reachability="saved"] [data-action="confirm-delete"]');
 
-    // Clearing browser storage drops the browser-added entry gracefully; the CLI
-    // record (device file, not browser storage) is unaffected.
-    await page.evaluate(() => window.localStorage.clear());
-    await page.reload();
+    // The browser-added entry is dropped; the CLI record (device file, not browser
+    // storage) is unaffected.
     await page.waitForSelector("text=Joined via CLI");
-    assert.equal(await page.locator('.joined-row[data-reachability="saved"]').count(), 0);
+    await page.waitForFunction(
+      () => document.querySelectorAll('.joined-row[data-reachability="saved"]').length === 0
+    );
   } finally {
     await browser.close();
     await platform.close();
@@ -1179,6 +1182,116 @@ test("the About screen is reachable with no rooms and states the trust boundary 
     // Escape closes it (keyboard accessible).
     await page.keyboard.press("Escape");
     await page.locator("#about-overlay").waitFor({ state: "hidden" });
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #210 — device-local archive/delete for "Rooms I'm in": archive hides a row
+// (recoverable via the toggle), delete needs an inline confirm and removes only
+// the device-local record, controls appear only on joined rows, and everything
+// stays token-free.
+test("device-local archive/delete for joined rooms — hide/restore, confirm-delete, token-free, host rows unaffected (#210)", async () => {
+  const root = await makeRoot();
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, { roomId: "room-a", title: "Room A", alias: "me", baseUrl: "http://127.0.0.1:9", joinedAt: now, lastSeen: now });
+  await recordJoinedRoom(root, { roomId: "room-b", title: "Room B", alias: "me", baseUrl: "http://127.0.0.1:8", joinedAt: now, lastSeen: now });
+  // A host-owned control-plane room — it must NOT get joined lifecycle controls.
+  await createControlPlaneRoom(root, roomInput({ room_id: "hosted", title: "Hosted", status: "active" }));
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+    await page.waitForSelector(".joined-row");
+    assert.equal(await page.locator(".joined-row").count(), 2);
+
+    // Host-owned rooms have NO archive/delete controls (only joined rows do).
+    assert.equal(await page.locator(".room-row").count(), 1);
+    assert.equal(await page.locator(".room-row .joined-ctl").count(), 0);
+
+    // Archive Room A → hidden by default; the show-archived toggle appears.
+    const rowA = page.locator('.joined-row:has(.joined-name:text-is("Room A"))');
+    await rowA.locator('[data-action="archive"]').click();
+    await page.waitForFunction(() => document.querySelectorAll(".joined-row").length === 1);
+    await page.waitForSelector("#joined-show-archived:not([hidden])");
+    assert.match((await page.locator("#joined-show-archived").textContent()) ?? "", /show archived \(1\)/);
+
+    // Reveal archived → Room A shows dimmed; unarchive restores it.
+    await page.click("#joined-show-archived");
+    await page.waitForFunction(() => document.querySelectorAll(".joined-row").length === 2);
+    await page.waitForSelector('.joined-row[data-archived="true"]');
+    await page.locator('.joined-row[data-archived="true"] [data-action="unarchive"]').click();
+    await page.waitForSelector('.joined-row[data-archived="true"]', { state: "detached" });
+
+    // Delete Room B needs an inline confirm (never a native dialog) with honest,
+    // token-free copy, then removes only the device-local record.
+    const rowB = page.locator('.joined-row:has(.joined-name:text-is("Room B"))');
+    await rowB.locator('[data-action="delete"]').click();
+    await page.waitForSelector('[data-action="confirm-delete"]');
+    const confirmText = (await page.locator(".joined-confirm-msg").textContent()) ?? "";
+    assert.match(confirmText, /won't close the host room or notify anyone/i);
+    assert.equal(/tgl_|token=|Bearer/i.test(confirmText), false);
+    await page.click('[data-action="confirm-delete"]');
+    await page.waitForFunction(
+      () => [...document.querySelectorAll(".joined-name")].every((n) => n.textContent !== "Room B")
+    );
+
+    // Token-free rail + API; Room B is gone from the device-local store, Room A stays.
+    assert.equal(/tgl_|token=|Bearer/i.test((await page.locator(".room-rail").innerHTML()) ?? ""), false);
+    const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as {
+      rooms: Array<{ roomId: string }>;
+    };
+    assert.equal(/tgl_|token=|Bearer/i.test(JSON.stringify(api)), false);
+    assert.equal(api.rooms.some((r) => r.roomId === "room-b"), false);
+    assert.equal(api.rooms.some((r) => r.roomId === "room-a"), true);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #210 (RE1) — browser-local archive/delete key by (roomId, baseUrl), so deleting
+// one joined room never removes a sibling that shares the same host baseUrl.
+test("deleting one browser-local joined room keeps a sibling on the same host (#210)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".platform-shell");
+    // Two browser-local joined records that share a baseUrl but differ by roomId.
+    await page.evaluate(() => {
+      const ts = "2026-07-01T00:00:00.000Z";
+      window.localStorage.setItem(
+        "agentgather.joinedRooms",
+        JSON.stringify({
+          rooms: [
+            { roomId: "room-x", title: "Room X", alias: "me", baseUrl: "http://127.0.0.1:9/team", joinedAt: ts, lastSeen: ts },
+            { roomId: "room-y", title: "Room Y", alias: "me", baseUrl: "http://127.0.0.1:9/team", joinedAt: ts, lastSeen: ts }
+          ]
+        })
+      );
+    });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelectorAll(".joined-row").length === 2);
+
+    // Delete Room X (inline confirm) → only Room Y remains, in the DOM and storage.
+    await page.locator('.joined-row:has(.joined-name:text-is("Room X"))').locator('[data-action="delete"]').click();
+    await page.click('[data-action="confirm-delete"]');
+    await page.waitForFunction(() => {
+      const names = [...document.querySelectorAll(".joined-name")].map((n) => n.textContent);
+      return names.length === 1 && names[0] === "Room Y";
+    });
+    const stored = JSON.parse(
+      (await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"))) ?? "{}"
+    ) as { rooms: Array<{ roomId: string }> };
+    assert.equal(stored.rooms.length, 1);
+    assert.equal(stored.rooms[0]?.roomId, "room-y");
   } finally {
     await browser.close();
     await platform.close();

@@ -75,3 +75,32 @@ test("recordJoinedRoom keeps a known display title and never downgrades it to th
   await recordJoinedRoom(home, { roomId: "slug-only", title: "slug-only", alias: "me", baseUrl: "http://127.0.0.1:9", joinedAt: base.joinedAt, lastSeen: base.lastSeen });
   assert.equal((await readJoinedRooms(home)).find((r) => r.roomId === "slug-only")?.title, "slug-only");
 });
+
+test("archive round-trips and delete removes ONLY the joined record — host-owned room data survives (#210)", async () => {
+  const { createRoom, readBrief, recordJoinedRoom, setJoinedRoomArchived, deleteJoinedRoom } = await import(
+    "../src/storage/index.js"
+  );
+  const home = await mkdtemp(path.join(os.tmpdir(), "agentgather-joined-archive-"));
+  const now = "2026-07-01T00:00:00.000Z";
+
+  // A host-owned room lives in the SAME AGENTGATHER_HOME as the joined record.
+  await createRoom({ root: home, roomId: "hosted-room", hostAlias: "host", briefBody: "keep me" });
+  await recordJoinedRoom(home, { roomId: "joined-room", title: "Joined", alias: "me", baseUrl: "http://127.0.0.1:9", joinedAt: now, lastSeen: now });
+
+  // Archive is recoverable: flag on, then off.
+  assert.equal(await setJoinedRoomArchived(home, { roomId: "joined-room", baseUrl: "http://127.0.0.1:9", archived: true }), true);
+  assert.equal((await readJoinedRooms(home))[0]?.archived, true);
+  await setJoinedRoomArchived(home, { roomId: "joined-room", baseUrl: "http://127.0.0.1:9", archived: false });
+  assert.equal((await readJoinedRooms(home))[0]?.archived, undefined);
+
+  // Delete removes the joined record...
+  assert.equal(await deleteJoinedRoom(home, { roomId: "joined-room", baseUrl: "http://127.0.0.1:9" }), true);
+  assert.equal((await readJoinedRooms(home)).length, 0);
+  // ...a second delete is a no-op (nothing left to remove).
+  assert.equal(await deleteJoinedRoom(home, { roomId: "joined-room", baseUrl: "http://127.0.0.1:9" }), false);
+
+  // The host-owned room's data is untouched by the joined-room delete.
+  assert.equal((await readBrief(home, "hosted-room")).body, "keep me");
+  // The joined-rooms store never held a token.
+  assert.equal(/tgl_|Bearer|token=/i.test(await readFile(joinedRoomsPath(home), "utf8").catch(() => "")), false);
+});
