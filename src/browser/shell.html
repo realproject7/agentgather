@@ -11,9 +11,12 @@
   <body>
     <main class="platform-shell" data-state="loading" data-view="loading" aria-label="Platform owner shell">
       <header class="platform-topbar">
-        <div class="brand-slot" aria-label="Agent Gather">
-          <img src="agentgather-logo.png" alt="" aria-hidden="true">
-          <span>Agent Gather</span>
+        <div class="brand-crumb">
+          <button id="brand-home" class="brand-slot" type="button" aria-label="Agent Gather — dashboard home">
+            <img src="agentgather-logo.png" alt="" aria-hidden="true">
+            <span>Agent Gather</span>
+          </button>
+          <span id="crumb" class="crumb" aria-live="polite"></span>
         </div>
         <div class="topbar-meta">
           <span id="owner-label" class="owner-chip">owner</span>
@@ -57,41 +60,64 @@
       </section>
 
       <div class="platform-body">
-        <aside class="room-rail" aria-label="Rooms">
-          <div class="rail-head">
-            <div id="rail-title" class="rail-title">Your rooms</div>
-            <button id="new-room" class="new-room" type="button">+&nbsp; new room</button>
-          </div>
-          <ul id="room-list" class="room-list"></ul>
-          <div id="rooms-error" class="rail-error" role="alert" hidden></div>
-
-          <!-- Rooms I'm in (#178): device-local joined-room history, metadata only. -->
-          <section class="joined-section" aria-label="Rooms I'm in">
-            <div class="joined-head">
-              <div id="joined-title" class="rail-title">Rooms I'm in</div>
+        <aside class="room-rail" aria-label="Workspace navigation">
+          <!-- Top region (~1/3, own scroll): hosted + joined room lists. -->
+          <div class="rail-rooms" aria-label="Rooms">
+            <div class="rail-head">
+              <div id="rail-title" class="rail-title">Your rooms</div>
+              <button id="new-room" class="new-room" type="button">+&nbsp; new room</button>
             </div>
-            <ul id="joined-list" class="joined-list"></ul>
-            <p id="joined-empty" class="joined-empty">
-              No joined rooms tracked on this device yet. Paste an invite link to remember one
-              (metadata only — the token is never stored).
-            </p>
-            <form id="joined-add" class="joined-add">
-              <input id="joined-input" class="joined-input" type="text" autocomplete="off"
-                placeholder="paste an invite link" aria-label="Invite link for a room you joined">
-              <button id="joined-add-button" class="joined-add-button" type="submit">remember</button>
-            </form>
-            <div id="joined-error" class="rail-error" role="alert" hidden></div>
-            <p class="joined-note">Same-device only — never synced or copied to any server.</p>
-          </section>
+            <ul id="room-list" class="room-list"></ul>
+            <button id="rooms-more" class="morebtn" type="button" hidden aria-expanded="false"></button>
+            <div id="rooms-error" class="rail-error" role="alert" hidden></div>
 
-          <div class="status-legend" aria-label="Room status legend">
-            <div class="legend-title">room status</div>
-            <ul class="legend-list">
-              <li><span class="status-badge" data-status="active">active</span><span>running &amp; route live; join and chat now.</span></li>
-              <li><span class="status-badge" data-status="idle">idle</span><span>running, but responses may be delayed.</span></li>
-              <li><span class="status-badge" data-status="paused">paused</span><span>stopped; the host can reopen it.</span></li>
-              <li><span class="status-badge" data-status="closed">closed</span><span>permanent; only exported history remains.</span></li>
-            </ul>
+            <!-- Rooms I'm in (#178): device-local joined-room history, metadata only. -->
+            <section class="joined-section" aria-label="Rooms I'm in">
+              <div class="joined-head">
+                <div id="joined-title" class="rail-title">Rooms I'm in</div>
+              </div>
+              <ul id="joined-list" class="joined-list"></ul>
+              <button id="joined-more" class="morebtn" type="button" hidden aria-expanded="false"></button>
+              <p id="joined-empty" class="joined-empty">
+                No joined rooms tracked on this device yet. Paste an invite link to remember one
+                (metadata only — the token is never stored).
+              </p>
+              <form id="joined-add" class="joined-add">
+                <input id="joined-input" class="joined-input" type="text" autocomplete="off"
+                  placeholder="paste an invite link" aria-label="Invite link for a room you joined">
+                <button id="joined-add-button" class="joined-add-button" type="submit">remember</button>
+              </form>
+              <div id="joined-error" class="rail-error" role="alert" hidden></div>
+              <p class="joined-note">Same-device only — never synced or copied to any server.</p>
+            </section>
+          </div>
+
+          <!-- Lower region (~2/3, own scroll): contextual. State A shows Room Status
+               guidance; State B shows the selected room's channel/forum navigation. -->
+          <div class="rail-lower">
+            <div id="lower-home" aria-label="Room status">
+              <div class="rail-title">Room status</div>
+              <div class="guide">
+                <b>No room selected.</b> Pick a room above, or create one — hosted rooms run
+                from this device; joined rooms live on their host.
+                <button id="guide-create" class="guide-cta" type="button">+&nbsp; create room</button>
+              </div>
+              <div class="status-legend" aria-label="Room status legend">
+                <ul class="legend-list">
+                  <li><span class="status-badge" data-status="active">active</span><span>running &amp; route live; join and chat now.</span></li>
+                  <li><span class="status-badge" data-status="idle">idle</span><span>running, but responses may be delayed.</span></li>
+                  <li><span class="status-badge" data-status="paused">paused</span><span>stopped; the host can reopen it.</span></li>
+                  <li><span class="status-badge" data-status="closed">closed</span><span>permanent; only exported history remains.</span></li>
+                </ul>
+              </div>
+            </div>
+
+            <div id="lower-room" class="channel-region" aria-label="Channels" hidden>
+              <div class="rail-title">Channels</div>
+              <ul id="channel-nav" class="channel-nav"></ul>
+              <button id="channels-more" class="morebtn" type="button" hidden aria-expanded="false"></button>
+              <p class="channel-note">Open the room for its forum channels &amp; threads.</p>
+            </div>
           </div>
 
           <div class="platform-version" aria-label="Agent Gather version">
