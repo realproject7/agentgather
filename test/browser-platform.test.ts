@@ -158,7 +158,7 @@ test("owner shell shows a first-run welcome state when the owner has no rooms", 
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="empty"]');
-    await page.waitForSelector("text=No rooms yet");
+    await page.waitForSelector(".welcome-title");
     await page.waitForSelector("#welcome-create");
     // The welcome offers templates to start from and never shows a room row.
     assert.equal(await page.locator(".welcome-template").count(), 4);
@@ -1021,6 +1021,64 @@ test("the dashboard labels joined rooms by display title, not slug, with the id 
       return getComputedStyle(name).textOverflow === "ellipsis" && rail.scrollWidth <= rail.clientWidth + 1;
     });
     assert.equal(contained, true, "long joined-room slug overflowed the rail");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #213 — the first-run empty state is a polished, product-like screen: onboarding
+// copy + strong first action + "what happens" steps + a consistent template-card
+// grid with distinct symbols, with no overflow at 1440 / 1280 / 390.
+test("the first-run empty state is a polished, responsive product screen (#213)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="empty"]');
+    await page.waitForSelector(".welcome-template");
+
+    // Onboarding: a real headline, a keyboard-accessible primary CTA, and a
+    // 3-step "what happens when you create a room" explanation.
+    assert.notEqual(((await page.locator(".welcome-title").textContent()) ?? "").trim(), "");
+    assert.equal(await page.locator("#welcome-create").evaluate((el) => el.tagName), "BUTTON");
+    assert.equal(await page.locator(".welcome-steps li").count(), 3);
+
+    // Four template cards, each a real (keyboard-accessible) button with a DISTINCT
+    // symbol — not the old identical diamond.
+    const cards = page.locator(".welcome-template");
+    assert.equal(await cards.count(), 4);
+    assert.equal(await cards.evaluateAll((els) => els.every((e) => e.tagName === "BUTTON")), true);
+    const glyphs = await page
+      .locator(".welcome-template .tpl-ic")
+      .evaluateAll((els) => els.map((e) => (e.textContent ?? "").trim()));
+    assert.equal(new Set(glyphs).size, 4, "template icons are not distinct");
+
+    // Card radius <= 8px (design constraint).
+    const radius = await cards.first().evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius));
+    assert.ok(radius <= 8, `card radius ${radius}px exceeds 8px`);
+
+    // Polished, no overflow at 1440 / 1280 / 390: nothing overflows its box and the
+    // page never scrolls horizontally.
+    for (const width of [1440, 1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const ok = await page.evaluate(() => {
+        const within = (sel: string): boolean =>
+          [...document.querySelectorAll(sel)].every((e) => (e as HTMLElement).scrollWidth <= (e as HTMLElement).clientWidth + 1);
+        const noHScroll = document.documentElement.scrollWidth <= window.innerWidth + 1;
+        return (
+          within(".welcome-title") &&
+          within(".welcome-cta") &&
+          within(".welcome-template") &&
+          within(".tpl-name") &&
+          within(".tpl-desc") &&
+          noHScroll
+        );
+      });
+      assert.equal(ok, true, `empty state overflowed at width ${width}`);
+    }
   } finally {
     await browser.close();
     await platform.close();

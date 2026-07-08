@@ -26,35 +26,44 @@
 
       <!-- First-run / no-room welcome state -->
       <section id="welcome" class="welcome" aria-label="Welcome">
-        <img class="welcome-logo" src="agentgather-logo.png" alt="" aria-hidden="true">
-        <h1 class="welcome-title">No rooms yet</h1>
-        <p class="welcome-copy">
-          Open a room and bring people and their <b>current agent sessions</b> into one live
-          space — humans in the browser, agents over a no-install card.
-        </p>
-        <button id="welcome-create" class="welcome-cta" type="button">+&nbsp; Create your first room</button>
+        <div class="welcome-intro">
+          <img class="welcome-logo" src="agentgather-logo.png" alt="" aria-hidden="true">
+          <h1 class="welcome-title">Bring people and their agents into one room</h1>
+          <p class="welcome-copy">
+            Agent Gather is a live space where <b>humans join in the browser</b> and
+            <b>agents attend over a no-install card</b> — chatting, reviewing, and deciding together.
+          </p>
+          <button id="welcome-create" class="welcome-cta" type="button">
+            <span class="cta-glyph" aria-hidden="true">+</span> Create your first room
+          </button>
+          <ol class="welcome-steps" aria-label="What happens when you create a room">
+            <li><span class="step-n" aria-hidden="true">1</span><span class="step-text">Runs from <b>this device</b> — no server, no account.</span></li>
+            <li><span class="step-n" aria-hidden="true">2</span><span class="step-text">Invite people &amp; agents by link or attend card.</span></li>
+            <li><span class="step-n" aria-hidden="true">3</span><span class="step-text">The cloud tracks only status &amp; invites — <b>messages stay local</b>.</span></li>
+          </ol>
+        </div>
 
         <div class="welcome-templates-label">or start from a template</div>
         <div class="welcome-templates" role="group" aria-label="Room templates">
           <button class="welcome-template" type="button" data-template="debug">
-            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-ic" data-template="debug" aria-hidden="true">⧉</span>
             <span class="tpl-name">Debug</span>
-            <span class="tpl-desc">cross-machine diagnosis</span>
+            <span class="tpl-desc">Diagnose a failure across machines</span>
           </button>
           <button class="welcome-template" type="button" data-template="review">
-            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-ic" data-template="review" aria-hidden="true">✓</span>
             <span class="tpl-name">Review</span>
-            <span class="tpl-desc">PR &amp; code review</span>
+            <span class="tpl-desc">Walk a PR &amp; code change before merge</span>
           </button>
           <button class="welcome-template" type="button" data-template="planning">
-            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-ic" data-template="planning" aria-hidden="true">≣</span>
             <span class="tpl-name">Planning</span>
-            <span class="tpl-desc">scope &amp; sequence work</span>
+            <span class="tpl-desc">Scope &amp; sequence the work</span>
           </button>
           <button class="welcome-template" type="button" data-template="product">
-            <span class="tpl-ic" aria-hidden="true">◆</span>
+            <span class="tpl-ic" data-template="product" aria-hidden="true">◆</span>
             <span class="tpl-name">Product</span>
-            <span class="tpl-desc">pressure-test positioning</span>
+            <span class="tpl-desc">Pressure-test the positioning</span>
           </button>
         </div>
       </section>
