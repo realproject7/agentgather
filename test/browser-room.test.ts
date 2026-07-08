@@ -1365,3 +1365,48 @@ test("a joined participant never sees host-only controls, live or while the host
     await fixture.close();
   }
 });
+
+// #218b — a direct room URL renders the three-panel workspace; the right roster
+// panel holds all its content in one scroll child so it scrolls independently
+// and never clips at the bottom, even when host controls sit below the roster.
+test("a direct room URL keeps the roster right panel in one independent scroll context, no bottom clip (#218b)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    // A short viewport forces the roster (room info + participants + host controls)
+    // to exceed the column height.
+    const page = await browser.newPage({ viewport: { width: 1180, height: 460 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // The host sees host controls (#212) inside the roster; all roster content
+    // lives in the single .rail-scroll child.
+    await page.waitForSelector("#roster .rail-scroll #host-controls:not([hidden])");
+    const scroll = await page.evaluate(() => {
+      const s = document.querySelector("#roster .rail-scroll") as HTMLElement;
+      const roster = document.getElementById("roster")!.getBoundingClientRect();
+      return {
+        overflowing: s.scrollHeight > s.clientHeight,
+        overflowY: getComputedStyle(s).overflowY,
+        withinViewport: roster.bottom <= window.innerHeight + 1
+      };
+    });
+    assert.equal(scroll.overflowY, "auto");
+    assert.equal(scroll.overflowing, true, "roster did not overflow at a short viewport");
+    assert.equal(scroll.withinViewport, true, "roster clipped past the viewport bottom");
+
+    // Scrolling the panel reveals the host controls at the bottom (not clipped off).
+    await page.evaluate(() => {
+      const s = document.querySelector("#roster .rail-scroll") as HTMLElement;
+      s.scrollTop = s.scrollHeight;
+    });
+    const controlsVisible = await page.evaluate(() => {
+      const c = document.getElementById("close-button")!.getBoundingClientRect();
+      return c.bottom <= window.innerHeight + 1 && c.top >= 0;
+    });
+    assert.equal(controlsVisible, true, "host controls remained clipped after scrolling");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

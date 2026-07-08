@@ -131,6 +131,79 @@ body {
   min-height: 0;
 }
 
+/* Three-panel workspace (#218b): a selected room adds the 296px right info
+   column. Home/no-room stays two-column and the info panel is [hidden]. */
+.platform-shell.room-selected .platform-body {
+  grid-template-columns: 264px minmax(0, 1fr) 296px;
+}
+
+/* Right info panel — selected-room state only. Flex column with ONE scroll
+   child so it fills the viewport height and scrolls independently instead of
+   clipping at the bottom (the #218b fix). */
+.info {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: rgba(20, 20, 24, 0.94);
+}
+
+/* Explicit display:flex would otherwise defeat the UA [hidden] rule, so the
+   panel could leak into the home/no-room state. */
+.info[hidden] {
+  display: none;
+}
+
+.info-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.info-section {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.info-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.info-room {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.info-room-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.info-room-route {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+
 .room-rail {
   min-height: 0;
   display: flex;
@@ -573,11 +646,11 @@ body {
   min-height: 0;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "status status"
-    "controls controls"
-    "chat drawer";
+    "status"
+    "controls"
+    "chat";
 }
 
 .status-strip {
@@ -789,15 +862,6 @@ body {
   line-height: 1.48;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.participant-drawer {
-  grid-area: drawer;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px;
-  border-left: 1px solid var(--line);
-  background: rgba(20, 20, 24, 0.94);
 }
 
 .shell-roster {
@@ -1655,7 +1719,8 @@ body {
     display: inline-flex;
   }
 
-  .platform-body {
+  .platform-body,
+  .platform-shell.room-selected .platform-body {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1670,18 +1735,9 @@ body {
     display: flex;
   }
 
-  .detail {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "status"
-      "controls"
-      "chat"
-      "drawer";
-  }
-
-  .participant-drawer {
-    border-left: 0;
-    border-top: 1px solid var(--line);
-    max-height: 36vh;
+  /* The right info panel is hidden at narrow widths (spec); participants stay
+     reachable via the room's own roster affordance. */
+  .info {
+    display: none;
   }
 }

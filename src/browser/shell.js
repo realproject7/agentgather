@@ -70,6 +70,12 @@ const roomsMore = document.getElementById("rooms-more");
 const joinedMore = document.getElementById("joined-more");
 const channelsMore = document.getElementById("channels-more");
 
+// Right info panel (#218b): shown only in the selected-room (three-panel) state.
+const infoPanel = document.getElementById("info-panel");
+const infoRoomName = document.getElementById("info-room-name");
+const infoRoomStatus = document.getElementById("info-room-status");
+const infoRoomRoute = document.getElementById("info-room-route");
+
 // Collapse a list's tail behind a stable show-more/show-less control once it
 // exceeds this many rows, so a long room/channel list never pushes the rest of
 // the rail off-screen and expanding never shifts the layout.
@@ -291,8 +297,10 @@ async function selectRoom(roomId) {
 // selected room's channel navigation and the breadcrumb names the room. The
 // shell grid/rail never remounts — only these panel contents change.
 function enterRoomState(room) {
+  shell.classList.add("room-selected");
   lowerHome.hidden = true;
   lowerRoom.hidden = false;
+  infoPanel.hidden = false;
   renderChannelNav();
   setBreadcrumb(room);
 }
@@ -315,6 +323,8 @@ function goHome() {
   detailEmpty.hidden = false;
   lowerRoom.hidden = true;
   lowerHome.hidden = false;
+  infoPanel.hidden = true;
+  shell.classList.remove("room-selected");
   setBreadcrumb(null);
   renderRoomList();
 }
@@ -414,6 +424,13 @@ function renderDetail(room) {
     openRoom.hidden = true;
     routeVisibility.textContent = "no route published";
   }
+  // Mirror the room summary into the right info panel (token-free — route origin
+  // only, never an invite token).
+  infoRoomName.textContent = room.title || room.room_id;
+  infoRoomName.title = room.title || room.room_id;
+  infoRoomStatus.textContent = room.status;
+  infoRoomStatus.dataset.status = room.status;
+  infoRoomRoute.textContent = room.route_url ? hostLabel(room.route_url) : "no route published";
   renderRoster(Array.isArray(room.roster) ? room.roster : []);
 }
 

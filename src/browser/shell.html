@@ -161,13 +161,30 @@
               <div id="chat-empty" class="chat-empty" hidden>No messages yet.</div>
               <ol id="shell-timeline" class="shell-timeline" aria-live="polite"></ol>
             </section>
-
-            <aside class="participant-drawer" aria-label="Participants">
-              <div class="rail-title">Participants</div>
-              <ul id="shell-roster" class="shell-roster"></ul>
-            </aside>
           </div>
         </section>
+
+        <!-- Right info panel (#218b): selected-room state only. `.info` is a flex
+             column with a single `.info-scroll` child holding ALL content, so it
+             fills the viewport height and scrolls independently instead of clipping
+             at the bottom. The explicit flex needs the [hidden] override below, or
+             state-switching would leak it (same bug class as #183/#203). -->
+        <aside class="info" id="info-panel" aria-label="Room info" hidden>
+          <div class="info-scroll">
+            <section class="info-section" aria-label="Room">
+              <h3 class="info-title">Room</h3>
+              <div class="info-room">
+                <span id="info-room-name" class="info-room-name">Room</span>
+                <span id="info-room-status" class="status-badge" data-status="idle">idle</span>
+              </div>
+              <p id="info-room-route" class="info-room-route"></p>
+            </section>
+            <section class="info-section" aria-label="Participants">
+              <h3 class="info-title">Participants</h3>
+              <ul id="shell-roster" class="shell-roster"></ul>
+            </section>
+          </div>
+        </aside>
       </div>
 
       <!-- Create-room shell. Room creation runs from the host machine (CLI); this
