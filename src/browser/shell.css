@@ -107,6 +107,32 @@ body {
   white-space: nowrap;
 }
 
+/* Topbar text button (About, #215): a quiet, always-present, keyboard-accessible
+   affordance — discoverable in every state including first-run with no rooms. */
+.topbar-link {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.topbar-link:hover {
+  color: var(--text-soft);
+  background: var(--chip);
+}
+
+.topbar-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .icon-button {
   display: none;
   min-height: 28px;
@@ -1404,6 +1430,39 @@ body {
 .overlay-body {
   padding: 16px 18px;
   overflow: auto;
+}
+
+/* About overlay (#215): plain heading + paragraph sections (NOT nested cards) so
+   the trust-boundary copy reads as a document, not decorative clutter. */
+.about-body {
+  display: grid;
+  gap: 16px;
+}
+
+.about-section {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.about-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.about-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.about-section p b {
+  color: var(--text-soft);
+  font-weight: 700;
 }
 
 .overlay-foot {

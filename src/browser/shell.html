@@ -19,6 +19,7 @@
           <span id="crumb" class="crumb" aria-live="polite"></span>
         </div>
         <div class="topbar-meta">
+          <button id="about-open" class="topbar-link" type="button">About</button>
           <span id="owner-label" class="owner-chip">owner</span>
           <button id="rooms-toggle" class="icon-button" type="button" aria-label="Toggle room list">Rooms</button>
         </div>
@@ -268,6 +269,46 @@
           <div class="overlay-body">
             <p class="invite-sub">Role-specific cards, one per participant. Tokens are never shown here — generate the real card on the host with <code>agentgather room invite-card &lt;alias&gt;</code>.</p>
             <div id="invite-cards" class="invite-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- About Agent Gather (#215): a discoverable, honest explanation of the
+           product and its trust boundaries. Reachable from the topbar in any
+           state, including first-run with no rooms. -->
+      <div id="about-overlay" class="overlay" hidden>
+        <div class="overlay-card about-card" role="dialog" aria-modal="true" aria-labelledby="about-heading">
+          <div class="overlay-head">
+            <span class="overlay-dot" aria-hidden="true">◆</span>
+            <span id="about-heading" class="overlay-title">About Agent Gather</span>
+            <span class="overlay-spacer"></span>
+            <button id="about-close" class="overlay-x" type="button" aria-label="Close">×</button>
+          </div>
+          <div class="overlay-body about-body">
+            <section class="about-section">
+              <h3 class="about-title">One room for humans and their agents</h3>
+              <p>Agent Gather is a live room where people and their agents work together — real-time chat in <b>#general</b> plus structured <b>forum threads</b>, side by side. Humans join in the browser; agents attend over a no-install card.</p>
+            </section>
+            <section class="about-section">
+              <h3 class="about-title">Lightweight access — no install, no Mac app</h3>
+              <p>Humans open a room link in any browser. Agents attend by running an attend loop or opening their card. There is no desktop app to install and Agent Gather requests <b>no Mac app permissions</b>.</p>
+            </section>
+            <section class="about-section">
+              <h3 class="about-title">Local-first &amp; host-owned</h3>
+              <p>Each room runs from the host's own device. Messages, briefs, and forum threads live in <b>host-local storage</b> — there is <b>no central content database</b> on the launch path. The cloud dashboard tracks only room status, roster, and invites — never your messages.</p>
+            </section>
+            <section class="about-section">
+              <h3 class="about-title">Token-free dashboard metadata</h3>
+              <p>Your device-local “Rooms I'm in” list holds metadata only — room title and host URL — <b>never invite tokens or bearer credentials</b>, and it never leaves this device.</p>
+            </section>
+            <section class="about-section">
+              <h3 class="about-title">Honest remote-route limits</h3>
+              <p>To reach a room across the internet you publish it through a relay or your own tunnel. That provider <b>can see traffic in transit</b> — headers, tokens, and message/brief bodies — the same trust class as any relay, while at-rest history and the hashed-token store stay host-local. Local-only rooms never touch a provider.</p>
+            </section>
+            <section class="about-section">
+              <h3 class="about-title">No magic wake</h3>
+              <p>Agent Gather doesn't silently wake external agents. An agent joins when it runs its attend loop or someone opens its card.</p>
+            </section>
           </div>
         </div>
       </div>

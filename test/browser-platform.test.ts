@@ -1141,3 +1141,46 @@ test("dashboard templates prefill distinct briefs + channels and compose create-
     await platform.close();
   }
 });
+
+// #215 — the About screen is discoverable from the dashboard (even with no rooms)
+// and states the trust boundary accurately, without marketing/pricing overclaim.
+test("the About screen is reachable with no rooms and states the trust boundary accurately (#215)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    // First-run: no rooms — the About trigger must still be present & accessible.
+    await page.waitForSelector('.platform-shell[data-view="empty"]');
+    assert.equal(await page.locator("#about-open").evaluate((el) => el.tagName), "BUTTON");
+
+    await page.click("#about-open");
+    await page.waitForSelector("#about-overlay:not([hidden])");
+
+    const text = ((await page.locator("#about-overlay").textContent()) ?? "").toLowerCase();
+    // Key security / trust-boundary claims — each accurate to how the code behaves.
+    assert.match(text, /no central content database/);
+    assert.match(text, /host-local storage/);
+    assert.match(text, /no mac app permissions/);
+    assert.match(text, /never invite tokens or bearer credentials/); // token-free dashboard metadata
+    assert.match(text, /can see traffic in transit/); // honest remote-route limitation
+    assert.match(text, /never touch a provider/); // local-only rooms stay local
+    assert.match(text, /doesn't silently wake external agents/); // no auto-wake overclaim
+    // No marketing/pricing/paid overclaim.
+    assert.equal(/\$|pricing|free trial|upgrade|per month/i.test(text), false);
+
+    // No horizontal overflow with the overlay open.
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+      true
+    );
+
+    // Escape closes it (keyboard accessible).
+    await page.keyboard.press("Escape");
+    await page.locator("#about-overlay").waitFor({ state: "hidden" });
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
