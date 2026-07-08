@@ -1253,3 +1253,47 @@ test("device-local archive/delete for joined rooms — hide/restore, confirm-del
     await platform.close();
   }
 });
+
+// #210 (RE1) — browser-local archive/delete key by (roomId, baseUrl), so deleting
+// one joined room never removes a sibling that shares the same host baseUrl.
+test("deleting one browser-local joined room keeps a sibling on the same host (#210)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".platform-shell");
+    // Two browser-local joined records that share a baseUrl but differ by roomId.
+    await page.evaluate(() => {
+      const ts = "2026-07-01T00:00:00.000Z";
+      window.localStorage.setItem(
+        "agentgather.joinedRooms",
+        JSON.stringify({
+          rooms: [
+            { roomId: "room-x", title: "Room X", alias: "me", baseUrl: "http://127.0.0.1:9/team", joinedAt: ts, lastSeen: ts },
+            { roomId: "room-y", title: "Room Y", alias: "me", baseUrl: "http://127.0.0.1:9/team", joinedAt: ts, lastSeen: ts }
+          ]
+        })
+      );
+    });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelectorAll(".joined-row").length === 2);
+
+    // Delete Room X (inline confirm) → only Room Y remains, in the DOM and storage.
+    await page.locator('.joined-row:has(.joined-name:text-is("Room X"))').locator('[data-action="delete"]').click();
+    await page.click('[data-action="confirm-delete"]');
+    await page.waitForFunction(() => {
+      const names = [...document.querySelectorAll(".joined-name")].map((n) => n.textContent);
+      return names.length === 1 && names[0] === "Room Y";
+    });
+    const stored = JSON.parse(
+      (await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"))) ?? "{}"
+    ) as { rooms: Array<{ roomId: string }> };
+    assert.equal(stored.rooms.length, 1);
+    assert.equal(stored.rooms[0]?.roomId, "room-y");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});

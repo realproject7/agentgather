@@ -1197,7 +1197,7 @@ function showJoinedDeleteConfirm(entry, item) {
 async function toggleArchiveJoined(entry) {
   const archived = !entry.archived;
   if (entry.source === "browser") {
-    setLocalArchived(entry.baseUrl, archived);
+    setLocalArchived(entry, archived);
   } else {
     try {
       await apiPost("./joined-rooms/archive", { roomId: entry.roomId, baseUrl: entry.baseUrl, archived });
@@ -1210,7 +1210,11 @@ async function toggleArchiveJoined(entry) {
 
 async function deleteJoinedEntry(entry) {
   if (entry.source === "browser") {
-    writeJoinedLocal(readJoinedLocal().filter((room) => room.baseUrl !== entry.baseUrl));
+    // Key by BOTH roomId and baseUrl, matching the store / loopback API, so one
+    // room's delete never removes a sibling joined room on the same host.
+    writeJoinedLocal(
+      readJoinedLocal().filter((room) => !(room.roomId === entry.roomId && room.baseUrl === entry.baseUrl))
+    );
   } else {
     try {
       await apiPost("./joined-rooms/delete", { roomId: entry.roomId, baseUrl: entry.baseUrl });
@@ -1224,9 +1228,11 @@ async function deleteJoinedEntry(entry) {
 }
 
 // Flip the archived flag on a browser-local joined record (device-local only).
-function setLocalArchived(baseUrl, archived) {
+// Matched by BOTH roomId and baseUrl, matching the store / loopback API, so
+// sibling joined rooms on the same host are never archived together.
+function setLocalArchived(entry, archived) {
   const rooms = readJoinedLocal().map((room) => {
-    if (room.baseUrl !== baseUrl) return room;
+    if (!(room.roomId === entry.roomId && room.baseUrl === entry.baseUrl)) return room;
     const next = { ...room };
     if (archived) next.archived = true;
     else delete next.archived;
