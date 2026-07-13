@@ -8,7 +8,7 @@ import test from "node:test";
 import { VERSION } from "../src/cli/help.js";
 import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
-import { appendServerMessage, createRoom, recordJoinedRoom } from "../src/storage/index.js";
+import { appendServerMessage, createBoardroom, createRoom, recordJoinedRoom } from "../src/storage/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 
 function requestWithHost(baseUrl: string, hostHeader: string): Promise<{ status: number; body: string }> {
@@ -116,6 +116,45 @@ test("lists only the owner's rooms and reads one room's metadata", async () => {
 
     const other = await fetch(`${fixture.baseUrl}/rooms/gamma`);
     assert.equal(other.status, 404);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("hosted room responses expose sanitized channels over the HTTP surface", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha" }));
+  await createControlPlaneRoom(root, roomInput({ room_id: "legacy" }));
+  await createRoom({ root, roomId: "alpha", hostAlias: "host" });
+  await createBoardroom(root, "alpha", {
+    channels: [
+      { id: "general", name: "general", type: "chat", lifecycle: "active", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "ideas", name: "Ideas", type: "forum", lifecycle: "active", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "old", name: "Old", type: "forum", lifecycle: "removed", createdAt: "2026-01-01T00:00:00.000Z" }
+    ]
+  });
+
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const alpha = await (await fetch(`${fixture.baseUrl}/rooms/alpha`)).json();
+    assert.deepEqual(alpha.room.channels, [
+      { id: "general", name: "general", type: "chat" },
+      { id: "ideas", name: "Ideas", type: "forum" }
+    ]);
+
+    // A room with no boardroom store falls back to a single #general chat channel.
+    const legacy = await (await fetch(`${fixture.baseUrl}/rooms/legacy`)).json();
+    assert.deepEqual(legacy.room.channels, [{ id: "general", name: "general", type: "chat" }]);
+
+    // The list surface carries the same sanitized channels, and the removed
+    // channel and its internal fields never cross the wire.
+    const listRaw = await (await fetch(`${fixture.baseUrl}/rooms`)).text();
+    assert.doesNotMatch(listRaw, /"old"|"removed"|"lifecycle"|"createdAt"/);
+    const list = JSON.parse(listRaw) as { rooms: Array<{ room_id: string; channels: unknown[] }> };
+    assert.deepEqual(list.rooms.find((room) => room.room_id === "alpha")?.channels, [
+      { id: "general", name: "general", type: "chat" },
+      { id: "ideas", name: "Ideas", type: "forum" }
+    ]);
   } finally {
     await fixture.close();
   }
