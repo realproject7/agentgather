@@ -194,6 +194,61 @@ test("launch rejects an out-of-range or non-numeric --port (#232)", async () => 
   }
 });
 
+// The root launcher accepts only `--port`/`--no-open`: any other flag or a stray
+// positional is rejected up front, before any probe or bind (a typo must never
+// silently start a server with ignored arguments).
+test("launch rejects unsupported flags/positionals before probing or listening (#232)", async () => {
+  const cases = [
+    ["--port", "9000", "--bogus"],
+    ["--port", "9000", "extra"],
+    ["stray"],
+    ["--no-open", "oops"]
+  ];
+  for (const argv of cases) {
+    const { ctx, err } = makeCtx(await makeRoot());
+    const code = await runLaunchCommand(argv, ctx, {
+      probeVersion: async () => {
+        throw new Error("must not probe out-of-contract args");
+      },
+      waitForShutdown: async () => {
+        throw new Error("must not listen for out-of-contract args");
+      }
+    });
+    assert.equal(code, 1, `expected non-zero for ${JSON.stringify(argv)}`);
+    assert.match(err(), /--port <1\.\.65535>|takes no value/);
+  }
+});
+
+// Help wins anywhere on the launcher line — even after `--port` — and never
+// probes or listens.
+test("launch short-circuits --help/-h anywhere and stays side-effect free (#232)", async () => {
+  for (const argv of [["--port", "8788", "--help"], ["--no-open", "-h"]]) {
+    const { ctx, out } = makeCtx(await makeRoot());
+    const code = await runLaunchCommand(argv, ctx, {
+      probeVersion: async () => {
+        throw new Error("must not probe when help is requested");
+      },
+      waitForShutdown: async () => {
+        throw new Error("must not listen when help is requested");
+      }
+    });
+    assert.equal(code, 0, `expected exit 0 for ${JSON.stringify(argv)}`);
+    assert.match(out(), /Open the local dashboard/);
+  }
+});
+
+// End-to-end: `--help` after `--port` exits 0 with help and leaves NO listener on
+// the port (proves the side-effect-free short-circuit through the real CLI).
+test("the CLI keeps --help side-effect free even after --port (#232)", async () => {
+  const env = { ...process.env, AGENTGATHER_HOME: await makeRoot() };
+  const port = await getFreePort();
+  const res = await runCli(["--port", String(port), "--help"], env);
+  assert.equal(res.code, 0);
+  assert.match(res.stdout, /Open the local dashboard/);
+  assert.match(res.stdout, /room launch \[--detach\]/);
+  await assert.rejects(() => fetch(`http://127.0.0.1:${port}/version`));
+});
+
 // `--help` and `--version` short-circuit before the launcher: they exit 0, print
 // the reworked help (which surfaces the bare launcher and `room launch`), and do
 // NOT hang on a listener or open a browser.
