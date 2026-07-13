@@ -1331,6 +1331,23 @@ body {
   font-size: 10px;
 }
 
+/* Compact host tag (#233): marks owner-operated rooms in the merged list. Uses the
+   kit's chip radius/size tokens with 4px-grid padding (durable scope amendment) and
+   accent tokens with all-caps tracking. */
+.room-tag {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .room-sub {
   color: var(--muted);
   font-size: 11.5px;

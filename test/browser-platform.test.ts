@@ -729,7 +729,7 @@ test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' toke
     const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForFunction(
-      () => [...document.querySelectorAll("#joined-list .joined-name")].some((n) => (n.textContent || "").includes("bridge-room")),
+      () => [...document.querySelectorAll("#room-list .joined-name")].some((n) => (n.textContent || "").includes("bridge-room")),
       { timeout: 15000 }
     );
 
@@ -1325,6 +1325,224 @@ test("deleting a joined room clears its dashboard-origin cached history (#211/#2
 
     // The device-local cached history for that room is cleared (disassociation).
     assert.equal(await page.evaluate(() => window.localStorage.getItem("agentgather.history.cached-room")), null);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #233 — the top rail is ONE merged room list: hosted rooms first (each carrying a
+// compact `host` tag), then joined rooms by most-recent activity. The old
+// "Your rooms" / "Rooms I'm in" section split is gone; joined affordances stay.
+test("the unified rail merges hosted + joined into one host-tagged list, hosted first (#233)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha Room", status: "active" }));
+  await createControlPlaneRoom(root, roomInput({ room_id: "beta", title: "Beta Room", status: "paused" }));
+  const older = "2026-07-10T00:00:00.000Z";
+  const newer = "2026-07-13T00:00:00.000Z";
+  await recordJoinedRoom(root, { roomId: "older-join", title: "Older Join", alias: "me", baseUrl: "http://127.0.0.1:8", joinedAt: older, lastSeen: older });
+  await recordJoinedRoom(root, { roomId: "recent-join", title: "Recent Join", alias: "me", baseUrl: "http://127.0.0.1:9", joinedAt: newer, lastSeen: newer });
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+    await page.waitForSelector(".joined-row");
+
+    // The list split is gone: the separate joined room list is removed and both
+    // hosted and joined rows live in the one merged #room-list.
+    assert.equal(await page.locator("#joined-list").count(), 0);
+    assert.equal(await page.locator("#joined-more").count(), 0);
+    assert.equal(await page.locator("#room-list").count(), 1);
+    assert.equal(await page.locator("#room-list .room-row").count(), 2);
+    assert.equal(await page.locator("#room-list .joined-row").count(), 2);
+
+    // Host-owned rows carry a visible `host` tag; joined rows keep reachability.
+    assert.equal(await page.locator('.room-row .room-tag[data-tag="host"]').count(), 2);
+    assert.equal((await page.locator('.room-row[data-room-id="alpha"] .room-tag').textContent())?.trim(), "host");
+    assert.equal(await page.locator(".joined-row .joined-reach").count(), 2);
+    // Joined rows must NOT carry the host tag.
+    assert.equal(await page.locator(".joined-row .room-tag").count(), 0);
+
+    // Order: both hosted rows come before any joined row; joined rows are ordered
+    // by most-recent activity (Recent Join before Older Join).
+    const kinds = await page.locator("#room-list > li").evaluateAll((lis) =>
+      lis.map((li) => (li.classList.contains("joined-row") ? "joined" : li.querySelector(".room-row") ? "host" : "?"))
+    );
+    assert.deepEqual(kinds, ["host", "host", "joined", "joined"]);
+    const joinedNames = await page.locator(".joined-row .joined-name").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
+    assert.deepEqual(joinedNames, ["Recent Join", "Older Join"]);
+
+    // Selecting a hosted row from the merged list still enters the room state.
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector("#lower-room:not([hidden])");
+    assert.equal((await page.locator("#crumb").textContent())?.trim(), "/ Alpha Room / #general");
+
+    // No raw token anywhere in the merged rail.
+    assert.equal(/tgl_|token=|Bearer/i.test((await page.locator(".room-rail").innerHTML()) ?? ""), false);
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #233 — the ~34% / ~66% split holds: with a long room list the rooms region caps
+// at ~1/3 with its OWN scroll, the lower region keeps ~2/3, and expanding the
+// merged list's view-more reveals rows inside the rooms scroll without moving the
+// lower region (no layout jump, other section never hidden).
+test("the rail keeps a ~1/3-2/3 split and view-more expands within the rooms scroll (#233)", async () => {
+  const root = await makeRoot();
+  for (let i = 0; i < 12; i++) {
+    await createControlPlaneRoom(root, roomInput({ room_id: `room-${i}`, title: `room-${i}`, status: "active" }));
+  }
+
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.platform-shell[data-view="rooms"]');
+    await page.waitForSelector("#rooms-more:not([hidden])");
+
+    // 12 rooms, cap 6 → 6 collapsed behind the merged list's single control.
+    assert.equal(await page.locator("#room-list > li").count(), 12);
+    assert.equal(await page.locator("#room-list > li:not(.is-collapsed)").count(), 6);
+    assert.match((await page.locator("#rooms-more").textContent()) ?? "", /show 6 more/);
+
+    // Both regions own their scroll; the rooms region caps near 1/3, the lower near
+    // 2/3, and the rooms content overflows (so its cap is doing real work).
+    const layout = await page.evaluate(() => {
+      const rail = document.querySelector(".room-rail") as HTMLElement;
+      const rooms = document.querySelector(".rail-rooms") as HTMLElement;
+      const lower = document.querySelector(".rail-lower") as HTMLElement;
+      return {
+        roomsScroll: getComputedStyle(rooms).overflowY,
+        lowerScroll: getComputedStyle(lower).overflowY,
+        roomsRatio: rooms.getBoundingClientRect().height / rail.getBoundingClientRect().height,
+        lowerRatio: lower.getBoundingClientRect().height / rail.getBoundingClientRect().height,
+        roomsOverflows: rooms.scrollHeight > rooms.clientHeight,
+        lowerTop: Math.round(lower.getBoundingClientRect().top)
+      };
+    });
+    assert.equal(layout.roomsScroll, "auto");
+    assert.equal(layout.lowerScroll, "auto");
+    assert.ok(layout.roomsRatio >= 0.28 && layout.roomsRatio <= 0.4, `rooms region was ${layout.roomsRatio} of the rail, expected ~1/3`);
+    assert.ok(layout.lowerRatio >= 0.55, `lower region was ${layout.lowerRatio} of the rail, expected ~2/3`);
+    assert.equal(layout.roomsOverflows, true, "rooms region did not overflow its capped height");
+
+    // Expanding view-more reveals all rows inside the rooms scroll; the lower region
+    // does not move (no layout jump, never pushed off-screen).
+    await page.click("#rooms-more");
+    assert.equal(await page.locator("#room-list > li:not(.is-collapsed)").count(), 12);
+    assert.match((await page.locator("#rooms-more").textContent()) ?? "", /show less/);
+    const lowerTopAfter = await page.evaluate(() => Math.round((document.querySelector(".rail-lower") as HTMLElement).getBoundingClientRect().top));
+    assert.equal(lowerTopAfter, layout.lowerTop, "expanding the room list shifted the lower region");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #233 — the channel nav renders `room.channels` ({id,name,type}) when the
+// control-plane payload provides them, and falls back to #general when absent.
+test("channel nav renders room.channels from the payload and falls back to #general (#233)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  const roster = [{ alias: "host", kind: "human", role: "host", status: "attending" }];
+  const rooms = [
+    {
+      room_id: "multi",
+      title: "Multi",
+      status: "active",
+      owner_user_id: "owner-1",
+      roster,
+      route_health: { reachable: true, host_connected: true },
+      channels: [
+        { id: "general", name: "general", type: "chat" },
+        { id: "design", name: "design", type: "forum" },
+        { id: "ops", name: "ops", type: "chat" }
+      ]
+    },
+    { room_id: "plain", title: "Plain", status: "active", owner_user_id: "owner-1", roster, route_health: { reachable: true, host_connected: true } }
+  ];
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.route("**/rooms**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (/\/rooms\/[^/]+\/messages$/.test(pathname)) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, messages: [], next_since_id: 0, host_log_available: true }) });
+        return;
+      }
+      if (pathname.endsWith("/rooms")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, rooms }) });
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.room-row[data-room-id="multi"]');
+
+    // Payload channels render with name + type; the first is active.
+    await page.click('.room-row[data-room-id="multi"]');
+    await page.waitForSelector("#lower-room:not([hidden])");
+    assert.equal(await page.locator("#channel-nav .channel-row").count(), 3);
+    const names = await page.locator("#channel-nav .channel-name").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
+    assert.deepEqual(names, ["general", "design", "ops"]);
+    const types = await page.locator("#channel-nav .channel-type").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
+    assert.deepEqual(types, ["chat", "forum", "chat"]);
+    await page.waitForSelector("#channel-nav .channel-row.on:has-text('general')");
+
+    // A room with no channels falls back to the single #general chat channel.
+    await page.click("#brand-home");
+    await page.click('.room-row[data-room-id="plain"]');
+    await page.waitForSelector("#lower-room:not([hidden])");
+    assert.equal(await page.locator("#channel-nav .channel-row").count(), 1);
+    assert.equal((await page.locator("#channel-nav .channel-name").textContent())?.trim(), "general");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
+
+// #233 — the channel nav caps at 8 behind its own view-more control (independent of
+// the rooms cap of 6).
+test("channel nav caps at 8 with a view-more control (#233)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  const roster = [{ alias: "host", kind: "human", role: "host", status: "attending" }];
+  const channels = Array.from({ length: 10 }, (_unused, i) => ({ id: i === 0 ? "general" : `chan-${i}`, name: i === 0 ? "general" : `chan-${i}`, type: "chat" }));
+  const rooms = [{ room_id: "big", title: "Big", status: "active", owner_user_id: "owner-1", roster, route_health: { reachable: true, host_connected: true }, channels }];
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.route("**/rooms**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (/\/rooms\/[^/]+\/messages$/.test(pathname)) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, messages: [], next_since_id: 0, host_log_available: true }) });
+        return;
+      }
+      if (pathname.endsWith("/rooms")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, rooms }) });
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.room-row[data-room-id="big"]');
+    await page.click('.room-row[data-room-id="big"]');
+    await page.waitForSelector("#channels-more:not([hidden])");
+
+    // 10 channels, cap 8 → 2 collapsed behind the channel view-more control.
+    assert.equal(await page.locator("#channel-nav > li").count(), 10);
+    assert.equal(await page.locator("#channel-nav > li:not(.is-collapsed)").count(), 8);
+    assert.match((await page.locator("#channels-more").textContent()) ?? "", /show 2 more/);
+
+    await page.click("#channels-more");
+    assert.equal(await page.locator("#channel-nav > li:not(.is-collapsed)").count(), 10);
+    assert.match((await page.locator("#channels-more").textContent()) ?? "", /show less/);
   } finally {
     await browser.close();
     await platform.close();
