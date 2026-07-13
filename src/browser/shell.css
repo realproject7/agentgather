@@ -1331,12 +1331,12 @@ body {
   font-size: 10px;
 }
 
-/* Compact host tag (#233): marks owner-operated rooms in the merged list. Mirrors
-   the existing `.joined-reach` chip (padding, radius, size token) so it sits on the
-   kit's chip scale; accent tokens distinguish it, with all-caps tracking. */
+/* Compact host tag (#233): marks owner-operated rooms in the merged list. Uses the
+   kit's chip radius/size tokens with 4px-grid padding (durable scope amendment) and
+   accent tokens with all-caps tracking. */
 .room-tag {
   flex: 0 0 auto;
-  padding: 2px 8px;
+  padding: 4px 8px;
   border: 1px solid var(--accent-line);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
