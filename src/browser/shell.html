@@ -75,7 +75,7 @@
                host and rooms you've joined, hosted first then joined by recent
                activity. Host-owned rows carry a compact `host` tag; joined rows keep
                their reachability + #210 archive/delete affordances. The #217 remember
-               form and honest empty note live in `.rail-tools` below the list. -->
+               form and honest empty note live in `.joined-section` below the list. -->
           <div class="rail-rooms" aria-label="Rooms">
             <div class="rail-head">
               <div id="rail-title" class="rail-title">Rooms</div>
@@ -87,8 +87,9 @@
             <div id="rooms-error" class="rail-error" role="alert" hidden></div>
 
             <!-- Rooms I'm in (#178/#217): device-local remember form + honest empty
-                 note for the joined entries that render inside the merged list above. -->
-            <div class="rail-tools" aria-label="Remember a joined room">
+                 note for the joined entries that render inside the merged list above.
+                 Reuses the existing `.joined-section` styling. -->
+            <section class="joined-section" aria-label="Remember a joined room">
               <p id="joined-empty" class="joined-empty">
                 No joined rooms tracked on this device yet. Paste an invite link to remember one
                 (metadata only — the token is never stored).
@@ -100,7 +101,7 @@
               </form>
               <div id="joined-error" class="rail-error" role="alert" hidden></div>
               <p class="joined-note">Same-device only — never synced or copied to any server.</p>
-            </div>
+            </section>
           </div>
 
           <!-- Lower region (~2/3, own scroll): contextual. State A shows Room Status

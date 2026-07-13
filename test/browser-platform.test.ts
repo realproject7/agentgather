@@ -1351,9 +1351,10 @@ test("the unified rail merges hosted + joined into one host-tagged list, hosted 
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.waitForSelector(".joined-row");
 
-    // The section split is gone: there is exactly one list, holding both kinds.
-    assert.equal(await page.locator(".joined-section").count(), 0);
+    // The list split is gone: the separate joined room list is removed and both
+    // hosted and joined rows live in the one merged #room-list.
     assert.equal(await page.locator("#joined-list").count(), 0);
+    assert.equal(await page.locator("#joined-more").count(), 0);
     assert.equal(await page.locator("#room-list").count(), 1);
     assert.equal(await page.locator("#room-list .room-row").count(), 2);
     assert.equal(await page.locator("#room-list .joined-row").count(), 2);
