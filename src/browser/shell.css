@@ -287,9 +287,9 @@ body {
 }
 
 /* Rows collapsed behind the overflow control (the whole list item is hidden so
-   no empty gap remains). */
+   no empty gap remains). The merged room list (#233) holds both hosted `.room-row`
+   and joined `.joined-row` items, so one rule covers both. */
 .room-list > li.is-collapsed,
-.joined-list > li.is-collapsed,
 .channel-nav > li.is-collapsed {
   display: none;
 }
@@ -420,6 +420,8 @@ body {
   color: var(--danger);
 }
 
+/* Merged workspace room list (#233): hosted `.room-row` items first, then joined
+   `.joined-row` items, in one scroll region. Tokens only. */
 .room-list {
   list-style: none;
   margin: 0;
@@ -428,26 +430,12 @@ body {
   gap: 8px;
 }
 
-/* "Rooms I'm in" (#178): device-local joined-room list. Tokens only. */
-.joined-section {
-  margin-top: 20px;
-  padding-top: 16px;
+/* Device-local joined-room tools (#178/#217): the remember form + honest empty
+   note, below the merged list. */
+.rail-tools {
+  margin-top: 16px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
-}
-
-.joined-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.joined-list {
-  list-style: none;
-  margin: 0 0 8px;
-  padding: 0;
-  display: grid;
-  gap: 6px;
 }
 
 .joined-empty,
@@ -1329,6 +1317,21 @@ body {
   white-space: nowrap;
   padding: 1px 7px;
   font-size: 10px;
+}
+
+/* Compact host tag (#233): marks owner-operated rooms in the merged list. */
+.room-tag {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--accent-text);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .room-sub {

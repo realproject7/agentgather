@@ -54,7 +54,6 @@ const roster = document.getElementById("shell-roster");
 const clearCacheButton = document.getElementById("clear-cache-button");
 const historySource = document.getElementById("history-source");
 const historySourceLabel = document.getElementById("history-source-label");
-const joinedList = document.getElementById("joined-list");
 const joinedEmpty = document.getElementById("joined-empty");
 const joinedShowArchived = document.getElementById("joined-show-archived");
 const joinedForm = document.getElementById("joined-add");
@@ -72,7 +71,6 @@ const lowerHome = document.getElementById("lower-home");
 const lowerRoom = document.getElementById("lower-room");
 const channelNav = document.getElementById("channel-nav");
 const roomsMore = document.getElementById("rooms-more");
-const joinedMore = document.getElementById("joined-more");
 const channelsMore = document.getElementById("channels-more");
 
 // Right info panel (#218b): shown only in the selected-room (three-panel) state.
@@ -82,9 +80,11 @@ const infoRoomStatus = document.getElementById("info-room-status");
 const infoRoomRoute = document.getElementById("info-room-route");
 
 // Collapse a list's tail behind a stable show-more/show-less control once it
-// exceeds this many rows, so a long room/channel list never pushes the rest of
-// the rail off-screen and expanding never shifts the layout.
+// exceeds its per-section cap, so a long room/channel list never pushes the rest
+// of the rail off-screen and expanding never shifts the layout. The merged room
+// list (#233) caps at 6; the channel nav caps at 8.
 const OVERFLOW_LIMIT = 6;
+const CHANNELS_LIMIT = 8;
 
 // Create-room shell (no central API: the form composes the host CLI command).
 const createOverlay = document.getElementById("create-overlay");
@@ -164,9 +164,8 @@ async function init() {
   roomsToggle.addEventListener("click", () => shell.classList.toggle("rooms-open"));
   brandHome.addEventListener("click", goHome);
   guideCreate.addEventListener("click", () => openCreateRoom());
-  roomsMore.addEventListener("click", () => toggleOverflow(roomList, roomsMore));
-  joinedMore.addEventListener("click", () => toggleOverflow(joinedList, joinedMore));
-  channelsMore.addEventListener("click", () => toggleOverflow(channelNav, channelsMore));
+  roomsMore.addEventListener("click", () => toggleOverflow(roomList, roomsMore, OVERFLOW_LIMIT));
+  channelsMore.addEventListener("click", () => toggleOverflow(channelNav, channelsMore, CHANNELS_LIMIT));
   exportButton.addEventListener("click", exportTranscript);
   clearCacheButton.addEventListener("click", clearActiveCache);
   wireCreateRoom();
@@ -215,9 +214,7 @@ async function loadRooms() {
   roomsError.hidden = true;
   state.rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
   ownerLabel.textContent = state.rooms[0]?.owner_user_id || "owner";
-  updateShellView();
-  railTitle.textContent = `Your rooms · ${state.rooms.length}`;
-  renderRoomList();
+  renderRail();
   if (state.activeRoomId !== null) {
     const active = state.rooms.find((room) => room.room_id === state.activeRoomId);
     if (active) renderDetail(active);
@@ -228,65 +225,106 @@ function updateShellView() {
   shell.dataset.view = state.rooms.length === 0 && state.joinedRooms.length === 0 ? "empty" : "rooms";
 }
 
-function renderRoomList() {
+// The unified workspace rail (#233): ONE room list holding the rooms you host
+// (control plane) followed by the rooms you've joined (device-local, #178), so a
+// user in many boardrooms switches from a single place. Hosted rooms come first;
+// joined rooms follow, most-recent activity first. Host-owned rows carry a compact
+// `host` tag; joined rows keep their reachability + #210 archive/delete controls.
+// The list shares one overflow control (cap 6) and one ~34% scroll region.
+function renderRail() {
+  updateShellView();
+  railTitle.textContent = `Rooms · ${state.rooms.length + state.joinedRooms.length}`;
   roomList.replaceChildren();
-  for (const room of state.rooms) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "room-row";
-    button.dataset.roomId = room.room_id;
-    button.dataset.status = room.status;
-    if (room.room_id === state.activeRoomId) button.setAttribute("aria-current", "true");
 
-    const icon = document.createElement("span");
-    icon.className = "room-ic";
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = roomIcon(room);
+  for (const room of state.rooms) roomList.append(buildHostRow(room));
 
-    const main = document.createElement("span");
-    main.className = "room-main";
+  // Archived joined rows (#210) stay hidden until the toggle is pressed; the toggle
+  // appears only when some exist. The empty note shows only when no joined rooms
+  // are tracked at all (host rooms don't suppress it — it's the joined-room hint).
+  const archivedCount = state.joinedRooms.filter((entry) => entry.archived).length;
+  joinedShowArchived.hidden = archivedCount === 0;
+  joinedShowArchived.setAttribute("aria-pressed", String(state.showArchived));
+  joinedShowArchived.textContent = state.showArchived ? "hide archived" : `show archived (${archivedCount})`;
+  joinedEmpty.hidden = state.joinedRooms.length > 0;
 
-    const title = document.createElement("span");
-    title.className = "room-row-title";
-    const name = document.createElement("span");
-    name.className = "room-name";
-    // Primary label is the display title; the slug-like room id stays available as
-    // the debug tooltip and the fallback when no title is known (#216).
-    name.textContent = room.title || room.room_id;
-    name.title = `room id: ${room.room_id}`;
+  const joined = state.joinedRooms
+    .filter((entry) => state.showArchived || !entry.archived)
+    .sort((a, b) => joinedActivity(b) - joinedActivity(a));
+  for (const entry of joined) roomList.append(buildJoinedRow(entry));
 
-    const badge = document.createElement("span");
-    badge.className = "status-badge";
-    badge.dataset.status = room.status;
-    badge.textContent = room.status;
-    title.append(name, badge);
+  applyOverflow(roomList, roomsMore, OVERFLOW_LIMIT);
+}
 
-    const sub = document.createElement("span");
-    sub.className = "room-sub";
-    sub.textContent = roomSubtitle(room);
+// A hosted-room row: the v5 icon · name+status · subtitle · age/action layout, with
+// a `host` tag that marks it as owner-operated in the merged list.
+function buildHostRow(room) {
+  const item = document.createElement("li");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "room-row";
+  button.dataset.roomId = room.room_id;
+  button.dataset.status = room.status;
+  if (room.room_id === state.activeRoomId) button.setAttribute("aria-current", "true");
 
-    main.append(title, sub);
+  const icon = document.createElement("span");
+  icon.className = "room-ic";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = roomIcon(room);
 
-    const aside = document.createElement("span");
-    aside.className = "room-aside";
+  const main = document.createElement("span");
+  main.className = "room-main";
 
-    const age = document.createElement("span");
-    age.className = "room-age";
-    age.textContent = relativeAge(room.last_seen_at || room.updated_at || room.created_at);
+  const title = document.createElement("span");
+  title.className = "room-row-title";
+  const name = document.createElement("span");
+  name.className = "room-name";
+  // Primary label is the display title; the slug-like room id stays available as
+  // the debug tooltip and the fallback when no title is known (#216).
+  name.textContent = room.title || room.room_id;
+  name.title = `room id: ${room.room_id}`;
 
-    const action = document.createElement("span");
-    action.className = "room-act";
-    action.textContent = actionVerb(room.status);
+  // Compact host tag (#233): marks owner-operated rooms in the merged list so the
+  // "Your rooms" / "Rooms I'm in" section split is no longer needed.
+  const tag = document.createElement("span");
+  tag.className = "room-tag";
+  tag.dataset.tag = "host";
+  tag.textContent = "host";
 
-    aside.append(age, action);
+  const badge = document.createElement("span");
+  badge.className = "status-badge";
+  badge.dataset.status = room.status;
+  badge.textContent = room.status;
+  title.append(name, tag, badge);
 
-    button.append(icon, main, aside);
-    button.addEventListener("click", () => void selectRoom(room.room_id));
-    item.append(button);
-    roomList.append(item);
-  }
-  applyOverflow(roomList, roomsMore);
+  const sub = document.createElement("span");
+  sub.className = "room-sub";
+  sub.textContent = roomSubtitle(room);
+
+  main.append(title, sub);
+
+  const aside = document.createElement("span");
+  aside.className = "room-aside";
+
+  const age = document.createElement("span");
+  age.className = "room-age";
+  age.textContent = relativeAge(room.last_seen_at || room.updated_at || room.created_at);
+
+  const action = document.createElement("span");
+  action.className = "room-act";
+  action.textContent = actionVerb(room.status);
+
+  aside.append(age, action);
+
+  button.append(icon, main, aside);
+  button.addEventListener("click", () => void selectRoom(room.room_id));
+  item.append(button);
+  return item;
+}
+
+// Most-recent-activity timestamp for ordering joined rooms within the merged list.
+function joinedActivity(entry) {
+  const parsed = Date.parse(entry.lastSeen || entry.joinedAt || "");
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 // Two-character monogram for a room, from its title or id.
@@ -339,7 +377,7 @@ async function selectRoom(roomId) {
   state.cacheRendered = false;
   timeline.replaceChildren();
   shell.classList.remove("rooms-open");
-  renderRoomList();
+  renderRail();
   const room = state.rooms.find((entry) => entry.room_id === roomId);
   // Provisionally show this browser's cached copy until live availability is
   // known. These entries are not added to seen/messages, so a live fetch
@@ -364,7 +402,7 @@ function enterRoomState(room) {
   lowerHome.hidden = true;
   lowerRoom.hidden = false;
   infoPanel.hidden = false;
-  renderChannelNav();
+  renderChannelNav(room);
   setBreadcrumb(room);
 }
 
@@ -389,7 +427,7 @@ function goHome() {
   infoPanel.hidden = true;
   shell.classList.remove("room-selected");
   setBreadcrumb(null);
-  renderRoomList();
+  renderRail();
 }
 
 // Breadcrumb: "/ <room> / #<channel>" in room state, empty at home. Titles only
@@ -402,12 +440,15 @@ function setBreadcrumb(room) {
   crumb.textContent = `/ ${room.title || room.room_id} / #general`;
 }
 
-// The selected room's channel navigation. The dashboard reads only the control
-// plane, which carries no channel/forum list, so #218a renders the one channel
-// every room is guaranteed to have — #general chat. Real forum-channel
-// population arrives with #218b, when the room surfaces that own that data mount.
-function renderChannelNav() {
-  const channels = [{ id: "general", name: "general", type: "chat" }];
+// The selected room's channel navigation (#233). Renders the room's real channels
+// from `room.channels` ({id, name, type}) when the control-plane payload provides
+// them (populated by the companion #234 ticket), and otherwise falls back to the
+// one channel every room is guaranteed to have — #general chat. Joined rooms carry
+// no channel metadata on the token-free dashboard, so they keep the #general
+// fallback. The list caps at CHANNELS_LIMIT behind its own overflow control.
+function renderChannelNav(room) {
+  const provided = Array.isArray(room?.channels) ? room.channels.filter(isRenderableChannel) : [];
+  const channels = provided.length > 0 ? provided : [{ id: "general", name: "general", type: "chat" }];
   channelNav.replaceChildren();
   for (const [index, channel] of channels.entries()) {
     const item = document.createElement("li");
@@ -428,22 +469,28 @@ function renderChannelNav() {
 
     const type = document.createElement("span");
     type.className = "channel-type";
-    type.textContent = channel.type;
+    type.textContent = channel.type || "chat";
 
     button.append(hash, name, type);
     item.append(button);
     channelNav.append(item);
   }
-  applyOverflow(channelNav, channelsMore);
+  applyOverflow(channelNav, channelsMore, CHANNELS_LIMIT);
+}
+
+// A control-plane channel entry is renderable when it has a stable id and a display
+// name; type defaults to chat when absent. Guards against a malformed payload.
+function isRenderableChannel(channel) {
+  return Boolean(channel) && typeof channel.id === "string" && typeof channel.name === "string";
 }
 
 // Shared list overflow: once a list exceeds OVERFLOW_LIMIT rows, collapse the
 // tail behind a single-row "show N more" / "show less" control so a long list
 // never crowds out the rest of the rail and expanding causes no layout jump.
 // The control lives outside the list, so its expanded state survives re-renders.
-function applyOverflow(listEl, moreBtn) {
+function applyOverflow(listEl, moreBtn, limit = OVERFLOW_LIMIT) {
   const items = [...listEl.children];
-  const overflow = Math.max(0, items.length - OVERFLOW_LIMIT);
+  const overflow = Math.max(0, items.length - limit);
   if (overflow === 0) {
     for (const item of items) item.classList.remove("is-collapsed");
     moreBtn.hidden = true;
@@ -452,16 +499,16 @@ function applyOverflow(listEl, moreBtn) {
   }
   const expanded = moreBtn.getAttribute("aria-expanded") === "true";
   items.forEach((item, index) => {
-    item.classList.toggle("is-collapsed", !expanded && index >= OVERFLOW_LIMIT);
+    item.classList.toggle("is-collapsed", !expanded && index >= limit);
   });
   moreBtn.hidden = false;
   moreBtn.textContent = expanded ? "▾ show less" : `▸ show ${overflow} more…`;
 }
 
-function toggleOverflow(listEl, moreBtn) {
+function toggleOverflow(listEl, moreBtn, limit = OVERFLOW_LIMIT) {
   const expanded = moreBtn.getAttribute("aria-expanded") === "true";
   moreBtn.setAttribute("aria-expanded", String(!expanded));
-  applyOverflow(listEl, moreBtn);
+  applyOverflow(listEl, moreBtn, limit);
 }
 
 function renderDetail(room) {
@@ -1057,73 +1104,70 @@ async function loadJoinedRooms() {
   renderJoined(merged);
 }
 
+// Update the device-local joined-room set and re-render the merged rail (#233):
+// joined entries now live in the single #room-list, so the joined data flows
+// through the same renderer as hosted rooms. The archived toggle, empty note, and
+// overflow are all owned by renderRail().
 function renderJoined(entries) {
   state.joinedRooms = entries;
-  updateShellView();
-  joinedList.replaceChildren();
+  renderRail();
+}
 
-  // Archived rows (#210) are hidden by default; the toggle appears only when some
-  // exist and reveals/hides them without touching the host room.
-  const archivedCount = entries.filter((entry) => entry.archived).length;
-  joinedShowArchived.hidden = archivedCount === 0;
-  joinedShowArchived.setAttribute("aria-pressed", String(state.showArchived));
-  joinedShowArchived.textContent = state.showArchived ? "hide archived" : `show archived (${archivedCount})`;
+// Build one joined-room row (#178/#210/#216) for the merged list. Metadata only —
+// the row and its open href never carry a token; the token is resolved server-side
+// by the loopback /joined-rooms/open redirect. Keeps its reachability badge and the
+// device-local archive/delete controls.
+function buildJoinedRow(entry) {
+  const item = document.createElement("li");
+  item.className = "joined-row";
+  if (entry.archived) item.dataset.archived = "true";
+  item.dataset.reachability = entry.reachability || "saved";
+  item.dataset.openHref = joinedOpenUrl(entry);
+  item.tabIndex = 0;
+  item.setAttribute("role", "link");
+  item.setAttribute("aria-label", `Open ${entry.title || entry.roomId || entry.baseUrl}`);
+  item.addEventListener("click", () => {
+    if (item.dataset.confirming === "true") return; // don't open while confirming a delete
+    openJoinedRoom(entry);
+  });
+  item.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (item.dataset.confirming === "true") return;
+    event.preventDefault();
+    openJoinedRoom(entry);
+  });
 
-  const visible = entries.filter((entry) => state.showArchived || !entry.archived);
-  joinedEmpty.hidden = visible.length > 0;
-  for (const entry of visible) {
-    const item = document.createElement("li");
-    item.className = "joined-row";
-    if (entry.archived) item.dataset.archived = "true";
-    item.dataset.reachability = entry.reachability || "saved";
-    item.dataset.openHref = joinedOpenUrl(entry);
-    item.tabIndex = 0;
-    item.setAttribute("role", "link");
-    item.setAttribute("aria-label", `Open ${entry.title || entry.roomId || entry.baseUrl}`);
-    item.addEventListener("click", () => {
-      if (item.dataset.confirming === "true") return; // don't open while confirming a delete
-      openJoinedRoom(entry);
-    });
-    item.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      if (item.dataset.confirming === "true") return;
-      event.preventDefault();
-      openJoinedRoom(entry);
-    });
+  const main = document.createElement("span");
+  main.className = "joined-main";
+  // Primary label is the human-readable display title (#216); the slug-like
+  // room id is only the fallback and otherwise lives as secondary/debug metadata
+  // (the sub line + tooltip). `hasTitle` drives the fallback styling hook.
+  const roomId = entry.roomId || "";
+  const hasTitle = Boolean(entry.title && entry.title !== roomId);
+  const name = document.createElement("span");
+  name.className = "joined-name";
+  name.textContent = hasTitle ? entry.title : roomId || entry.baseUrl;
+  name.title = roomId ? `room id: ${roomId}` : entry.baseUrl;
+  main.dataset.titled = String(hasTitle);
+  const sub = document.createElement("span");
+  sub.className = "joined-sub";
+  const alias = entry.alias ? `${entry.alias} · ` : "";
+  // Show the room id as secondary/debug metadata only when the primary label is
+  // a real title (otherwise the primary already shows the id — no duplication).
+  const idMeta = hasTitle && roomId ? ` · ${roomId}` : "";
+  sub.textContent = `${alias}${hostLabel(entry.baseUrl)}${idMeta}`;
+  main.append(name, sub);
 
-    const main = document.createElement("span");
-    main.className = "joined-main";
-    // Primary label is the human-readable display title (#216); the slug-like
-    // room id is only the fallback and otherwise lives as secondary/debug metadata
-    // (the sub line + tooltip). `hasTitle` drives the fallback styling hook.
-    const roomId = entry.roomId || "";
-    const hasTitle = Boolean(entry.title && entry.title !== roomId);
-    const name = document.createElement("span");
-    name.className = "joined-name";
-    name.textContent = hasTitle ? entry.title : roomId || entry.baseUrl;
-    name.title = roomId ? `room id: ${roomId}` : entry.baseUrl;
-    main.dataset.titled = String(hasTitle);
-    const sub = document.createElement("span");
-    sub.className = "joined-sub";
-    const alias = entry.alias ? `${entry.alias} · ` : "";
-    // Show the room id as secondary/debug metadata only when the primary label is
-    // a real title (otherwise the primary already shows the id — no duplication).
-    const idMeta = hasTitle && roomId ? ` · ${roomId}` : "";
-    sub.textContent = `${alias}${hostLabel(entry.baseUrl)}${idMeta}`;
-    main.append(name, sub);
+  const aside = document.createElement("span");
+  aside.className = "joined-aside";
+  const badge = document.createElement("span");
+  badge.className = "joined-reach";
+  badge.dataset.reachability = entry.reachability || "saved";
+  badge.textContent = reachabilityLabel(entry.reachability);
+  aside.append(badge, buildJoinedControls(entry, item));
 
-    const aside = document.createElement("span");
-    aside.className = "joined-aside";
-    const badge = document.createElement("span");
-    badge.className = "joined-reach";
-    badge.dataset.reachability = entry.reachability || "saved";
-    badge.textContent = reachabilityLabel(entry.reachability);
-    aside.append(badge, buildJoinedControls(entry, item));
-
-    item.append(main, aside);
-    joinedList.append(item);
-  }
-  applyOverflow(joinedList, joinedMore);
+  item.append(main, aside);
+  return item;
 }
 
 // Device-local lifecycle controls for a joined-room row (#210). Archive hides the
