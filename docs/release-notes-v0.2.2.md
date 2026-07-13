@@ -1,6 +1,6 @@
 # Agent Gather v0.2.2 Release Notes
 
-Status: published to npm on 2026-07-10. GitHub source/tag/release follow-up pending.
+Status: published to npm on 2026-07-10.
 
 ## Highlights
 
