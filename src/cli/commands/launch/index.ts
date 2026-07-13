@@ -58,9 +58,12 @@ export async function runLaunchCommand(
   // The root launcher accepts ONLY `--port <value>` and flag-only `--no-open`.
   // Reject unsupported flags/positionals up front, before probing or listening,
   // so a typo never silently starts a server with ignored arguments.
-  const argError = rejectUnsupportedArgs(args);
-  if (argError !== null) {
-    context.stderr.write(`${argError}\n`);
+  if (args.positional.length > 0 || [...args.flags.keys()].some((key) => key !== "port" && key !== "no-open")) {
+    context.stderr.write("agentgather accepts only --port <1..65535> and --no-open (or --help / --version).\n");
+    return 1;
+  }
+  if (args.flags.has("no-open") && args.flags.get("no-open") !== true) {
+    context.stderr.write("agentgather --no-open takes no value.\n");
     return 1;
   }
   const noOpen = args.flags.get("no-open") === true;
@@ -131,21 +134,6 @@ async function finishReachable(
     // Opening a browser is convenience only: the dashboard is already reachable.
     context.stdout.write(`Couldn't open a browser automatically — visit ${url} to reach the dashboard.\n`);
   }
-}
-
-// Enforce the root launcher's exact arg contract: no positionals, no flags other
-// than `--port` and `--no-open`, and `--no-open` must be value-less. Returns a
-// token-free error string when the invocation is out of contract, else null.
-function rejectUnsupportedArgs(args: ParsedArgs): string | null {
-  const usage = "agentgather accepts only --port <1..65535> and --no-open (or --help / --version).";
-  if (args.positional.length > 0) return usage;
-  for (const key of args.flags.keys()) {
-    if (key !== "port" && key !== "no-open") return usage;
-  }
-  if (args.flags.has("no-open") && args.flags.get("no-open") !== true) {
-    return "agentgather --no-open takes no value.";
-  }
-  return null;
 }
 
 // `--port` defaults to the dashboard port; when supplied it must be an integer in
