@@ -6,7 +6,7 @@
 // never store message bodies, Room Brief bodies, participant bearer tokens,
 // tokenized invite URLs, or any message-derived content. See #80.
 
-import type { ParticipantKind } from "../protocol/index.js";
+import type { ChannelType, ParticipantKind } from "../protocol/index.js";
 
 /**
  * Central platform status for a room. This is the control-plane metadata status
@@ -62,6 +62,19 @@ export interface RosterEntry {
   role: RosterRole;
   status: string;
   last_seen_at?: string;
+}
+
+/**
+ * Sanitized channel metadata for the control plane. This is the *only* channel
+ * shape a hosted-room public response carries: exactly the channel id, display
+ * name, and type. The boardroom store's `lifecycle`, `createdAt`, and every
+ * other internal field are deliberately stripped, and no token, invite/card URL,
+ * cursor, or message content is ever derived from a channel here.
+ */
+export interface PublicChannel {
+  id: string;
+  name: string;
+  type: ChannelType;
 }
 
 /** Route reachability/health metadata. Carries no request or response content. */
