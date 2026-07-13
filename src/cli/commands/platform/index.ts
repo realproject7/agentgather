@@ -4,8 +4,9 @@ import type { CliContext } from "../../context.js";
 import { createPlatformHttpServer } from "../../../platform/index.js";
 
 // Default control-plane port: room serve uses 8787, the broker 8799; the owner
-// shell sits alongside them without colliding.
-const DEFAULT_PLATFORM_PORT = 8788;
+// shell sits alongside them without colliding. Exported so the bare launcher
+// (#232) opens/reuses the dashboard on the same port `platform serve` binds.
+export const DEFAULT_PLATFORM_PORT = 8788;
 
 export interface PlatformCommandHooks {
   // Injectable so tests can drive the running server and shut it down instead of
@@ -63,7 +64,9 @@ async function platformServe(argv: string[], context: CliContext, hooks: Platfor
   return 0;
 }
 
-function defaultWaitForShutdown(server: Server): Promise<void> {
+// Foreground the server until the terminal is interrupted. Shared with the bare
+// launcher (#232) so both keep-alive paths behave identically.
+export function defaultWaitForShutdown(server: Server): Promise<void> {
   return new Promise((resolve) => {
     const stop = (): void => {
       process.removeListener("SIGINT", stop);

@@ -7,6 +7,7 @@ import { runDoctorCommand } from "./commands/doctor/index.js";
 import { runExportCommand } from "./commands/export/index.js";
 import { runHandoffCommand } from "./commands/handoff/index.js";
 import { runInstructionsCommand } from "./commands/instructions/index.js";
+import { runLaunchCommand } from "./commands/launch/index.js";
 import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } from "./commands/message/index.js";
 import { runPlatformCommand } from "./commands/platform/index.js";
 import { runRoomCommand } from "./commands/room/index.js";
@@ -17,7 +18,7 @@ import { runWatchCommand } from "./commands/watch/index.js";
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
-  if (command === undefined || command === "--help" || command === "-h") {
+  if (command === "--help" || command === "-h") {
     process.stdout.write(`${buildHelpText()}\n`);
     return 0;
   }
@@ -25,6 +26,13 @@ async function main(argv: string[]): Promise<number> {
   if (command === "--version" || command === "-v") {
     process.stdout.write(`${VERSION}\n`);
     return 0;
+  }
+
+  // Bare `agentgather`, and only the two documented root launcher flags, open the
+  // local dashboard (#232). Help/version above stay side-effect free; any other
+  // leading token still routes to a subcommand or the unknown-command error.
+  if (command === undefined || command === "--port" || command === "--no-open") {
+    return runLaunchCommand(argv, createCliContext());
   }
 
   // Subcommand help must print and exit 0 without running the command or making
