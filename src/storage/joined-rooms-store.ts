@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { withWriterLock } from "./lock.js";
 import { ensureSecureDir, writeSecureFile } from "./secure-fs.js";
 
 // Device-local record of a room this user has joined as a participant (#178).
@@ -27,6 +28,10 @@ export function joinedRoomsPath(home: string): string {
   return path.join(home, "joined-rooms.json");
 }
 
+export function joinedRoomsLockPath(home: string): string {
+  return path.join(home, "joined-rooms.lock");
+}
+
 export async function readJoinedRooms(home: string): Promise<JoinedRoom[]> {
   try {
     const store = JSON.parse(await readFile(joinedRoomsPath(home), "utf8")) as JoinedRoomsStore;
@@ -42,6 +47,14 @@ export async function readJoinedRooms(home: string): Promise<JoinedRoom[]> {
 // store can never accumulate a secret.
 export async function recordJoinedRoom(home: string, entry: JoinedRoom): Promise<void> {
   await ensureSecureDir(home);
+  // Serialize the whole read-modify-write: a concurrent record/archive/delete on
+  // this device-local store must not read a stale list and drop the other's edit.
+  await withWriterLock(joinedRoomsLockPath(home), async () => {
+    await recordJoinedRoomLocked(home, entry);
+  });
+}
+
+async function recordJoinedRoomLocked(home: string, entry: JoinedRoom): Promise<void> {
   const rooms = await readJoinedRooms(home);
   const index = rooms.findIndex((room) => room.roomId === entry.roomId && room.baseUrl === entry.baseUrl);
   // Keep the best-known display title (#216): a re-record that only carries the
@@ -82,15 +95,17 @@ export async function setJoinedRoomArchived(
   home: string,
   target: { roomId: string; baseUrl: string; archived: boolean }
 ): Promise<boolean> {
-  const rooms = await readJoinedRooms(home);
-  const index = rooms.findIndex((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
-  const current = rooms[index];
-  if (index === -1 || current === undefined) return false;
-  if (target.archived) current.archived = true;
-  else delete current.archived;
   await ensureSecureDir(home);
-  await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms }, null, 2)}\n`);
-  return true;
+  return withWriterLock(joinedRoomsLockPath(home), async () => {
+    const rooms = await readJoinedRooms(home);
+    const index = rooms.findIndex((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
+    const current = rooms[index];
+    if (index === -1 || current === undefined) return false;
+    if (target.archived) current.archived = true;
+    else delete current.archived;
+    await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms }, null, 2)}\n`);
+    return true;
+  });
 }
 
 // Hard-delete one device-local joined-room record (#210). Removes ONLY the entry
@@ -100,10 +115,12 @@ export async function deleteJoinedRoom(
   home: string,
   target: { roomId: string; baseUrl: string }
 ): Promise<boolean> {
-  const rooms = await readJoinedRooms(home);
-  const next = rooms.filter((room) => !(room.roomId === target.roomId && room.baseUrl === target.baseUrl));
-  if (next.length === rooms.length) return false;
   await ensureSecureDir(home);
-  await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms: next }, null, 2)}\n`);
-  return true;
+  return withWriterLock(joinedRoomsLockPath(home), async () => {
+    const rooms = await readJoinedRooms(home);
+    const next = rooms.filter((room) => !(room.roomId === target.roomId && room.baseUrl === target.baseUrl));
+    if (next.length === rooms.length) return false;
+    await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms: next }, null, 2)}\n`);
+    return true;
+  });
 }
