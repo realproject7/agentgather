@@ -13,6 +13,16 @@ const state = {
   attending: new Set(),
   profile: null,
   roomStatus: "open",
+  // Room-entry lifecycle boundary (#241): idempotency guard covering both a later
+  // token-fragment re-entry after entering and a re-entry while the joining
+  // interstitial is shown. "unstarted" | "starting" | "joining" | "entering" |
+  // "entered". A single guard keeps event bindings, poll/status timers, the
+  // join-form binding, and the display-name claim to exactly one each.
+  entryPhase: "unstarted",
+  // Retained poll/status interval handles (#241) so they can be cleared once the
+  // room reaches a terminal closed state — no timer keeps firing after closure.
+  pollTimer: null,
+  statusTimer: null,
   briefVersion: 0,
   replyTo: null,
   // Reply affordance (#113): minimal from/text record per rendered message id so
@@ -171,25 +181,42 @@ function dashboardUrlFromQuery() {
 }
 
 async function startWithToken(token) {
-  state.token = token;
-  sessionStorage.setItem("agentgather.token", state.token);
-  state.profile = (await authFetch("/profile")).participant;
-  if (state.profile.kind === "human" && !state.profile.display_name) {
-    if (state.profile.is_host && state.profile.alias) {
-      await claimDisplayName(state.profile.alias);
-      await enterRoom();
+  // Idempotent room-entry boundary (#241): once entry has started, a later token
+  // fragment (or a repeat while joining) must not re-drive the flow — that is what
+  // previously double-bound the join form and double-started the poll timers.
+  if (state.entryPhase !== "unstarted") return;
+  state.entryPhase = "starting";
+  try {
+    state.token = token;
+    sessionStorage.setItem("agentgather.token", state.token);
+    state.profile = (await authFetch("/profile")).participant;
+    if (state.profile.kind === "human" && !state.profile.display_name) {
+      if (state.profile.is_host && state.profile.alias) {
+        await claimDisplayName(state.profile.alias);
+        await enterRoom();
+        return;
+      }
+      state.entryPhase = "joining";
+      displayNameInput.value = state.profile.alias || "";
+      joinPanel.hidden = false;
+      shell.dataset.state = "joining";
+      bindJoinForm();
       return;
     }
-    displayNameInput.value = state.profile.alias || "";
-    joinPanel.hidden = false;
-    shell.dataset.state = "joining";
-    bindJoinForm();
-    return;
+    await enterRoom();
+  } catch (error) {
+    // A failure before we commit to joining/entering (e.g. a bad token's /profile
+    // fetch) reopens the boundary so a later valid token fragment can still enter.
+    if (state.entryPhase === "starting") state.entryPhase = "unstarted";
+    throw error;
   }
-  await enterRoom();
 }
 
 async function enterRoom() {
+  // Enter exactly once: guards the event bindings and the poll/status timers so a
+  // second entry (host path, or a submit after a re-entry) never duplicates them.
+  if (state.entryPhase === "entered") return;
+  state.entryPhase = "entered";
   joinPanel.hidden = true;
   await Promise.all([loadBrief(), loadStatus()]);
   hydrateNotifyPrefs();
@@ -201,9 +228,33 @@ async function enterRoom() {
   // arm (ready) afterwards so the backlog never fires a burst of notifications.
   await pollMessages();
   state.notify.ready = true;
-  setInterval(() => void pollMessages(), 3000);
-  setInterval(() => void loadStatus(), 5000);
+  // If that first load already finalized a terminal (closed) room, do not start
+  // any polling — a closed room loads its final history once and leaves no timer.
+  if (!state.closedHistoryLoaded) {
+    state.pollTimer = setInterval(() => void pollMessages(), 3000);
+    state.statusTimer = setInterval(() => void loadStatus(), 5000);
+  }
   bindEvents();
+}
+
+// Clear the retained poll/status timers so nothing keeps firing (#241). Idempotent.
+function stopPolling() {
+  if (state.pollTimer !== null) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  if (state.statusTimer !== null) {
+    clearInterval(state.statusTimer);
+    state.statusTimer = null;
+  }
+}
+
+// A terminal (closed) room loads its read-only history exactly once, then all
+// polling stops — no message or status timer remains active (#241).
+function finalizeClosedRoom() {
+  state.closedHistoryLoaded = true;
+  stopPolling();
+  applyRoomState();
 }
 
 function bindJoinForm() {
@@ -214,13 +265,19 @@ function bindJoinForm() {
 }
 
 async function submitProfile() {
+  // One claim + one entry even on a double submit: only proceed from the joining
+  // interstitial, and hold the boundary at "entering" for the duration.
+  if (state.entryPhase !== "joining") return;
   joinError.hidden = true;
   const displayName = displayNameInput.value.trim();
   if (!displayName) return;
+  state.entryPhase = "entering";
   try {
     await claimDisplayName(displayName);
     await enterRoom();
   } catch (error) {
+    // Reopen the interstitial so the human can correct the name and submit again.
+    state.entryPhase = "joining";
     joinError.hidden = false;
     joinError.textContent = error instanceof Error ? error.message : String(error);
   }
@@ -455,8 +512,7 @@ async function pollMessages() {
     state.historyAvailable = false;
     handlePollError(error);
     if (state.roomStatus === "closed") {
-      state.closedHistoryLoaded = true;
-      applyRoomState();
+      finalizeClosedRoom();
     }
     return;
   }
@@ -478,8 +534,7 @@ async function pollMessages() {
   state.cursor = payload.next_since_id;
   emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
   if (state.roomStatus === "closed") {
-    state.closedHistoryLoaded = true;
-    applyRoomState();
+    finalizeClosedRoom();
   }
 }
 
