@@ -23,6 +23,9 @@ const state = {
   // room reaches a terminal closed state — no timer keeps firing after closure.
   pollTimer: null,
   statusTimer: null,
+  // Serialize pollMessages (#241): a fetch slower than the 3s interval must not let
+  // overlapping timer callbacks issue several concurrent (closed-history) fetches.
+  pollInFlight: false,
   briefVersion: 0,
   replyTo: null,
   // Reply affordance (#113): minimal from/text record per rendered message id so
@@ -505,36 +508,45 @@ async function pollMessages() {
   // read-only history (it never required the room to be open), but there is
   // nothing further to poll for.
   if (state.roomStatus === "closed" && state.closedHistoryLoaded) return;
-  let payload;
+  // Serialize: if a poll is already awaiting its fetch, a later timer callback
+  // skips instead of issuing a second concurrent fetch. This guarantees a closed
+  // room's final history is fetched exactly once even if a fetch runs long.
+  if (state.pollInFlight) return;
+  state.pollInFlight = true;
   try {
-    payload = await authFetch(`/messages?since_id=${state.cursor}`);
-  } catch (error) {
-    state.historyAvailable = false;
-    handlePollError(error);
+    let payload;
+    try {
+      payload = await authFetch(`/messages?since_id=${state.cursor}`);
+    } catch (error) {
+      state.historyAvailable = false;
+      handlePollError(error);
+      if (state.roomStatus === "closed") {
+        finalizeClosedRoom();
+      }
+      return;
+    }
+    markConnectionLive();
+    state.historyAvailable = true;
+    const fresh = [];
+    for (const message of payload.messages) {
+      if (state.seen.has(message.id)) continue;
+      state.seen.add(message.id);
+      renderMessage(message);
+      fresh.push(message);
+      // De-dup is inherent: the seen-set guard means each id reaches maybeNotify once.
+      maybeNotify(message);
+      if (message.ts) state.lastMessageTs = message.ts;
+    }
+    // Persist the redacted, bounded local backup of what we've now loaded (#211).
+    recordBackupBatch(fresh);
+    updateLastMessage();
+    state.cursor = payload.next_since_id;
+    emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
     if (state.roomStatus === "closed") {
       finalizeClosedRoom();
     }
-    return;
-  }
-  markConnectionLive();
-  state.historyAvailable = true;
-  const fresh = [];
-  for (const message of payload.messages) {
-    if (state.seen.has(message.id)) continue;
-    state.seen.add(message.id);
-    renderMessage(message);
-    fresh.push(message);
-    // De-dup is inherent: the seen-set guard means each id reaches maybeNotify once.
-    maybeNotify(message);
-    if (message.ts) state.lastMessageTs = message.ts;
-  }
-  // Persist the redacted, bounded local backup of what we've now loaded (#211).
-  recordBackupBatch(fresh);
-  updateLastMessage();
-  state.cursor = payload.next_since_id;
-  emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
-  if (state.roomStatus === "closed") {
-    finalizeClosedRoom();
+  } finally {
+    state.pollInFlight = false;
   }
 }
 

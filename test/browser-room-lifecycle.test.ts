@@ -183,6 +183,43 @@ test("a token-fragment re-entry while the joining interstitial is shown claims a
   }
 });
 
+test("overlapping poll intervals issue a single final closed-history fetch (serialized)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  const held: Array<import("playwright").Route> = [];
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+
+    // Host enters the open room so the 3s poll timer is running.
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Lifecycle room.");
+
+    // From now on, hold every GET /messages so a poll's fetch never completes —
+    // this is the "slow response" that a naive poller would let overlapping timer
+    // callbacks pile onto (multiple concurrent final closed-history fetches).
+    await page.route("**/messages**", (route) => {
+      if (route.request().method() === "GET") held.push(route);
+      else void route.continue();
+    });
+
+    // Close the room; subsequent polls take the closed-history path.
+    await page.click("#close-button");
+    await page.waitForSelector('#room-status[data-status="closed"]');
+
+    // Across several 3s intervals, serialization keeps exactly one poll in flight,
+    // so exactly one closed-history fetch is ever issued. A naive poller would have
+    // issued one per interval firing.
+    await page.waitForTimeout(8_000);
+    assert.equal(held.length, 1, "exactly one final closed-history fetch despite overlapping intervals");
+  } finally {
+    for (const route of held) {
+      await route.abort().catch(() => {});
+    }
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 test("a closed room loads its final history once and stops all polling timers", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
