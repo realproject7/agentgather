@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -126,6 +126,32 @@ test("racing reclaimers never double-hold, move a fresh lock aside, or wedge the
     await assert.rejects(readFile(lockPath, "utf8"), /ENOENT/); // released cleanly
     await assert.rejects(readFile(`${lockPath}.reclaim`, "utf8"), /ENOENT/); // no wedged reclaim lock
   }
+});
+
+// The reclaim lock that serializes stale reclamation must survive on liveness, not
+// age: an active-but-slow reclaimer (its lock older than staleAfterMs, but its
+// owner still alive) must keep exclusivity so a peer cannot re-enter reclamation.
+test("an active-but-old reclaim lock is not cleared, preserving reclaim exclusion", async () => {
+  const root = await makeRoot();
+  const lockPath = path.join(root, "write.lock");
+  // A stale primary lock (dead owner) that would otherwise be reclaimed at once.
+  await writeFile(lockPath, JSON.stringify({ pid: 999_999, createdAt: "2026-06-21T00:00:00.000Z" }));
+  // A reclaim lock owned by a LIVE process (this one) but with a long-past mtime.
+  const reclaimPath = `${lockPath}.reclaim`;
+  await writeFile(reclaimPath, JSON.stringify({ pid: process.pid, createdAt: "2026-06-21T00:00:00.000Z" }));
+  const longAgo = new Date(Date.now() - 10 * 60_000);
+  await utimes(reclaimPath, longAgo, longAgo);
+
+  // The reclaimer must not bypass the live reclaim holder on age alone: it backs
+  // off and times out rather than re-entering primary reclamation.
+  await assert.rejects(
+    withWriterLock(lockPath, async () => "acquired", { retryDelayMs: 2, timeoutMs: 150, staleAfterMs: 50 }),
+    /timed out/
+  );
+
+  // The live reclaim lock survived, and the primary stale lock was not stolen.
+  assert.equal((JSON.parse(await readFile(reclaimPath, "utf8")) as { pid: number }).pid, process.pid);
+  assert.equal((JSON.parse(await readFile(lockPath, "utf8")) as { pid: number }).pid, 999_999);
 });
 
 // A live holder acquired by reclaiming a stale lock must not be reclaimed by a

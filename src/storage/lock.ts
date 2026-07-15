@@ -100,11 +100,17 @@ async function reclaimStaleRecord(
   const reclaimPath = `${lockPath}.reclaim`;
   try {
     const handle = await open(reclaimPath, "wx", SECURE_FILE_MODE);
-    await handle.close();
+    // Stamp the reclaim lock with our identity so a would-be cleaner can tell a
+    // live-but-slow reclaimer from a crashed one by liveness, not by age alone.
+    try {
+      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if (!isFileExistsError(error)) throw error;
-    // Another reclaimer holds the reclaim lock; clear it only if it was clearly
-    // abandoned (a process crashed mid-reclaim), then back off and retry acquire.
+    // Another reclaimer holds the reclaim lock; reclaim it only if its owner is
+    // dead (a crash mid-reclaim), then back off and retry acquire.
     await clearAbandonedReclaimLock(reclaimPath, staleAfterMs);
     return false;
   }
@@ -127,7 +133,28 @@ async function reclaimStaleRecord(
   }
 }
 
+// Recover a reclaim lock only when its owner is provably gone. A live owner keeps
+// exclusivity regardless of age, so a reclaimer that is merely slow (delayed past
+// staleAfterMs) never loses the reclaim lock to a peer. Only a dead owner — or an
+// unparseable/legacy lock older than the stale window — is cleared.
 async function clearAbandonedReclaimLock(reclaimPath: string, staleAfterMs: number): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readFile(reclaimPath, "utf8");
+  } catch {
+    return;
+  }
+  let parsed: Partial<LockRecord> | undefined;
+  try {
+    parsed = JSON.parse(raw) as Partial<LockRecord>;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed && typeof parsed.pid === "number") {
+    if (isProcessAlive(parsed.pid)) return;
+    await rm(reclaimPath, { force: true });
+    return;
+  }
   if (await isOlderThan(reclaimPath, staleAfterMs)) {
     await rm(reclaimPath, { force: true });
   }
