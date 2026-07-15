@@ -27,7 +27,7 @@ import { assertSafeSlug } from "../protocol/validation.js";
 import { readBoardroom } from "./boardroom-store.js";
 import { withWriterLock } from "./lock.js";
 import { roomPaths } from "./paths.js";
-import { appendSecureFile, ensureSecureDir, writeSecureFile } from "./secure-fs.js";
+import { appendSecureFile, createSecureFile, ensureSecureDir, writeSecureFile } from "./secure-fs.js";
 
 export interface CreateForumPostInput {
   author: string;
@@ -221,7 +221,7 @@ async function writeJson(file: string, value: unknown): Promise<void> {
 }
 async function writeJsonNew(file: string, value: unknown): Promise<void> {
   await ensureSecureDir(path.dirname(file));
-  await writeSecureFile(file, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
+  await createSecureFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function isNotFoundError(error: unknown): boolean {

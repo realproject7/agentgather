@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { ensureSecureDir, writeSecureFile } from "../storage/index.js";
+import { ensureSecureDir, withWriterLock, writeSecureFile } from "../storage/index.js";
 
 export interface CurrentRoom {
   roomId: string;
@@ -26,6 +26,10 @@ export function tokensPath(home: string, roomId: string): string {
   return path.join(home, "rooms", roomId, "tokens.json");
 }
 
+export function tokensLockPath(home: string, roomId: string): string {
+  return path.join(home, "rooms", roomId, "tokens.lock");
+}
+
 export async function writeCurrent(home: string, current: CurrentRoom): Promise<void> {
   await ensureSecureDir(home);
   await writeSecureFile(currentPath(home), `${JSON.stringify(current, null, 2)}\n`);
@@ -38,9 +42,14 @@ export async function readCurrent(home: string): Promise<CurrentRoom> {
 export async function writeToken(home: string, roomId: string, alias: string, token: string): Promise<void> {
   const file = tokensPath(home, roomId);
   await ensureSecureDir(path.dirname(file));
-  const store = await readTokenStore(home, roomId);
-  store.tokens[alias] = token;
-  await writeSecureFile(file, `${JSON.stringify(store, null, 2)}\n`);
+  // Serialize the whole read-modify-write so concurrent `room join`s for two
+  // aliases in the same room cannot both read the old store and clobber each
+  // other's entry. The lock record holds only pid/createdAt — never a token.
+  await withWriterLock(tokensLockPath(home, roomId), async () => {
+    const store = await readTokenStore(home, roomId);
+    store.tokens[alias] = token;
+    await writeSecureFile(file, `${JSON.stringify(store, null, 2)}\n`);
+  });
 }
 
 export async function readToken(home: string, roomId: string, alias: string): Promise<string> {

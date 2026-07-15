@@ -15,7 +15,7 @@ import {
 } from "../protocol/index.js";
 import { withWriterLock } from "./lock.js";
 import { roomPaths, type RoomPaths } from "./paths.js";
-import { appendSecureFile, ensureSecureDir, writeSecureFile } from "./secure-fs.js";
+import { appendSecureFile, createSecureFile, ensureSecureDir, writeSecureFile } from "./secure-fs.js";
 
 export const MAX_BRIEF_LENGTH = 16_000;
 
@@ -129,8 +129,8 @@ export async function createRoom(options: CreateRoomOptions): Promise<RoomState>
 
   await writeNewJson(paths.state, state);
   await writeNewJson(paths.participants, []);
-  await writeSecureFile(paths.brief, briefBody, { flag: "wx" });
-  await writeSecureFile(paths.messages, "", { flag: "wx" });
+  await createSecureFile(paths.brief, briefBody);
+  await createSecureFile(paths.messages, "");
   return state;
 }
 
@@ -528,7 +528,7 @@ function withRoomDefaults(state: RoomState): RoomState {
 }
 
 async function writeNewJson(path: string, value: unknown): Promise<void> {
-  await writeSecureFile(path, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
+  await createSecureFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function readJsonLines<T>(path: string): Promise<T[]> {

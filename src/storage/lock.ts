@@ -1,4 +1,4 @@
-import { chmod, open, readFile, rm, stat } from "node:fs/promises";
+import { chmod, link, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { SECURE_FILE_MODE } from "./secure-fs.js";
 
 export interface LockOptions {
@@ -11,6 +11,9 @@ interface LockRecord {
   pid: number;
   createdAt: string;
 }
+
+// Per-process counter that keeps concurrent reclaim scratch names unique.
+let reclaimCounter = 0;
 
 export async function withWriterLock<T>(
   lockPath: string,
@@ -56,32 +59,88 @@ async function acquireWriterLock(
 }
 
 async function removeStaleLock(lockPath: string, staleAfterMs: number): Promise<boolean> {
+  let raw: string;
   try {
-    const raw = await readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<LockRecord>;
-    if (typeof parsed.pid !== "number") {
-      return removeMalformedLockIfOld(lockPath, staleAfterMs);
-    }
-    if (!isProcessAlive(parsed.pid)) {
-      await rm(lockPath, { force: true });
-      return true;
-    }
+    raw = await readFile(lockPath, "utf8");
   } catch (error) {
     if (isNotFoundError(error)) return false;
-    return removeMalformedLockIfOld(lockPath, staleAfterMs);
+    // A transient read failure is not our lock to reclaim — back off and retry
+    // rather than deleting a file we could not identify.
+    return false;
   }
+
+  let parsed: Partial<LockRecord> | undefined;
+  try {
+    parsed = JSON.parse(raw) as Partial<LockRecord>;
+  } catch {
+    parsed = undefined;
+  }
+
+  if (parsed && typeof parsed.pid === "number") {
+    // A live holder is never reclaimed. A dead holder is reclaimed only if the
+    // on-disk record is still byte-for-byte the one we just judged dead.
+    if (isProcessAlive(parsed.pid)) return false;
+    return reclaimIfUnchanged(lockPath, raw);
+  }
+
+  // A malformed record is reclaimed only once it is older than the stale window
+  // (so we never race a lock mid-write) AND still unchanged when we move it aside.
+  if (!(await isOlderThan(lockPath, staleAfterMs))) return false;
+  return reclaimIfUnchanged(lockPath, raw);
+}
+
+// Reclaim the lock at `lockPath` only if its contents are still exactly
+// `expectedRaw` — the record we inspected and judged reclaimable. We atomically
+// move the file aside (rename wins for exactly one contender) and re-read the
+// moved copy: if it matches, the stale record is safely discarded; if it changed
+// (a live successor acquired the lock between our read and our move) we restore it
+// without clobbering, so reclaim can never delete a newly acquired lock.
+async function reclaimIfUnchanged(lockPath: string, expectedRaw: string): Promise<boolean> {
+  const moved = `${lockPath}.reclaim-${process.pid}-${reclaimCounter++}`;
+  try {
+    await rename(lockPath, moved);
+  } catch (error) {
+    // Someone else already reclaimed or replaced-and-removed the lock; treat it
+    // as progress and let the caller retry the acquire.
+    if (isNotFoundError(error)) return true;
+    throw error;
+  }
+
+  let movedRaw: string | undefined;
+  try {
+    movedRaw = await readFile(moved, "utf8");
+  } catch {
+    movedRaw = undefined;
+  }
+
+  if (movedRaw === expectedRaw) {
+    await rm(moved, { force: true });
+    return true;
+  }
+
+  await restoreReclaimedLock(moved, lockPath);
   return false;
 }
 
-async function removeMalformedLockIfOld(lockPath: string, staleAfterMs: number): Promise<boolean> {
+// Put a moved lock file back at `lockPath` without ever overwriting a lock that
+// reappeared meanwhile. `link` fails with EEXIST if the target exists, so a lock
+// created in the gap is preserved and our moved copy is dropped instead.
+async function restoreReclaimedLock(moved: string, lockPath: string): Promise<void> {
+  try {
+    await link(moved, lockPath);
+  } catch (error) {
+    if (!isFileExistsError(error)) throw error;
+  }
+  await rm(moved, { force: true });
+}
+
+async function isOlderThan(lockPath: string, ageMs: number): Promise<boolean> {
   try {
     const info = await stat(lockPath);
-    if (Date.now() - info.mtimeMs < staleAfterMs) return false;
-  } catch (error) {
-    return isNotFoundError(error);
+    return Date.now() - info.mtimeMs >= ageMs;
+  } catch {
+    return false;
   }
-  await rm(lockPath, { force: true });
-  return true;
 }
 
 function isProcessAlive(pid: number): boolean {
