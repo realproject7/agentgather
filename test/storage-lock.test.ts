@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { withWriterLock } from "../src/storage/index.js";
+import { takeOverAbandonedFile } from "../src/storage/lock.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-lock-test-"));
@@ -126,6 +127,33 @@ test("racing reclaimers never double-hold, move a fresh lock aside, or wedge the
     await assert.rejects(readFile(lockPath, "utf8"), /ENOENT/); // released cleanly
     await assert.rejects(readFile(`${lockPath}.reclaim`, "utf8"), /ENOENT/); // no wedged reclaim lock
   }
+});
+
+// Abandoned-lock takeover is how a cleaner removes a leaked reclaim lock without a
+// racing cleaner destroying a fresh successor. It renames the file aside (only one
+// cleaner wins) and deletes ONLY the moved inode, and only if still the record it
+// judged — modelling exactly the two-cleaner / fresh-reclaimer race: a second
+// cleaner that decided to remove based on the abandoned record must not delete the
+// successor that replaced it. (A plain force-rm of the path would delete it.)
+test("takeover deletes only the record it judged; a fresh successor survives", async () => {
+  const root = await makeRoot();
+  const file = path.join(root, "write.lock.reclaim");
+
+  // 1) The file still matches the record we judged abandoned → removed.
+  await writeFile(file, "ABANDONED");
+  await takeOverAbandonedFile(file, "ABANDONED");
+  await assert.rejects(readFile(file, "utf8"), /ENOENT/);
+
+  // 2) A successor replaced it after we judged the old record → it must survive.
+  await writeFile(file, "SUCCESSOR");
+  await takeOverAbandonedFile(file, "ABANDONED");
+  assert.equal(await readFile(file, "utf8"), "SUCCESSOR");
+
+  // 3) Already gone → no-op, and no scratch files linger.
+  await rm(file, { force: true });
+  await takeOverAbandonedFile(file, "ABANDONED");
+  await assert.rejects(readFile(file, "utf8"), /ENOENT/);
+  assert.deepEqual((await readdir(root)).filter((n) => n.includes(".takeover-")), []);
 });
 
 // The reclaim lock that serializes stale reclamation must survive on liveness, not
