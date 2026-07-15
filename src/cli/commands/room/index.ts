@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import type { Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -55,7 +56,14 @@ import {
 import { readPublicBaseUrl } from "../../../tunnel/index.js";
 import { parseArgs, flagBoolean, flagString, type ParsedArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
+import { listenErrorMessage, listenOrError, type ListenOutcome } from "../listen.js";
 import { readCurrent, readToken, recordJoinedRoom, writeCurrent, writeToken } from "../../state.js";
+
+export interface RoomCommandHooks {
+  // Injectable so tests can deterministically exercise the bind-error path without
+  // depending on OS hostname resolution.
+  listen?: (server: Server, port: number, host: string) => Promise<ListenOutcome>;
+}
 
 // Printed to stderr whenever `room serve --allow-remote` starts (#180). Assumes
 // HTTPS is terminated at the edge (tunnel/reverse proxy); Agent Gather adds no
@@ -68,7 +76,11 @@ export const ALLOW_REMOTE_WARNING = [
   "  and let the tunnel own public TLS. See docs/self-tunnel.md."
 ].join("\n");
 
-export async function runRoomCommand(argv: string[], context: CliContext): Promise<number> {
+export async function runRoomCommand(
+  argv: string[],
+  context: CliContext,
+  hooks: RoomCommandHooks = {}
+): Promise<number> {
   const [subcommand, ...rest] = argv;
   if (subcommand === "start") return roomStart(rest, context);
   if (subcommand === "create-boardroom") return roomCreateBoardroom(rest, context);
@@ -84,7 +96,7 @@ export async function runRoomCommand(argv: string[], context: CliContext): Promi
   if (subcommand === "brief") return roomBrief(rest, context);
   if (subcommand === "attendance") return roomAttendance(rest, context);
   if (subcommand === "session") return roomSession(rest, context);
-  if (subcommand === "serve") return roomServe(rest, context);
+  if (subcommand === "serve") return roomServe(rest, context, hooks);
   if (subcommand === "launch") return roomLaunch(rest, context);
   if (subcommand === "runtime-status") return roomRuntimeStatus(rest, context);
   if (subcommand === "invite") return roomInvite(rest, context);
@@ -896,7 +908,7 @@ async function probeRuntime(publicUrl: string): Promise<boolean> {
   }
 }
 
-async function roomServe(argv: string[], context: CliContext): Promise<number> {
+async function roomServe(argv: string[], context: CliContext, hooks: RoomCommandHooks = {}): Promise<number> {
   const args = parseArgs(argv);
   const current = await readCurrent(context.home);
   const currentUrl = new URL(current.baseUrl);
@@ -920,9 +932,12 @@ async function roomServe(argv: string[], context: CliContext): Promise<number> {
     // wait commands; otherwise keep advertising the local serve URL.
     publicBaseUrl: () => readPublicBaseUrl(context.home, current.roomId) ?? localBaseUrl
   });
-  await new Promise<void>((resolve) => {
-    server.listen(port, host, resolve);
-  });
+  const listen = hooks.listen ?? listenOrError;
+  const outcome = await listen(server, port, host);
+  if (!outcome.ok) {
+    context.stderr.write(`${listenErrorMessage(host, port, outcome.error)}\n`);
+    return 1;
+  }
   await writeCurrent(context.home, { ...current, baseUrl: localBaseUrl });
   // Sharp guardrail (#180): --allow-remote assumes HTTPS is terminated at the
   // edge (tunnel/reverse proxy). Warn loudly so nobody exposes plain HTTP or

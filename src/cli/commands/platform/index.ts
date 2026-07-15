@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import { flagBoolean, flagString, parseArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
+import { listenErrorMessage, listenOrError, type ListenOutcome } from "../listen.js";
 import { createPlatformHttpServer } from "../../../platform/index.js";
 
 // Default control-plane port: room serve uses 8787, the broker 8799; the owner
@@ -12,6 +13,9 @@ export interface PlatformCommandHooks {
   // Injectable so tests can drive the running server and shut it down instead of
   // blocking on process signals forever.
   waitForShutdown?: (server: Server) => Promise<void>;
+  // Injectable so tests can deterministically exercise the bind-error path without
+  // depending on OS hostname resolution.
+  listen?: (server: Server, port: number, host: string) => Promise<ListenOutcome>;
 }
 
 export async function runPlatformCommand(
@@ -43,7 +47,12 @@ async function platformServe(argv: string[], context: CliContext, hooks: Platfor
   }
 
   const server = createPlatformHttpServer({ root: context.home, allowInsecureRemote: allowRemote });
-  await new Promise<void>((resolve) => server.listen(port, host, resolve));
+  const listen = hooks.listen ?? listenOrError;
+  const outcome = await listen(server, port, host);
+  if (!outcome.ok) {
+    context.stderr.write(`${listenErrorMessage(host, port, outcome.error)}\n`);
+    return 1;
+  }
   const address = server.address();
   const boundPort = typeof address === "object" && address !== null ? address.port : port;
   const url = `http://${host}:${boundPort}`;
