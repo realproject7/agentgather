@@ -1,15 +1,27 @@
+import type { Server } from "node:http";
 import { createBrokerHttpServer, TunnelBroker } from "../../../tunnel/index.js";
 import { parseArgs, flagString } from "../../args.js";
 import type { CliContext } from "../../context.js";
+import { listenErrorMessage, listenOrError, type ListenOutcome } from "../listen.js";
 
-export async function runBrokerCommand(argv: string[], context: CliContext): Promise<number> {
+export interface BrokerCommandHooks {
+  // Injectable so tests can deterministically exercise the bind-error path without
+  // depending on OS hostname resolution.
+  listen?: (server: Server, port: number, host: string) => Promise<ListenOutcome>;
+}
+
+export async function runBrokerCommand(
+  argv: string[],
+  context: CliContext,
+  hooks: BrokerCommandHooks = {}
+): Promise<number> {
   const [subcommand, ...rest] = argv;
-  if (subcommand === "serve") return brokerServe(rest, context);
+  if (subcommand === "serve") return brokerServe(rest, context, hooks);
   context.stderr.write(`Unknown broker command: ${subcommand ?? ""}\n`);
   return 1;
 }
 
-async function brokerServe(argv: string[], context: CliContext): Promise<number> {
+async function brokerServe(argv: string[], context: CliContext, hooks: BrokerCommandHooks): Promise<number> {
   const args = parseArgs(argv);
 
   const host = flagString(args, "host") ?? "127.0.0.1";
@@ -22,9 +34,12 @@ async function brokerServe(argv: string[], context: CliContext): Promise<number>
     logSink: (record) => context.stdout.write(`${JSON.stringify(record)}\n`)
   });
   const server = createBrokerHttpServer(broker);
-  await new Promise<void>((resolve) => {
-    server.listen(port, host, resolve);
-  });
+  const listen = hooks.listen ?? listenOrError;
+  const outcome = await listen(server, port, host);
+  if (!outcome.ok) {
+    context.stderr.write(`${listenErrorMessage(host, port, outcome.error)}\n`);
+    return 1;
+  }
 
   context.stdout.write(`Agent Gather broker serving on ${host}:${port}\n`);
   if (publicUrl !== undefined) context.stdout.write(`Public URL: ${publicUrl}\n`);

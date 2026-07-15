@@ -20,6 +20,7 @@ import type { Server } from "node:http";
 import { platform as osPlatform } from "node:os";
 import { parseArgs, type ParsedArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
+import { listenOrError } from "../listen.js";
 import { DEFAULT_PLATFORM_PORT, defaultWaitForShutdown } from "../platform/index.js";
 import { buildHelpText, VERSION } from "../../help.js";
 import { createPlatformHttpServer } from "../../../platform/index.js";
@@ -179,18 +180,11 @@ function isConnectionRefused(error: unknown): boolean {
   return code === "ECONNREFUSED";
 }
 
+// #232 launcher bind: localhost-only, and a bind failure resolves false so the
+// caller refuses with a token-free message (never a kill). Delegates to the shared
+// listen helper without changing that behavior.
 function listen(server: Server, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const onError = (): void => {
-      server.removeListener("error", onError);
-      resolve(false);
-    };
-    server.once("error", onError);
-    server.listen(port, "127.0.0.1", () => {
-      server.removeListener("error", onError);
-      resolve(true);
-    });
-  });
+  return listenOrError(server, port, "127.0.0.1").then((outcome) => outcome.ok);
 }
 
 // Open a URL in the default browser without a shell: the platform opener is spawned
