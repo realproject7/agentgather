@@ -1,4 +1,4 @@
-import { chmod, link, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { chmod, open, readFile, rm, stat } from "node:fs/promises";
 import { SECURE_FILE_MODE } from "./secure-fs.js";
 
 export interface LockOptions {
@@ -11,9 +11,6 @@ interface LockRecord {
   pid: number;
   createdAt: string;
 }
-
-// Per-process counter that keeps concurrent reclaim scratch names unique.
-let reclaimCounter = 0;
 
 export async function withWriterLock<T>(
   lockPath: string,
@@ -77,61 +74,63 @@ async function removeStaleLock(lockPath: string, staleAfterMs: number): Promise<
   }
 
   if (parsed && typeof parsed.pid === "number") {
-    // A live holder is never reclaimed. A dead holder is reclaimed only if the
-    // on-disk record is still byte-for-byte the one we just judged dead.
+    // A live holder is never reclaimed. A dead holder is reclaimed only under the
+    // serialized, identity-checked reclaim path below.
     if (isProcessAlive(parsed.pid)) return false;
-    return reclaimIfUnchanged(lockPath, raw);
+    return reclaimStaleRecord(lockPath, raw, staleAfterMs);
   }
 
   // A malformed record is reclaimed only once it is older than the stale window
-  // (so we never race a lock mid-write) AND still unchanged when we move it aside.
+  // (so we never race a lock mid-write).
   if (!(await isOlderThan(lockPath, staleAfterMs))) return false;
-  return reclaimIfUnchanged(lockPath, raw);
+  return reclaimStaleRecord(lockPath, raw, staleAfterMs);
 }
 
-// Reclaim the lock at `lockPath` only if its contents are still exactly
-// `expectedRaw` — the record we inspected and judged reclaimable. We atomically
-// move the file aside (rename wins for exactly one contender) and re-read the
-// moved copy: if it matches, the stale record is safely discarded; if it changed
-// (a live successor acquired the lock between our read and our move) we restore it
-// without clobbering, so reclaim can never delete a newly acquired lock.
-async function reclaimIfUnchanged(lockPath: string, expectedRaw: string): Promise<boolean> {
-  const moved = `${lockPath}.reclaim-${process.pid}-${reclaimCounter++}`;
+// Serialize reclamation with an exclusive reclaim lock, then re-read the primary
+// lock under it and remove it ONLY if it is still byte-for-byte `expectedRaw`
+// (the record we judged stale). This is TOCTOU-free: while the primary still holds
+// that record it cannot be acquired (acquisition needs the file absent, and only a
+// reclaimer — serialized here — removes it), so a live successor lock is never
+// removed and the check-then-remove cannot race a fresh acquire.
+async function reclaimStaleRecord(
+  lockPath: string,
+  expectedRaw: string,
+  staleAfterMs: number
+): Promise<boolean> {
+  const reclaimPath = `${lockPath}.reclaim`;
   try {
-    await rename(lockPath, moved);
-  } catch (error) {
-    // Someone else already reclaimed or replaced-and-removed the lock; treat it
-    // as progress and let the caller retry the acquire.
-    if (isNotFoundError(error)) return true;
-    throw error;
-  }
-
-  let movedRaw: string | undefined;
-  try {
-    movedRaw = await readFile(moved, "utf8");
-  } catch {
-    movedRaw = undefined;
-  }
-
-  if (movedRaw === expectedRaw) {
-    await rm(moved, { force: true });
-    return true;
-  }
-
-  await restoreReclaimedLock(moved, lockPath);
-  return false;
-}
-
-// Put a moved lock file back at `lockPath` without ever overwriting a lock that
-// reappeared meanwhile. `link` fails with EEXIST if the target exists, so a lock
-// created in the gap is preserved and our moved copy is dropped instead.
-async function restoreReclaimedLock(moved: string, lockPath: string): Promise<void> {
-  try {
-    await link(moved, lockPath);
+    const handle = await open(reclaimPath, "wx", SECURE_FILE_MODE);
+    await handle.close();
   } catch (error) {
     if (!isFileExistsError(error)) throw error;
+    // Another reclaimer holds the reclaim lock; clear it only if it was clearly
+    // abandoned (a process crashed mid-reclaim), then back off and retry acquire.
+    await clearAbandonedReclaimLock(reclaimPath, staleAfterMs);
+    return false;
   }
-  await rm(moved, { force: true });
+
+  try {
+    let current: string;
+    try {
+      current = await readFile(lockPath, "utf8");
+    } catch (error) {
+      // Already removed — treat as progress so the caller retries the acquire.
+      return isNotFoundError(error);
+    }
+    // A byte-identical record is the same dead holder we judged stale; anything
+    // else is a live successor that must not be touched.
+    if (current !== expectedRaw) return false;
+    await rm(lockPath, { force: true });
+    return true;
+  } finally {
+    await rm(reclaimPath, { force: true });
+  }
+}
+
+async function clearAbandonedReclaimLock(reclaimPath: string, staleAfterMs: number): Promise<void> {
+  if (await isOlderThan(reclaimPath, staleAfterMs)) {
+    await rm(reclaimPath, { force: true });
+  }
 }
 
 async function isOlderThan(lockPath: string, ageMs: number): Promise<boolean> {
