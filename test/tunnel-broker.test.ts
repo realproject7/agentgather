@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { AddressInfo } from "node:net";
 import test from "node:test";
+import { closeServer } from "./support/close-server.js";
 import {
   createBrokerHttpServer,
   TunnelBroker,
@@ -33,12 +34,7 @@ async function startListener(broker: TunnelBroker): Promise<{ baseUrl: string; c
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+      closeServer(server)
   };
 }
 

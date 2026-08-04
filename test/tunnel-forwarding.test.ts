@@ -9,6 +9,7 @@ import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 import { createBrokerHttpServer, TunnelBroker, TunnelClient } from "../src/tunnel/index.js";
+import { closeServer } from "./support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -85,8 +86,8 @@ async function setup(): Promise<Fixture> {
     broker,
     fetchThroughBroker: (p, init) => fetch(`${publicBaseUrl}${p}`, init),
     close: async () => {
-      await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-      await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+      await closeServer(brokerServer);
+      await closeServer(hostServer);
     }
   };
 }
@@ -216,15 +217,26 @@ test("a held /wait releases when the room closes through the broker", async () =
     const held = fixture.fetchThroughBroker("/wait?participant=reviewer&since_id=999", {
       headers: { Authorization: `Bearer ${fixture.reviewerToken}` }
     });
-    setTimeout(() => {
-      void fixture.fetchThroughBroker("/close", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${fixture.hostToken}`, "Content-Type": "application/json" }
-      });
-    }, 10);
+    // #258: the /close that releases the held wait is tracked instead of dropped on
+    // the floor. Teardown now destroys live sockets, so a request still in flight
+    // when the fixture closes rejects after the test has ended — an unhandled
+    // rejection that fails the whole file. Awaiting it keeps teardown deterministic;
+    // its own outcome is not what this test asserts, so it is allowed to fail.
+    const closeIssued = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fixture
+          .fetchThroughBroker("/close", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${fixture.hostToken}`, "Content-Type": "application/json" }
+          })
+          .catch(() => undefined)
+          .finally(() => resolve());
+      }, 10);
+    });
     const payload = (await (await held).json()) as { room_status: string; keep_waiting: boolean };
     assert.equal(payload.room_status, "closed");
     assert.equal(payload.keep_waiting, false);
+    await closeIssued;
   } finally {
     await fixture.close();
   }

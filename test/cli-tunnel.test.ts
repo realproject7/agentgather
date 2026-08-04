@@ -10,6 +10,7 @@ import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runTunnelCommand } from "../src/cli/commands/tunnel/index.js";
 import { readCurrent, writeCurrent } from "../src/cli/state.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   createBrokerHttpServer,
   readPublicBaseUrl,
@@ -55,7 +56,7 @@ async function startBroker(broker: TunnelBroker): Promise<{ baseUrl: string; clo
   const address = server.address() as AddressInfo;
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    close: () => closeServer(server)
   };
 }
 
@@ -75,7 +76,7 @@ async function startRoomServer(
   const address = server.address() as AddressInfo;
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    close: () => closeServer(server)
   };
 }
 

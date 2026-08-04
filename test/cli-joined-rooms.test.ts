@@ -8,6 +8,7 @@ import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { joinedRoomsPath, readJoinedRooms } from "../src/storage/index.js";
+import { closeServer } from "./support/close-server.js";
 
 function makeCtx(home: string): CliContext {
   return { home, stdout: { write: () => {} }, stderr: { write: () => {} } } as unknown as CliContext;
@@ -37,16 +38,7 @@ async function startTitleProbeListener(): Promise<{
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        // Drop keep-alive sockets the client left open; otherwise close() waits
-        // on them and the test process lingers after its assertions finish.
-        server.closeAllConnections();
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+    close: () => closeServer(server)
   };
 }
 

@@ -7,6 +7,7 @@ import test from "node:test";
 import { createBoardroom, createForumPost, createRoom, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
+import { closeServer } from "./support/close-server.js";
 
 const mkP = (alias: string, kind: Participant["kind"], token: string, host = false): Participant => ({
   alias,
@@ -35,7 +36,7 @@ async function startFixture(): Promise<{ baseUrl: string; token: string; close: 
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { baseUrl, token, close: () => new Promise((r) => server.close(() => r())) };
+  return { baseUrl, token, close: () => closeServer(server) };
 }
 
 const authed = (token: string, body?: unknown): RequestInit => ({

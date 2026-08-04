@@ -8,6 +8,7 @@ import { createRoom, readParticipants, roomPaths, writeParticipants } from "../s
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { writeCurrent } from "../src/cli/state.js";
+import { closeServer } from "./support/close-server.js";
 import {
   ATTENTION_MODES,
   isDegraded,
@@ -99,7 +100,7 @@ async function startFixture(agentExtra: Partial<Participant> = {}): Promise<{
   const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { baseUrl, root, roomId, agentToken, close: () => new Promise((r) => server.close(() => r())) };
+  return { baseUrl, root, roomId, agentToken, close: () => closeServer(server) };
 }
 
 async function profile(baseUrl: string, token: string, body: unknown): Promise<{ status: number; participant: { effective_mode?: AttentionMode; requested_mode?: AttentionMode; supported_modes?: AttentionMode[] } }> {

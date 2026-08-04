@@ -8,6 +8,7 @@ import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   createBrokerHttpServer,
   HostTunnelSession,
@@ -151,8 +152,8 @@ async function setup(options: SetupOptions = {}): Promise<Fixture> {
       return session;
     },
     close: async () => {
-      await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-      await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+      await closeServer(brokerServer);
+      await closeServer(hostServer);
     }
   };
 }

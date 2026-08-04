@@ -11,6 +11,7 @@ import { runBrokerCommand } from "../src/cli/commands/broker/index.js";
 import { runPlatformCommand } from "../src/cli/commands/platform/index.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { listenErrorMessage, listenOrError, type ListenOutcome } from "../src/cli/commands/listen.js";
+import { closeServer } from "./support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -40,7 +41,7 @@ async function occupyPort(): Promise<{ port: number; server: Server; close: () =
   const server = createServer((_req, res) => res.end("ok"));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  return { port, server, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  return { port, server, close: () => closeServer(server) };
 }
 
 function isListening(server: Server): boolean {
@@ -71,7 +72,7 @@ test("listenOrError resolves ok on a free port and failure on an occupied one, w
   const okServer = createServer((_req, res) => res.end());
   const ok = await listenOrError(okServer, free, "127.0.0.1");
   assert.equal(ok.ok, true);
-  await new Promise<void>((resolve) => okServer.close(() => resolve()));
+  await closeServer(okServer);
 
   const occupied = await occupyPort();
   const clash = createServer((_req, res) => res.end());

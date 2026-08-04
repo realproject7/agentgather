@@ -10,6 +10,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createRoom, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { writeCurrent } from "../src/cli/state.js";
+import { closeServer } from "./support/close-server.js";
 
 interface Fixture {
   root: string;
@@ -53,7 +54,7 @@ async function startFixture(): Promise<Fixture> {
     baseUrl,
     agentToken,
     hostToken,
-    close: () => new Promise((resolve) => server.close(() => resolve()))
+    close: () => closeServer(server)
   };
 }
 
