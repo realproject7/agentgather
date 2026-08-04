@@ -97,9 +97,8 @@ an authoritative empty history.
   was ready, so they failed by platform and by load rather than by behaviour.
   The last of that class closed here, including a previously known-flaky test
   whose cause is now identified.
-
-- **#261** (`97c9816`) — one exported helper replaces a filesystem predicate that had been
-  copied to more than ten places.
+- **#261** (`97c9816`) — one exported helper replaces a filesystem predicate
+  that had been copied to more than ten places.
 
 ## Merge index
 
