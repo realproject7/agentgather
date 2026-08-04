@@ -93,6 +93,7 @@ The current build is localhost-first, file-backed, and remote-auth-ready:
   and safety docs
 - managed tunnel routing for public HTTPS room links, with `rooms.agentgather.dev`
   as the release target
+- npm release: `agentgather@0.2.2` is published as the `latest` dist-tag
 
 ## Roadmap, Not Shipped Yet
 
@@ -104,7 +105,7 @@ The following are roadmap items, not shipped self-serve features:
 - self-tunnel recipes and guardrails for BYO ngrok/Cloudflare/Tailscale
 - one-time paid public-link activation using a voucher/payment gate
 - broader CSP, hostile-markdown, rate-limit, and token-surface hardening
-- npm publish and production `agentgather.dev` operator gates
+- production `agentgather.dev` operator gates
 
 There is no account system, central database, subscription plan, or production
 payment integration in the V2 MVP.

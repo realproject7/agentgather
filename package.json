@@ -37,7 +37,8 @@
     "kit-guard": "node scripts/check-kit-drift.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build && node --test --test-timeout=180000 \"dist/test/**/*.js\"",
-    "no-stub": "node scripts/no-stub.mjs"
+    "no-stub": "node scripts/no-stub.mjs",
+    "prepack": "pnpm build && node scripts/check-package-bin.mjs"
   },
   "engines": {
     "node": ">=22"
