@@ -723,6 +723,28 @@ h1::before {
   font-size: var(--fs-sm);
 }
 
+/* #278 — a row restored from this device's local backup. It is deliberately
+   distinguishable from a line the host just served: the backup is editable by
+   anything with script access to this origin, so restored content must never be
+   able to present itself as live host- or system-authored. Muted rather than
+   alarming — this is the ordinary path on every reload, not an error state. */
+.message[data-restored="true"] {
+  opacity: 0.92;
+}
+
+/* A restored sender gets a neutral avatar: the human/agent treatment is identity
+   the live roster confers, and a stored `from` has not been through it. */
+.message-avatar.restored {
+  background: var(--chip);
+  color: var(--muted);
+}
+
+.restored-divider .message-text {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
 .system-pill::before,
 .system-pill::after {
   content: "";

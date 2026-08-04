@@ -69,6 +69,8 @@ const state = {
   // bounded, redacted per-room snapshot. Drives the offline notice so the backup
   // view never implies complete unseen history beyond this cursor.
   backupCursor: 0,
+  // #278: set while a restored history still has to be confirmed against the room.
+  seedUnverified: false,
   // #247 offline-history bridge: the write-only capability this open was handed in
   // its entry fragment, held in memory for the life of the tab and nowhere else.
   // Absent unless the dashboard opened this room, which is exactly when a
@@ -280,6 +282,11 @@ async function enterRoom() {
   // it in the roster (metadata only — never the token).
   recordJoinedRoomLocal();
   renderJoinedRooms();
+  // #278: restore this device's own copy BEFORE the first poll, and move the cursor
+  // to the highest id it actually holds, so the poll below asks only for what is
+  // new instead of re-downloading the whole history on every load. The write half
+  // of this backup has existed since #211; this is the reader it never had.
+  seedEntryFromBackup();
   // The first poll loads existing history; notifications stay off for it and only
   // arm (ready) afterwards so the backlog never fires a burst of notifications.
   await pollMessages();
@@ -527,6 +534,9 @@ async function loadStatus() {
 // applyRoomState). Reuses the same redaction as the dashboard cache — a bearer
 // token, tgl_ token, invite URL, or card URL is never persisted here.
 const BACKUP_PREFIX = "agentgather.backup.";
+// What a restored row says instead of a stored alias (#278). Fixed, because the
+// only authorship this device can vouch for is "this came from my own copy".
+const RESTORED_SENDER_LABEL = "local copy";
 const BACKUP_MAX_MESSAGES = 250;
 const BACKUP_MAX_BYTES = 200_000;
 
@@ -582,6 +592,109 @@ function recordBackupBatch(messages) {
   }
 }
 
+// A restored record is ALWAYS rendered as an ordinary message. The stored `type`
+// is discarded rather than normalised, because `system` is the room's own voice —
+// a hand-edited store must not be able to speak in it — and `status` is a broadcast
+// treatment. System records are not restored at all: they are room-authority
+// statements ("<alias> joined", "room closed") whose value on a warm entry is low
+// and whose forgery value is high.
+
+// #278 — the reader the local backup never had. Every record is re-validated on the
+// way in: this is data the page previously only wrote, and localStorage is editable
+// by anything with script access to this origin, so it is treated as untrusted
+// input. Ids must be positive integers, from/text must be strings, an unknown type
+// collapses to "message", and the same redaction the writer applies is re-applied
+// here so a hand-edited entry cannot smuggle a token back into the view. Anything
+// malformed is dropped rather than coerced; a corrupt or absent store yields an
+// empty list and entry proceeds exactly as it does today.
+function readBackupForSeed() {
+  let parsed;
+  try {
+    const raw = window.localStorage.getItem(BACKUP_PREFIX + (state.roomName || "room"));
+    if (!raw) return [];
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!parsed || !Array.isArray(parsed.messages)) return [];
+  const byId = new Map();
+  for (const entry of parsed.messages) {
+    if (!entry || typeof entry !== "object") continue;
+    if (!Number.isInteger(entry.id) || entry.id <= 0) continue;
+    if (typeof entry.from !== "string" || typeof entry.text !== "string") continue;
+    if (typeof entry.ts !== "string" || entry.ts.length === 0) continue;
+    if (entry.type === "system") continue;
+    byId.set(entry.id, {
+      id: entry.id,
+      from: entry.from,
+      ts: entry.ts,
+      type: "message",
+      text: redactForBackup(entry.text)
+    });
+  }
+  return [...byId.values()].sort((left, right) => left.id - right.id);
+}
+
+// Render the restored copy and hand the cursor to the first poll. The cursor is the
+// highest id actually held — never higher — so the poll asks only for what is new
+// and nothing between the two can be skipped. Restored rows are marked as such and
+// introduced by a divider that states the range they cover, because a trimmed
+// backup holds only the newest slice: the view must not imply it holds history it
+// does not (the cursor-bounded honesty #247 established for the offline snapshot).
+function seedEntryFromBackup() {
+  const restored = readBackupForSeed();
+  if (restored.length === 0) return;
+  const lowest = restored[0].id;
+  const highest = restored[restored.length - 1].id;
+  // Note what is deliberately NOT done here: a restored record does not set
+  // `state.lastMessageTs`. That renders in the roster as "last message · N ago",
+  // which carries no restored marking — so a stored `ts` would become unmarked
+  // room state. The roster reads "—" until the poll below supplies a live value,
+  // which is the honest answer: this device knows what it holds, not when the
+  // room last spoke.
+  try {
+    timeline.append(buildRestoredDivider(lowest, highest));
+    for (const message of restored) {
+      state.seen.add(message.id);
+      renderMessage(message, { restored: true });
+    }
+  } catch {
+    // Restoring is an optimisation, never a gate: if any stored record cannot be
+    // rendered, drop the whole restore and let the poll below fetch from the start
+    // exactly as it did before this existed.
+    timeline.replaceChildren();
+    state.seen.clear();
+    state.cursor = 0;
+    state.backupCursor = 0;
+    return;
+  }
+  state.cursor = highest;
+  state.backupCursor = highest;
+  // The restore is provisional until the room confirms it holds that head (#278).
+  state.seedUnverified = true;
+  emptyState.hidden = true;
+  updateLastMessage();
+}
+
+// Names the restored range so a trimmed backup reads honestly. `lowest > 1` means
+// the oldest messages were dropped by the count/byte cap and are not held here.
+function buildRestoredDivider(lowest, highest) {
+  const item = document.createElement("li");
+  item.className = "message system restored-divider";
+  item.dataset.restored = "true";
+  const pill = document.createElement("div");
+  pill.className = "system-pill";
+  const text = document.createElement("span");
+  text.className = "message-text";
+  text.textContent =
+    lowest > 1
+      ? `Restored from this device · messages #${lowest}–#${highest}. Earlier history isn't saved here and isn't shown.`
+      : `Restored from this device · messages up to #${highest}.`;
+  pill.append(text);
+  item.append(pill);
+  return item;
+}
+
 // Hand one batch of ALREADY-RENDERED messages to the dashboard that opened this
 // room, so the row stays readable after this host stops serving (#247). One-way
 // and fire-and-forget: the response is never read, and no request is ever issued
@@ -618,6 +731,48 @@ function bridgeHistoryToDashboard(messages) {
     // No dashboard reachable → the live view and the room-origin backup are
     // unaffected; the snapshot simply misses this batch.
   });
+}
+
+// #278 — a restored cursor must never sit ahead of the room. If the first poll
+// after a restore returns nothing, "nothing new" and "this backup belongs to a room
+// that no longer exists" look identical: a room recreated under the same name
+// restarts ids at 1, and a hand-edited store can claim any id, either of which
+// would leave the cursor at a value the host never reaches and no message would
+// ever arrive again. So ask once for the single message the backup calls newest.
+// If the room really has it, the restore is consistent and nothing further happens.
+// If it does not, the restore is discarded and entry refetches from the start.
+async function verifyRestoredHead() {
+  const head = state.backupCursor;
+  if (head <= 0) return true;
+  let payload;
+  try {
+    payload = await authFetch(`/messages?since_id=${Math.max(0, head - 1)}`);
+  } catch {
+    // A transport failure proves nothing; leave the restore and let a later poll
+    // decide rather than throwing away history over a blip.
+    return true;
+  }
+  if (payload.messages.some((message) => message.id === head)) return true;
+  discardRestoredHistory();
+  return false;
+}
+
+// Drop everything the restore contributed and return to the pre-#278 behaviour:
+// an empty timeline and a fetch from the start. The stored copy is removed too —
+// it has been shown to belong to some other room's numbering, so keeping it would
+// only wedge the next entry as well.
+function discardRestoredHistory() {
+  timeline.replaceChildren();
+  state.seen.clear();
+  state.messagesById.clear();
+  state.cursor = 0;
+  state.backupCursor = 0;
+  state.lastMessageTs = null;
+  try {
+    window.localStorage.removeItem(BACKUP_PREFIX + (state.roomName || "room"));
+  } catch {
+    // Nothing to do: the in-memory reset above is what matters.
+  }
 }
 
 async function pollMessages() {
@@ -662,6 +817,16 @@ async function pollMessages() {
     bridgeHistoryToDashboard(fresh);
     updateLastMessage();
     state.cursor = payload.next_since_id;
+    if (state.seedUnverified) {
+      state.seedUnverified = false;
+      // Only an empty first poll is ambiguous; anything returned proves the room's
+      // ids already run past the restored cursor.
+      if (payload.messages.length === 0 && !(await verifyRestoredHead())) {
+        state.pollInFlight = false;
+        await pollMessages();
+        return;
+      }
+    }
     emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
     if (state.roomStatus === "closed") {
       finalizeClosedRoom();
@@ -1271,15 +1436,32 @@ function participantStatusText(participant) {
   return state;
 }
 
-function renderMessage(message) {
+function renderMessage(message, options = {}) {
+  const restoredRow = options.restored === true;
   // Record a minimal from/text preview so a later message carrying reply_to can
   // show its replied-to context, even for a message rendered earlier (#113).
-  state.messagesById.set(message.id, { from: labelFor(message.from), text: message.text });
+  //
+  // Restored records do not take part in this at all (#278). Marking the ROW is
+  // not enough when its data flows onward: what this map feeds renders inside a
+  // *live* row, which carries no restored marking, so a hand-edited alias would be
+  // laundered — roster-resolved on the way in — into a line the host really served.
+  // Sanitising each consumer would leave the next one to be written unguarded, so
+  // the restored record never enters the map, and a live reply to an id only this
+  // device holds falls back to the existing `↩ replying to #n`.
+  if (!restoredRow) state.messagesById.set(message.id, { from: labelFor(message.from), text: message.text });
 
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
+  // #278: a row restored from this device's backup is marked as such, so nothing
+  // read back out of local storage can present itself as a line the host just
+  // served — including a hand-edited entry claiming to be from the host or system.
+  if (options.restored === true) item.dataset.restored = "true";
   if (message.type === "status") item.classList.add("broadcast");
-  if (state.profile && message.from === state.profile.alias) item.classList.add("own");
+  // A restored row never wears another participant's presentation — including the
+  // viewer's own (#278, @re2). `own` is claimed from the stored `from`, so a
+  // hand-edited record naming the viewer would otherwise render as something they
+  // sent themselves.
+  if (!restoredRow && state.profile && message.from === state.profile.alias) item.classList.add("own");
   item.dataset.messageId = String(message.id);
 
   const time = document.createElement("time");
@@ -1317,13 +1499,19 @@ function renderMessage(message) {
 
   const from = document.createElement("div");
   from.className = "message-from";
-  from.textContent = state.participantLabels.get(message.from) || message.from;
-  const senderKind = state.participantKinds.get(message.from) || "human";
+  // #278: a restored row carries a FIXED local provenance label and never its
+  // stored sender. The alias in the backup is attacker-controlled — anything with
+  // script access to this origin can edit that store — so displaying it at all lets
+  // a hand-edited record read as "the host said this", which no neutral styling
+  // undoes. The stored alias therefore does not reach the DOM; what the row asserts
+  // is only what this device can actually vouch for: that it holds this text.
+  from.textContent = restoredRow ? RESTORED_SENDER_LABEL : state.participantLabels.get(message.from) || message.from;
+  const senderKind = restoredRow ? "restored" : state.participantKinds.get(message.from) || "human";
   from.dataset.kind = senderKind;
 
   const avatar = document.createElement("div");
-  avatar.className = `message-avatar ${senderKind === "agent" ? "agent" : "human"}`;
-  avatar.textContent = initialsFor(state.participantLabels.get(message.from) || message.from);
+  avatar.className = `message-avatar ${restoredRow ? "restored" : senderKind === "agent" ? "agent" : "human"}`;
+  avatar.textContent = restoredRow ? "·" : initialsFor(state.participantLabels.get(message.from) || message.from);
 
   const text = document.createElement("div");
   text.className = "message-text";
@@ -1342,17 +1530,21 @@ function renderMessage(message) {
 
   // Discoverable per-message reply action (#113): a visible button (also
   // keyboard-focusable) that sets the composer reply target. Double-click still
-  // works as a shortcut.
-  const actions = document.createElement("div");
-  actions.className = "message-actions";
-  const replyBtn = document.createElement("button");
-  replyBtn.type = "button";
-  replyBtn.className = "reply-btn";
-  replyBtn.textContent = "↩ Reply";
-  replyBtn.setAttribute("aria-label", `Reply to ${state.participantLabels.get(message.from) || message.from} #${message.id}`);
-  replyBtn.addEventListener("click", () => setReply(message));
-  actions.append(replyBtn);
-  meta.append(actions);
+  // works as a shortcut. A restored row carries neither (#278): both name an
+  // author — the button in its `aria-label`, the composer in its indicator — and
+  // the only alias they could name is the stored one.
+  if (!restoredRow) {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    const replyBtn = document.createElement("button");
+    replyBtn.type = "button";
+    replyBtn.className = "reply-btn";
+    replyBtn.textContent = "↩ Reply";
+    replyBtn.setAttribute("aria-label", `Reply to ${state.participantLabels.get(message.from) || message.from} #${message.id}`);
+    replyBtn.addEventListener("click", () => setReply(message));
+    actions.append(replyBtn);
+    meta.append(actions);
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
@@ -1369,7 +1561,7 @@ function renderMessage(message) {
   }
   bubble.append(text);
 
-  item.addEventListener("dblclick", () => setReply(message));
+  if (!restoredRow) item.addEventListener("dblclick", () => setReply(message));
   item.dataset.senderKind = senderKind;
   item.append(avatar, bubble);
   timeline.append(item);

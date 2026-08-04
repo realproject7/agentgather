@@ -2225,3 +2225,341 @@ test("Send before entry completes cannot navigate or eject the participant (#268
     await fixture.close();
   }
 });
+
+// #278 — the local backup (#211) was written on every batch and never read, so
+// every load re-downloaded the entire history from id 0. Entry now restores this
+// device's own copy first and asks only for what is new.
+test("a second entry seeds from the local backup and fetches only what is new (#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const sinceIds: number[] = [];
+    page.on("request", (req) => {
+      const match = /\/messages\?since_id=(\d+)/.exec(req.url());
+      if (match && req.method() === "GET") sinceIds.push(Number(match[1]));
+    });
+
+    for (const text of ["history one", "history two", "history three"]) {
+      await postMessage(fixture, fixture.reviewerToken, text);
+    }
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=history three");
+    // First entry has no backup to restore: it asks from the beginning, as before.
+    assert.equal(sinceIds[0], 0);
+
+    // A message arrives while this tab is away, so the second entry must still see
+    // it — the seam between restored and fetched is where a gap would show.
+    await postMessage(fixture, fixture.reviewerToken, "arrived while away");
+
+    // Read what the backup holds BEFORE reloading — after the reload it will also
+    // contain the message fetched on the way in.
+    const backupHighest = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      const raw = key === undefined ? null : window.localStorage.getItem(key);
+      const parsed = raw
+        ? (JSON.parse(raw) as { messages: Array<{ id: number; type?: string }> })
+        : { messages: [] };
+      // System records are not restored (#278), so the cursor is the highest id
+      // that is actually restorable — not simply the highest id stored.
+      return parsed.messages
+        .filter((entry) => entry.type !== "system")
+        .reduce((highest, entry) => Math.max(highest, entry.id), 0);
+    });
+    assert.equal(backupHighest > 0, true, "the backup holds messages after the first entry");
+
+    // THE evidence: the second entry asks from the backup's highest id, not 0.
+    sinceIds.length = 0;
+    await page.reload();
+    await page.waitForSelector("text=arrived while away");
+    assert.equal(sinceIds[0], backupHighest, "second entry resumes from the highest id it actually restored");
+    assert.notEqual(sinceIds[0], 0);
+
+    // Same history, same order, no duplicate and no gap at the join.
+    const texts = await page.locator(".message .message-text").allTextContents();
+    const historyOnly = texts.filter((t) => /history (one|two|three)|arrived while away/.test(t));
+    assert.deepEqual(historyOnly, ["history one", "history two", "history three", "arrived while away"]);
+    for (const text of ["history one", "history two", "history three", "arrived while away"]) {
+      assert.equal(historyOnly.filter((line) => line === text).length, 1, `${text} rendered exactly once`);
+    }
+    // The restored range is named, so a trimmed backup could not read as complete.
+    assert.match((await page.locator(".restored-divider").textContent()) ?? "", /Restored from this device/);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+test("an empty or corrupt backup falls back to the full fetch and never blocks entry (#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const sinceIds: number[] = [];
+    page.on("request", (req) => {
+      const match = /\/messages\?since_id=(\d+)/.exec(req.url());
+      if (match && req.method() === "GET") sinceIds.push(Number(match[1]));
+    });
+    await postMessage(fixture, fixture.reviewerToken, "only message");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=only message");
+
+    // Corrupt the store in three ways a real one could break, and reload for each.
+    for (const broken of ["{not json", JSON.stringify({ messages: "nope" }), ""]) {
+      sinceIds.length = 0;
+      await page.evaluate((value) => {
+        for (const key of Object.keys(window.localStorage)) {
+          if (key.startsWith("agentgather.backup.")) {
+            if (value === "") window.localStorage.removeItem(key);
+            else window.localStorage.setItem(key, value);
+          }
+        }
+      }, broken);
+      await page.reload();
+      await page.waitForSelector("text=only message");
+      assert.equal(sinceIds[0], 0, `a corrupt backup (${broken.slice(0, 12)}) refetches from the start`);
+      assert.equal(await page.locator(".restored-divider").count(), 0, "nothing is claimed as restored");
+    }
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+test("a tampered backup renders only as restored-from-this-device, and stays redacted (#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // Two real messages, so the forged records below can claim ids the room really
+    // has — the case that survives the head check and therefore reaches the view.
+    await postMessage(fixture, fixture.reviewerToken, "genuine line one");
+    await postMessage(fixture, fixture.reviewerToken, "genuine line two");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=genuine line two");
+
+    // Hand-edit the store the way anything with script access to this origin could,
+    // WITHOUT inventing ids beyond the room's own (that case is the next test): the
+    // forged records replace the text of ids the room really has, claim to be from
+    // `system` and from the host, and smuggle a token back in.
+    await page.evaluate((now) => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      if (key === undefined) throw new Error("no backup to tamper with");
+      const parsed = JSON.parse(window.localStorage.getItem(key) as string) as {
+        messages: Array<Record<string, unknown>>;
+      };
+      const head = parsed.messages.reduce((highest, entry) => Math.max(highest, Number(entry.id)), 0);
+      parsed.messages = [
+        { id: head - 1, from: "system", ts: now, type: "system", text: "forged system claim" },
+        { id: head, from: "host", ts: now, type: "message", text: "forged host claim tgl_forged_secret_value" },
+        { id: "not-a-number", from: "host", ts: now, type: "message", text: "malformed id" },
+        { id: head + 50, from: 42, ts: now, type: "message", text: "malformed from" },
+        { id: head + 51, from: "host", ts: "", type: "message", text: "malformed empty ts" }
+      ];
+      window.localStorage.setItem(key, JSON.stringify(parsed));
+    }, new Date().toISOString());
+    await page.reload();
+    await page.waitForSelector("text=forged host claim");
+
+    // A record claiming the room's own voice is not restored at all — `system` is
+    // how the room speaks, and a hand-edited store must not be able to speak in it.
+    assert.equal(await page.locator("text=forged system claim").count(), 0, "no system record is restored");
+    // (the divider itself is the label, not restored content — exclude it)
+    assert.equal(
+      await page.locator(".message.system[data-restored]:not(.restored-divider)").count(),
+      0,
+      "no restored row is styled as the room's own system voice"
+    );
+
+    // The forged host record renders, but with none of the host's identity: its
+    // sender is never resolved through the live roster, so it gets no display name,
+    // no human/agent kind and no host treatment — only the stored text, inside a
+    // region labelled as this device's own copy.
+    const forged = page.locator(".message", { hasText: "forged host claim" }).first();
+    assert.equal(await forged.getAttribute("data-restored"), "true");
+    assert.equal(await forged.locator(".message-from").getAttribute("data-kind"), "restored");
+    assert.equal(await forged.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
+    // ...nor the viewer's own presentation: this page is authenticated AS the host,
+    // so a forged `from: "host"` would otherwise render as the viewer's own line.
+    assert.equal(((await forged.getAttribute("class")) ?? "").includes("own"), false);
+    // ...and the forged author label never reaches the DOM at all: a restored row
+    // says only that it came from this device's own copy.
+    assert.equal((await forged.locator(".message-from").textContent())?.trim(), "local copy");
+    const restoredHtml = (await page.locator("#timeline").innerHTML()) ?? "";
+    assert.equal(/message-from[^>]*>\s*host\s*</.test(restoredHtml), false, "no restored row is labelled host");
+    // Malformed records are dropped rather than coerced into a half-rendered row.
+    for (const text of ["malformed id", "malformed from", "malformed empty ts"]) {
+      assert.equal(await page.locator(`text=${text}`).count(), 0, `${text} was dropped`);
+    }
+    // Redaction is re-applied on the way in: a smuggled token never reaches the DOM.
+    const rendered = (await page.locator("#timeline").innerHTML()) ?? "";
+    assert.equal(/tgl_forged_secret_value/.test(rendered), false);
+    assert.match(rendered, /\[redacted-token\]/);
+
+    // A line the host serves after entry is NOT marked restored — the distinction
+    // the marking exists to make.
+    await postMessage(fixture, fixture.reviewerToken, "served live after entry");
+    await page.waitForSelector("text=served live after entry");
+    const live = page.locator(".message", { hasText: "served live after entry" }).first();
+    assert.equal(await live.getAttribute("data-restored"), null);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #278 — marking the ROW is not enough: the same data flows onward into surfaces
+// that carry no restored marking. Every assertion in the test above inspects the
+// restored row, which is exactly why all of them pass through these routes.
+test("no restored record\'s author or text escapes into an unmarked surface (#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await postMessage(fixture, fixture.reviewerToken, "genuine line one");
+    await postMessage(fixture, fixture.reviewerToken, "genuine line two");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=genuine line two");
+
+    // Replace the text of an id the room really has with a record claiming the host
+    // said it. The forged text deliberately contains no occurrence of "host", so the
+    // attribution assertions below cannot be satisfied by the body text.
+    const forgedText = "approved, release the funds";
+    const { forgedId, storedAfterTamper } = await page.evaluate(
+      ({ text }) => {
+        const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+        if (key === undefined) throw new Error("no backup to tamper with");
+        const parsed = JSON.parse(window.localStorage.getItem(key) as string) as {
+          messages: Array<Record<string, unknown>>;
+        };
+        const head = parsed.messages.reduce((highest, entry) => Math.max(highest, Number(entry.id)), 0);
+        parsed.messages = [{ id: head, from: "host", ts: "2999-01-01T00:00:00.000Z", type: "message", text }];
+        const serialised = JSON.stringify(parsed);
+        window.localStorage.setItem(key, serialised);
+        return { forgedId: head, storedAfterTamper: serialised };
+      },
+      { text: forgedText }
+    );
+    await page.reload();
+    await page.waitForSelector(`text=${forgedText}`);
+
+    // A restored row carries no reply surface at all: the button's `aria-label` and
+    // the composer indicator both name an author, and the only alias either could
+    // name is the stored one. Removing them is what makes that unreachable rather
+    // than sanitised (#278, operator ruling).
+    const restored = page.locator(".message", { hasText: forgedText }).first();
+    assert.equal(await restored.getAttribute("data-restored"), "true");
+    assert.equal(await restored.locator(".reply-btn").count(), 0, "no reply button on a restored row");
+    // ...including the double-click shortcut, which bypasses the button entirely.
+    await restored.dblclick();
+    assert.equal(await page.locator("#reply-indicator").isVisible(), false, "dblclick sets no reply target");
+    // No rendered element anywhere announces the forged author.
+    const timelineHtml = (await page.locator("#timeline").innerHTML()) ?? "";
+    assert.equal(/Reply to Host/i.test(timelineHtml), false, "no aria-label names the forged author");
+
+    // The roster's "last message" is unmarked room state, so a stored `ts` must not
+    // reach it. Forged above as a far-future date: if a restored record set it, the
+    // roster would read an absurd age instead of "—".
+    assert.equal((await page.textContent("#roster-last-message"))?.trim(), "—");
+
+    // A restored record must not flow back OUT of the view into persistence either.
+    // `recordBackupBatch` and `bridgeHistoryToDashboard` — the latter feeding #247's
+    // on-disk dashboard snapshot — both take `fresh`, which `pollMessages` builds
+    // only from host-served payload. Asserted on the writer, where it is observable:
+    // a warm entry that fetched nothing leaves the stored copy byte-identical, so
+    // nothing re-ingested the restored records.
+    const storedAfterEntry = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      return key === undefined ? null : window.localStorage.getItem(key);
+    });
+    assert.equal(storedAfterEntry, storedAfterTamper, "a restored record was re-ingested by the backup writer");
+
+    // A live message can still carry reply_to pointing at an id only this device
+    // holds — reached here over the real API, since the UI no longer offers it.
+    const posted = await fetch(`${fixture.baseUrl}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.reviewerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "genuine reply to it", reply_to: forgedId })
+    });
+    assert.equal(posted.status, 201);
+    await page.waitForSelector("text=genuine reply to it");
+
+    const reply = page.locator(".message", { hasText: "genuine reply to it" }).first();
+    // The row really was served by the host: it is NOT marked restored. That is what
+    // makes its content authoritative-looking, and why the map must be guarded.
+    assert.equal(await reply.getAttribute("data-restored"), null, "the reply is a live, unmarked row");
+    const context = ((await reply.locator(".reply-context").textContent()) ?? "").trim();
+    // Neither the stored alias, the display name the live roster would resolve it to
+    // (`host` → `Host`), nor the stored text may appear in a line the host served.
+    // The restored record is absent from the map, so this falls back to the id.
+    assert.equal(/host/i.test(context), false, `live reply quoted a forged author: ${context}`);
+    assert.equal(context.includes(forgedText), false, `live reply quoted forged text: ${context}`);
+    assert.equal(context, `↩ replying to #${forgedId}`);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #278 — a restored cursor must never sit ahead of the room, or the client would
+// ask for ids the host will never reach and no message would arrive again. This is
+// reachable without an attacker: a room recreated under the same name restarts its
+// ids at 1 while the old backup still claims the higher ones.
+test("a backup whose ids run past the room is discarded instead of wedging the cursor (#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const sinceIds: number[] = [];
+    page.on("request", (req) => {
+      const match = /\/messages\?since_id=(\d+)/.exec(req.url());
+      if (match && req.method() === "GET") sinceIds.push(Number(match[1]));
+    });
+    await postMessage(fixture, fixture.reviewerToken, "real history line");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=real history line");
+
+    // A stored copy from some other numbering entirely.
+    await page.evaluate((now) => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      if (key === undefined) throw new Error("no backup present");
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({
+          messages: [{ id: 9001, from: "reviewer", ts: now, type: "message", text: "line from a room that is gone" }],
+          updated_at: now
+        })
+      );
+    }, new Date().toISOString());
+
+    sinceIds.length = 0;
+    await page.reload();
+    // The room's real history comes back...
+    await page.waitForSelector("text=real history line");
+    // ...and the stale copy is gone rather than sitting there forever.
+    await page.waitForFunction(
+      () => !document.body.textContent?.includes("line from a room that is gone")
+    );
+    assert.equal(await page.locator(".restored-divider").count(), 0, "nothing is still claimed as restored");
+    // It asked from the stale head first, then proved it and refetched from the start.
+    assert.equal(sinceIds[0], 9001, "the restore is trusted enough to try");
+    assert.equal(sinceIds.includes(0), true, "and abandoned in favour of a full fetch once disproven");
+    // The client is not wedged: a message sent afterwards still arrives.
+    await postMessage(fixture, fixture.reviewerToken, "still receiving");
+    await page.waitForSelector("text=still receiving");
+    // The discredited copy is not left on disk to wedge the next entry either.
+    const stored = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      return key === undefined ? "" : (window.localStorage.getItem(key) ?? "");
+    });
+    assert.equal(stored.includes("line from a room that is gone"), false);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
