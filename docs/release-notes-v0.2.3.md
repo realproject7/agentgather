@@ -1,9 +1,7 @@
 # v0.2.3
 
-Range: `v0.2.2` (commit `9e15000`) → `main`. Twenty pull requests merged since v0.2.2;
-the audit that opened the most recent cycle (#238) is closed. #238 is the one
-claim here with no merge SHA — it is an audit parent issue, closed as completed
-2026-08-04 when its last child merged, and it never had a PR of its own.
+Range: `v0.2.2` (commit `9e15000`) → `main`. Twenty pull requests merged since
+v0.2.2.
 
 The headline for this release is not a feature. At the start of this cycle the
 project's own test suite could not finish — it hung indefinitely on `cli-room`
@@ -94,10 +92,12 @@ an authoritative empty history.
 - **#258** (`8711a7f`) — the full local suite could not finish at all: a test server closed
   without dropping its keep-alive connections held the runner open forever. 45
   close sites now go through one helper.
-- **#255** (`fd041e5`), **#264** (`581090d`) and **#270** (`2f150c4`) — browser and end-to-end tests were
-  synchronising on signals that did not mean the thing was ready, so they failed
-  by platform and by load rather than by behaviour. #270 closed the last of that
-  class, including a previously known-flaky test whose cause is now identified.
+- **#255** (`fd041e5`), **#264** (`581090d`) and **#270** (`2f150c4`) — browser
+  and end-to-end tests were synchronising on signals that did not mean the thing
+  was ready, so they failed by platform and by load rather than by behaviour.
+  The last of that class closed here, including a previously known-flaky test
+  whose cause is now identified.
+
 - **#261** (`97c9816`) — one exported helper replaces a filesystem predicate that had been
   copied to more than ten places.
 
