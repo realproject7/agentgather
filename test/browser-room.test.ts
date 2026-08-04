@@ -92,6 +92,13 @@ test("browser room joins with fragment token, sends, receives, and renders safel
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.waitForSelector("text=manual-ok");
     assert.equal(page.url(), `${fixture.baseUrl}/`);
@@ -185,6 +192,13 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.fill("#message-text", "@reviewer duplicate guard");
@@ -248,6 +262,13 @@ test("browser bare URL explains invite requirement and human token claims displa
     await page.waitForSelector("text=Invite link required");
 
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     const humanToken = `guest-${fixture.roomId}`;
@@ -333,6 +354,13 @@ test("browser reply affordance: per-message reply button, clearable composer ind
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // Seed a message to reply to.
@@ -381,6 +409,13 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await writeParticipants(fixture.root, fixture.roomId, [
@@ -457,6 +492,13 @@ test("composer broadcast mode sends an untargeted status message and resets to d
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.click("#broadcast-toggle");
@@ -482,6 +524,13 @@ test("composer autocompletes a partial @mention and warns on an unknown one with
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // Typing a partial @token offers matching participants; accepting completes it.
@@ -510,6 +559,13 @@ test("a join system line flips to 'now attending' once the participant is foregr
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // The reviewer joins → server emits "reviewer joined" and marks them attending.
@@ -539,6 +595,13 @@ test("host-offline mid-session falls back to a read-only local backup and recove
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await postMessage(fixture, fixture.hostToken, "backed-up hello");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.waitForSelector("text=backed-up hello");
 
@@ -582,6 +645,13 @@ test("a quota_exceeded response shows the public-route-paused banner (#84)", asy
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.route(/\/(messages|status)(\?|$)/, (route) =>
@@ -607,6 +677,13 @@ test("a closed room shows the host read-only history source and hides the compos
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await fetch(`${fixture.baseUrl}/close`, {
@@ -635,6 +712,13 @@ test("a closed room with an unreachable host log shows an explicit unavailable s
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // The host room ended remotely: /status reports closed and /messages fails
@@ -716,6 +800,13 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
     await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // #117 — fenced block renders a header with language label + copy affordance.
@@ -758,6 +849,13 @@ test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)"
     ]);
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector(".participant[data-host='true']");
 
     // the host row keeps its host role but is grouped + badged by its actual kind
@@ -823,6 +921,13 @@ test("code-block copy writes the raw body only (#120/#117)", async () => {
       });
     });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.click(".code-block .code-copy");
     // Only the raw code body is copied — not the "ts" language label or header.
@@ -849,6 +954,13 @@ test("code-block omits the copy button when no clipboard API is available (#120/
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.waitForSelector(".code-block .code-head .code-lang");
     assert.equal(await page.$$eval(".code-block .code-copy", (els) => els.length), 0);
@@ -864,6 +976,13 @@ test("last-message rail KV updates on the sender's own send (#121/#123)", async 
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     // No messages yet → the KV shows the empty-state dash.
     assert.equal((await page.textContent("#roster-last-message"))?.trim(), "—");
@@ -953,6 +1072,13 @@ test("the active-session banner renders a host-requested attendance policy and s
 
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("#session-banner:not([hidden])");
     assert.match((await page.textContent("#session-detail")) || "", /~45m expected · attendance agents-foreground/);
 
@@ -975,6 +1101,13 @@ test("markdown.js renders a hostile corpus inert — script tags, on* handlers, 
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // Drive the real shared renderer (src/browser/markdown.js) over a hostile corpus
@@ -1062,6 +1195,13 @@ test("the roster shows an honest wake-tier chip derived from effective_mode (#18
 
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.waitForFunction(
       () => document.querySelectorAll("#participant-list .participant").length >= 5
@@ -1125,6 +1265,13 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "default");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // Opt in: the click is the user gesture that grants permission (double → granted).
@@ -1170,6 +1317,13 @@ test("permission-denied degrades silently to the title badge with no OS notifica
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "denied");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.click("#notify-toggle");
@@ -1194,6 +1348,13 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "default");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.click("#notify-toggle");
     await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
@@ -1225,6 +1386,13 @@ test("a notification body never carries an invite URL or token from the message 
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "default");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.click("#notify-toggle");
     await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
@@ -1263,6 +1431,13 @@ test("a browser room join is recorded in the device-local 'Rooms I'm in' list, t
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // The successful join surfaces in the roster's "Rooms I'm in" section.
@@ -1394,6 +1569,13 @@ test("a direct room URL keeps the roster right panel in one independent scroll c
     // to exceed the column height.
     const page = await browser.newPage({ viewport: { width: 1180, height: 460 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // The host sees host controls (#212) inside the roster; all roster content
@@ -1442,6 +1624,13 @@ test("a browser join records the boardroom display title in Rooms I'm in, token-
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     const stored = await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"));
@@ -1477,6 +1666,13 @@ test("the local backup is bounded — oldest messages are dropped past the cap (
     }, key);
     await postMessage(fixture, fixture.hostToken, "newest-kept");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=newest-kept");
 
     const backup = await page.evaluate((k) => JSON.parse(window.localStorage.getItem(k) as string), key);
@@ -1497,6 +1693,13 @@ test("the local backup redacts tokens and card URLs before storing (#211)", asyn
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await postMessage(fixture, fixture.reviewerToken, "leak tgl_secret_abc123XYZ and https://host/card?token=tgl_zzz plus Bearer sk_live_qqq");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=leak");
 
     const stored = await page.evaluate(() => {
@@ -1518,6 +1721,13 @@ test("host offline with no cached messages shows an empty read-only backup (#211
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.route(/\/(messages|status)(\?|$)/, (route) =>
       route.fulfill({
@@ -1567,6 +1777,13 @@ test("ordered lists keep authored numbering across blank lines — ol.start / li
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
 
     // Drive the real shared renderer (src/browser/markdown.js) and read the
@@ -1759,6 +1976,13 @@ test("host rail auto-continue: host-only, off by default, opt-in enables the bou
 
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.waitForSelector("#host-controls:not([hidden])");
 
@@ -1859,6 +2083,13 @@ test("Send before entry completes cannot navigate or eject the participant (#268
 
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
+    // Record every main-frame navigation from here. A navigation is the defect,
+    // so it is asserted directly rather than inferred from a settling delay.
+    const navigations: string[] = [];
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
+
     // The composer is present and the Send button clickable while entry is still
     // in flight — this is the window the defect lives in.
     await page.waitForSelector("#send-button", { state: "visible" });
@@ -1869,23 +2100,47 @@ test("Send before entry completes cannot navigate or eject the participant (#268
 
     await page.fill("#message-text", "sent too early");
 
-    // (a) A click must not navigate.
+    // (a) A click must not navigate. The guard's own effect — the honest notice —
+    // is the synchronisation point, so this waits on a real event rather than a
+    // fixed delay. On base the click navigates instead and this wait fails.
+    // Race the fix's own end state against a navigation, both armed BEFORE the
+    // click so neither can fire unobserved. The refusal notice is the
+    // discriminator: `showEarlySendNotice` does not exist on base, so waiting on
+    // it cannot pass for the unfixed case — unlike a fixed deadline, which
+    // passes whenever the navigation merely has not happened yet.
+    const clickNavigated = page.waitForEvent("framenavigated").then(() => "navigated").catch(() => "navigated");
+    const clickNoticed = page
+      .waitForSelector("#send-error:not([hidden])")
+      .then(() => "noticed")
+      .catch(() => "timed-out");
     await page.click("#send-button");
-    await page.waitForTimeout(250);
+    assert.equal(await Promise.race([clickNoticed, clickNavigated]), "noticed", "clicking Send before entry navigated the page instead of refusing it");
     assert.equal(page.url(), urlDuringEntry, "clicking Send before entry navigated the page");
+    assert.deepEqual(navigations, [], "clicking Send before entry triggered a navigation");
     assert.equal(await page.locator("#auth-error").isVisible(), false, "the participant was ejected to the auth error");
-
-    // (b) Enter with the button focused must not submit either, whatever has focus.
-    await page.focus("#send-button");
-    await page.keyboard.press("Enter");
-    await page.waitForTimeout(250);
-    assert.equal(page.url(), urlDuringEntry, "Enter on the focused Send button navigated the page");
-    assert.equal(await page.locator("#auth-error").isVisible(), false);
 
     // The refusal is honest rather than silent, and token-free.
     const notice = await page.locator("#send-error").innerText();
     assert.match(notice, /still joining/i);
     assert.doesNotMatch(notice, /tgl_|Bearer|#token=|http/);
+
+    // (b) Enter with the button focused must not submit either, whatever has
+    // focus. Hide the notice first so its reappearance is the positive signal.
+    await page.evaluate(() => {
+      const el = document.getElementById("send-error");
+      if (el) el.hidden = true;
+    });
+    await page.focus("#send-button");
+    const enterNavigated = page.waitForEvent("framenavigated").then(() => "navigated").catch(() => "navigated");
+    const enterNoticed = page
+      .waitForSelector("#send-error:not([hidden])")
+      .then(() => "noticed")
+      .catch(() => "timed-out");
+    await page.keyboard.press("Enter");
+    assert.equal(await Promise.race([enterNoticed, enterNavigated]), "noticed", "Enter on the focused Send button navigated instead of refusing");
+    assert.equal(page.url(), urlDuringEntry, "Enter on the focused Send button navigated the page");
+    assert.deepEqual(navigations, [], "Enter on the focused Send button triggered a navigation");
+    assert.equal(await page.locator("#auth-error").isVisible(), false);
 
     // Let entry finish; the room must be fully usable afterwards.
     // No unroute: the handler already passes every later /status straight
@@ -1907,6 +2162,7 @@ test("Send before entry completes cannot navigate or eject the participant (#268
 
     // And still no navigation from either.
     assert.equal(page.url(), urlDuringEntry, "sending after entry navigated the page");
+    assert.deepEqual(navigations, [], "sending after entry triggered a navigation");
   } finally {
     await browser.close();
     await fixture.close();
