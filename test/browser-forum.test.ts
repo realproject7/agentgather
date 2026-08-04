@@ -40,7 +40,9 @@ const mkP = (alias: string, kind: Participant["kind"], token: string, extra: Par
   ...extra
 });
 
-async function startFixture(): Promise<{ baseUrl: string; hostToken: string; close: () => Promise<void> }> {
+async function startFixture(
+  options: { postBody?: string; commentBody?: string } = {}
+): Promise<{ baseUrl: string; hostToken: string; close: () => Promise<void> }> {
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-forumui-"));
   const hostToken = "tgl_host";
   await createRoom({ root, roomId: "demo", hostAlias: "host" });
@@ -59,11 +61,14 @@ async function startFixture(): Promise<{ baseUrl: string; hostToken: string; clo
     id: "rfc-1",
     author: "host",
     title: "Forum post layout — single column vs split",
-    body: "## Proposal\nUse a **two-pane split**.\n\n```ts\nconst kit = true;\n```",
+    body: options.postBody ?? "## Proposal\nUse a **two-pane split**.\n\n```ts\nconst kit = true;\n```",
     status: "open",
     tags: ["ux", "forum"]
   });
-  await addForumComment(root, "demo", "design-forum", "rfc-1", { author: "reviewer", body: "Confirmed — reuses the safe renderer." });
+  await addForumComment(root, "demo", "design-forum", "rfc-1", {
+    author: "reviewer",
+    body: options.commentBody ?? "Confirmed — reuses the safe renderer."
+  });
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
@@ -228,6 +233,57 @@ test("forum disables new-post/comment when the host is offline (#211)", async ()
     assert.match((await page.locator("#forum-offline").textContent()) ?? "", /read-only|can't be sent/i);
     await page.waitForFunction(() => (document.getElementById("new-post") as HTMLButtonElement).disabled === true);
     assert.equal(await page.locator("#comment-text").isDisabled(), true);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+// #250: the forum body and comment views reuse the shared renderer, so the
+// ordered-list ordinal fix must hold on both paths — a loose 1/2/3 stays one
+// list, and a non-1 start survives in a comment.
+test("forum body and comments keep authored ordered-list numbering across blank lines (#250)", { timeout: 120_000 }, async () => {
+  const fixture = await startFixture({
+    postBody: "## Steps\n1. draft\n\n2. review\n\n3. ship",
+    commentBody: "4. verify\n\n6. merge"
+  });
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum#token=${fixture.hostToken}`);
+    await page.waitForSelector(".forum-shell[data-view='feed']");
+    await page.click(".row");
+    await page.waitForSelector(".forum-shell[data-view='thread']");
+    await page.waitForSelector("#detail-body ol");
+    await page.waitForSelector(".cmt .md ol");
+
+    const rendered = await page.evaluate(() => {
+      const read = (selector: string) =>
+        Array.from(document.querySelectorAll(selector)).map((ol) => ({
+          start: (ol as HTMLOListElement).start,
+          items: Array.from(ol.children).map((li) => ({
+            text: li.textContent || "",
+            value: li.getAttribute("value")
+          }))
+        }));
+      return { body: read("#detail-body ol"), comment: read(".cmt .md ol") };
+    });
+
+    // Post body: blank-line-separated 1/2/3 is ONE list starting at 1.
+    assert.equal(rendered.body.length, 1, "the post body renders one ordered list");
+    assert.equal(rendered.body[0]?.start, 1);
+    assert.deepEqual(rendered.body[0]?.items.map((item) => item.text), ["draft", "review", "ship"]);
+    assert.deepEqual(rendered.body[0]?.items.map((item) => item.value), [null, null, null]);
+
+    // Comment: a non-1 start survives, and the authored 4 → 6 jump is kept.
+    assert.equal(rendered.comment.length, 1, "the comment renders one ordered list");
+    assert.equal(rendered.comment[0]?.start, 4);
+    assert.deepEqual(rendered.comment[0]?.items.map((item) => item.text), ["verify", "merge"]);
+    assert.deepEqual(rendered.comment[0]?.items.map((item) => item.value), [null, "6"]);
+
+    // The renderer stays DOM-only on both forum paths.
+    assert.equal(await page.locator("#detail-body script").count(), 0);
+    assert.equal(await page.locator(".cmt .md script").count(), 0);
   } finally {
     await browser.close();
     await fixture.close();

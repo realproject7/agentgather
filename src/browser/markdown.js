@@ -5,6 +5,12 @@
 // are restricted to http(s)/mailto. Mention highlighting is opt-in via
 // options.mentions (a Set of aliases) so non-room surfaces can omit it.
 
+// Simple list items. The ordered pattern captures the authored ordinal (#250)
+// so the renderer can preserve it through ol.start / li.value instead of
+// discarding it and letting the browser restart every list at 1.
+const ORDERED_ITEM = /^(\d+)\.\s+(.+)$/;
+const UNORDERED_ITEM = /^[-*]\s+(.+)$/;
+
 export function renderSafeMarkdown(parent, markdown, options = {}) {
   const mentions = options.mentions;
   parent.replaceChildren();
@@ -56,16 +62,38 @@ export function renderSafeMarkdown(parent, markdown, options = {}) {
       parent.append(blockquote);
       continue;
     }
-    const unordered = /^[-*]\s+(.+)$/.exec(line);
-    const ordered = /^\d+\.\s+(.+)$/.exec(line);
+    const unordered = UNORDERED_ITEM.exec(line);
+    const ordered = ORDERED_ITEM.exec(line);
     if (unordered || ordered) {
       const list = document.createElement(ordered ? "ol" : "ul");
-      const pattern = ordered ? /^\d+\.\s+(.+)$/ : /^[-*]\s+(.+)$/;
+      const pattern = ordered ? ORDERED_ITEM : UNORDERED_ITEM;
+      // Ordinal the next item would carry if the author kept counting by one.
+      let expected = null;
       while (cursor < lines.length) {
         const match = pattern.exec(lines[cursor]);
-        if (!match) break;
+        if (!match) {
+          // #250: one or more blank lines keep a loose ORDERED list open, but
+          // only when the next non-empty line is another ordered marker. Any
+          // other block — a different list kind, heading, quote, fence,
+          // paragraph, or end of input — still ends the list here.
+          if (!ordered || lines[cursor].trim() !== "") break;
+          let lookahead = cursor;
+          while (lookahead < lines.length && lines[lookahead].trim() === "") lookahead += 1;
+          if (lookahead >= lines.length || !pattern.test(lines[lookahead])) break;
+          cursor = lookahead;
+          continue;
+        }
         const item = document.createElement("li");
-        appendInlineMarkdown(item, match[1], mentions);
+        if (ordered) {
+          // Retain the authored ordinal: the first through ol.start, and any
+          // later marker that breaks the run through li.value, so a deliberate
+          // discontinuity (1. then 3.) is never silently renumbered.
+          const ordinal = Number(match[1]);
+          if (expected === null) list.start = ordinal;
+          else if (ordinal !== expected) item.value = ordinal;
+          expected = ordinal + 1;
+        }
+        appendInlineMarkdown(item, ordered ? match[2] : match[1], mentions);
         list.append(item);
         cursor += 1;
       }
