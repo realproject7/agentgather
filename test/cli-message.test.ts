@@ -14,7 +14,7 @@ import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } f
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runWatchCommand } from "../src/cli/commands/watch/index.js";
 import { readMessages } from "../src/storage/index.js";
-import { createRoomHttpServer } from "../src/server/index.js";
+import { startRoomServerFixture } from "./support/room-fixture.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -107,17 +107,8 @@ async function startRoomFixture(): Promise<{
   await runRoomCommand(["invite", "reviewer", "--show-token", "--json"], context);
   const invite = stdout.json<{ token: string }>();
 
-  const server = createRoomHttpServer({
-    root: context.home,
-    roomId: "message-room",
-    baseUrl: "http://127.0.0.1:0",
-    waitHoldMs: 30
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const roomServer = await startRoomServerFixture(context.home, "message-room", 30);
+  const baseUrl = roomServer.baseUrl;
   stdout.chunks = [];
   await runRoomCommand(["join", "message-room", "--alias", "operator", "--token", started.token, "--url", baseUrl], context);
   stdout.chunks = [];
@@ -128,13 +119,7 @@ async function startRoomFixture(): Promise<{
     baseUrl,
     hostToken: started.token,
     reviewerToken: invite.token,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+    close: roomServer.close
   };
 }
 

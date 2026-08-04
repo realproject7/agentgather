@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -42,12 +43,47 @@ async function makeContext(): Promise<{ context: CliContext; stdout: Capture; st
   };
 }
 
+// #254: a TCP listener this test owns that resets every connection. It gives the
+// CLI an unreachable room server — the condition these tests are about — without
+// aiming a token-bearing request at a port the test does not control. The
+// previous URLs (the product default port, and the discard port 9) both sent an
+// Authorization header to a process the suite had not started; on a machine
+// running `room serve` the doctor probe additionally made that foreign room
+// allocate a read-cursor directory.
+async function startUnreachableListener(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = createNetServer((socket) => {
+    socket.destroy();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      })
+  };
+}
+
 test("export writes a readable artifact without mutating source messages", async () => {
   const { context, stdout } = await makeContext();
+  const unreachable = await startUnreachableListener();
   await runRoomCommand(["start", "export-room", "--alias", "operator", "--show-token", "--json"], context);
   const started = stdout.json<{ token: string }>();
   stdout.chunks = [];
-  await runRoomCommand(["join", "export-room", "--alias", "operator", "--token", started.token, "--url", "http://127.0.0.1:9"], context);
+  try {
+    await runRoomCommand(
+      ["join", "export-room", "--alias", "operator", "--token", started.token, "--url", unreachable.baseUrl],
+      context
+    );
+  } finally {
+    await unreachable.close();
+  }
   await runRoomCommand(["invite", "reviewer"], context);
   await runSendCommand(["reviewer", "capture", "this"], context);
   const before = await readMessages(context.home, "export-room");
@@ -67,16 +103,24 @@ test("export writes a readable artifact without mutating source messages", async
 
 test("doctor reports actionable checks without dumping bearer tokens", async () => {
   const { context, stdout } = await makeContext();
-  await runRoomCommand(["start", "doctor-room", "--alias", "operator", "--show-token", "--json"], context);
-  const started = stdout.json<{ token: string }>();
+  const unreachable = await startUnreachableListener();
+  try {
+    await runRoomCommand(
+      ["start", "doctor-room", "--alias", "operator", "--show-token", "--url", unreachable.baseUrl, "--json"],
+      context
+    );
+    const started = stdout.json<{ token: string }>();
 
-  stdout.chunks = [];
-  const code = await runDoctorCommand(["--json"], context);
-  const report = stdout.json<{ ok: boolean; checks: Array<{ name: string; ok: boolean; message: string }> }>();
-  assert.equal(code, 1);
-  assert.equal(report.checks.some((check) => check.name === "room-server" && !check.ok), true);
-  assert.equal(JSON.stringify(report).includes(started.token), false);
+    stdout.chunks = [];
+    const code = await runDoctorCommand(["--json"], context);
+    const report = stdout.json<{ ok: boolean; checks: Array<{ name: string; ok: boolean; message: string }> }>();
+    assert.equal(code, 1);
+    assert.equal(report.checks.some((check) => check.name === "room-server" && !check.ok), true);
+    assert.equal(JSON.stringify(report).includes(started.token), false);
 
-  const tokenStore = path.join(context.home, "rooms", "doctor-room", "tokens.json");
-  assert.equal((await stat(tokenStore)).isFile(), true);
+    const tokenStore = path.join(context.home, "rooms", "doctor-room", "tokens.json");
+    assert.equal((await stat(tokenStore)).isFile(), true);
+  } finally {
+    await unreachable.close();
+  }
 });
