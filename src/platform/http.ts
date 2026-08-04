@@ -318,6 +318,37 @@ function resolveSnapshotCapability(value: unknown): { roomId: string; baseUrl: s
   return { roomId: grant.roomId, baseUrl: grant.baseUrl };
 }
 
+// Target for a room opened by its own URL, which holds no capability (#279).
+//
+// The room names itself, and that name is honoured ONLY when it sits under the very
+// origin the browser reports for this request — so a page can contribute history
+// for a room its own host serves, and for nothing else. `Origin` is set by the
+// browser and cannot be forged by page script, which is the same property the
+// capability provided. This grants no new reach: the row must still be tracked and
+// unarchived, checked by the caller both before the write and inside the writer
+// lock, so an untracked room remains untargetable by either path.
+function snapshotTargetFromOrigin(
+  baseUrl: unknown,
+  roomId: unknown,
+  origin: string | undefined
+): { roomId: string; baseUrl: string } | null {
+  if (typeof baseUrl !== "string" || baseUrl.length === 0) return null;
+  if (typeof roomId !== "string" || roomId.length === 0) return null;
+  if (typeof origin !== "string" || origin.length === 0) return null;
+  let claimed: URL;
+  let reported: URL;
+  try {
+    claimed = new URL(baseUrl);
+    reported = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (claimed.origin !== reported.origin) return null;
+  const canonical = sanitizeBaseUrl(baseUrl);
+  if (canonical === null) return null;
+  return { roomId, baseUrl: canonical };
+}
+
 function pruneSnapshotCapabilities(): void {
   const now = Date.now();
   for (const [capability, grant] of snapshotCapabilities) {
@@ -452,14 +483,23 @@ async function receiveJoinedHistoryRequest(
     sendJson(res, 403, { ok: false, error: "bad_origin", message: "history bridge is loopback-only" });
     return;
   }
-  let body: { capability?: unknown; messages?: unknown; forumPosts?: unknown };
+  let body: { capability?: unknown; baseUrl?: unknown; roomId?: unknown; messages?: unknown; forumPosts?: unknown };
   try {
     body = JSON.parse(await readRequestBody(req, SNAPSHOT_BODY_MAX_BYTES)) as typeof body;
   } catch {
     sendJson(res, 400, { ok: false, error: "invalid_body", message: "body must be JSON within the size limit" });
     return;
   }
-  const target = resolveSnapshotCapability(body.capability);
+  // A dashboard-opened room carries the capability this dashboard minted for it.
+  // A room opened by its own URL has none — that is why its history never arrived
+  // at all (#279) — so it names its own room, and the name is accepted only if it
+  // sits under the SAME origin the browser reports for this request. The caller
+  // still cannot steer the write outside the host that served it: `Origin` is set
+  // by the browser, not by page script.
+  const target =
+    body.capability === undefined || body.capability === null
+      ? snapshotTargetFromOrigin(body.baseUrl, body.roomId, req.headers.origin)
+      : resolveSnapshotCapability(body.capability);
   if (target === null) {
     sendJson(res, 403, { ok: false, error: "bad_capability", message: "unknown or expired bridge capability" });
     return;

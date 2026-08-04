@@ -692,3 +692,63 @@ test("the history bridge redacts every persisted field, including from/author, a
     await fixture.close();
   }
 });
+
+// #279 — a room opened by its own URL (invite link, bookmark) holds no capability,
+// which is why its history never reached the dashboard at all. It names its own
+// room instead, and the name is honoured only under the origin the browser reports.
+test("a capability-less room contributes history only for a room under its own origin (#279)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  await seedJoinedRoom(root, "other-room", "http://127.0.0.1:8");
+  const fixture = await startServer(root, "owner-1");
+  try {
+    // No capability at all — the direct-open case. Origin matches the room it names.
+    const accepted = await postJoinedHistory(
+      fixture.baseUrl,
+      roomBaseUrl,
+      JSON.stringify({
+        roomId: "snap-room",
+        baseUrl: roomBaseUrl,
+        messages: [{ id: 1, from: "project7", ts: "", type: "chat", text: "direct open landed" }]
+      })
+    );
+    assert.equal(accepted.status, 200);
+    const stored = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`)
+    ).json()) as { snapshot: { messages: Array<{ text: string }> } | null };
+    assert.equal(stored.snapshot?.messages[0]?.text, "direct open landed");
+
+    // The same request naming a room served by a DIFFERENT origin is refused: the
+    // browser sets Origin, so a page cannot reach past the host that served it.
+    const crossRoom = await postJoinedHistory(
+      fixture.baseUrl,
+      roomBaseUrl,
+      JSON.stringify({
+        roomId: "other-room",
+        baseUrl: "http://127.0.0.1:8",
+        messages: [{ id: 2, from: "project7", ts: "", type: "chat", text: "should not land" }]
+      })
+    );
+    assert.equal(crossRoom.status, 403);
+    const other = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=other-room&base_url=${encodeURIComponent("http://127.0.0.1:8")}`)
+    ).json()) as { snapshot: unknown };
+    assert.equal(other.snapshot, null, "a page cannot contribute history for another origin's room");
+
+    // An untracked room stays untargetable by this path too — the property the
+    // capability existed to give is not weakened by removing the capability.
+    const untracked = await postJoinedHistory(
+      fixture.baseUrl,
+      roomBaseUrl,
+      JSON.stringify({
+        roomId: "never-tracked",
+        baseUrl: roomBaseUrl,
+        messages: [{ id: 3, from: "project7", ts: "", type: "chat", text: "no row for this" }]
+      })
+    );
+    assert.equal(untracked.status, 404);
+  } finally {
+    await fixture.close();
+  }
+});
