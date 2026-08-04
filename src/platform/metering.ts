@@ -9,7 +9,7 @@
 
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { ensureSecureDir, withWriterLock, writeSecureFile } from "../storage/index.js";
+import { ensureSecureDir, isNotFoundError, withWriterLock, writeSecureFile } from "../storage/index.js";
 import { TunnelError, type BrokerMeter } from "../tunnel/index.js";
 
 export const METERED_DIMENSIONS = [
@@ -81,7 +81,7 @@ export function fileMeteringStore(root: string): MeteringStore {
     try {
       return JSON.parse(await readFile(fileFor(subject), "utf8")) as MeteringRecord;
     } catch (error) {
-      if (isNotFound(error)) return null;
+      if (isNotFoundError(error)) return null;
       throw error;
     }
   };
@@ -257,8 +257,4 @@ function assertSubject(subject: string): string {
     throw new Error("metering subject must be 1-128 chars of [A-Za-z0-9_-]");
   }
   return subject;
-}
-
-function isNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

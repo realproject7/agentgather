@@ -23,6 +23,7 @@ import {
   updateAttendancePolicy,
   updateLoopGuardPreference,
   upsertParticipant,
+  isNotFoundError,
   isValidAutoContinueDelay,
   ActiveSessionExistsError,
   AUTO_CONTINUE_DELAY_DEFAULT_S,
@@ -486,7 +487,7 @@ async function forumGuard<T>(fn: () => Promise<T>): Promise<T> {
   } catch (error) {
     if (error instanceof HttpError) throw error;
     const message = error instanceof Error ? error.message : "forum error";
-    const notFound = /not found/i.test(message) || (error instanceof Error && "code" in error && error.code === "ENOENT");
+    const notFound = /not found/i.test(message) || isNotFoundError(error);
     if (notFound) throw new HttpError(404, "forum_not_found", "forum post not found");
     throw new HttpError(400, "forum_error", message);
   }

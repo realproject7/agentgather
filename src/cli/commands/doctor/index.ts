@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { flagBoolean, parseArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
 import { currentPath, readCurrent, tokensPath } from "../../state.js";
-import { readRoomState, roomPaths } from "../../../storage/index.js";
+import { isNotFoundError, readRoomState, roomPaths } from "../../../storage/index.js";
 import { roomUrl } from "../../../protocol/index.js";
 
 interface Check {
@@ -47,7 +47,7 @@ async function readCurrentSafe(home: string): Promise<Awaited<ReturnType<typeof 
   try {
     return await readCurrent(home);
   } catch (error) {
-    if (isNotFound(error)) return null;
+    if (isNotFoundError(error)) return null;
     throw error;
   }
 }
@@ -57,7 +57,7 @@ async function fileCheck(name: string, file: string): Promise<Check> {
     await stat(file);
     return { name, ok: true, message: "present" };
   } catch (error) {
-    return { name, ok: false, message: isNotFound(error) ? "missing" : errorMessage(error) };
+    return { name, ok: false, message: isNotFoundError(error) ? "missing" : errorMessage(error) };
   }
 }
 
@@ -66,7 +66,7 @@ async function lockCheck(lockPath: string): Promise<Check> {
     await stat(lockPath);
     return { name: "writer-lock", ok: false, message: "lock file exists; another writer may be active or stale" };
   } catch (error) {
-    return { name: "writer-lock", ok: isNotFound(error), message: isNotFound(error) ? "clear" : errorMessage(error) };
+    return { name: "writer-lock", ok: isNotFoundError(error), message: isNotFoundError(error) ? "clear" : errorMessage(error) };
   }
 }
 
@@ -123,11 +123,7 @@ async function waitCheck(baseUrl: string, alias: string, token: string): Promise
   }
 }
 
-function isNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-

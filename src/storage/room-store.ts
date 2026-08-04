@@ -15,7 +15,7 @@ import {
 } from "../protocol/index.js";
 import { withWriterLock } from "./lock.js";
 import { roomPaths, type RoomPaths } from "./paths.js";
-import { appendSecureFile, createSecureFile, ensureSecureDir, writeSecureFile } from "./secure-fs.js";
+import { appendSecureFile, createSecureFile, ensureSecureDir, isNotFoundError, writeSecureFile } from "./secure-fs.js";
 
 export const MAX_BRIEF_LENGTH = 16_000;
 
@@ -596,8 +596,4 @@ async function readJsonLines<T>(path: string): Promise<T[]> {
 
 function cursorPath(paths: RoomPaths, alias: string): string {
   return path.join(paths.cursors, `${alias}.json`);
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

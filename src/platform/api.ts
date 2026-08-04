@@ -13,7 +13,7 @@ import {
 } from "./registry.js";
 import { resolveOwnerAccount, type PlatformOwnerQuery } from "./accounts.js";
 import type { ControlPlaneRoom, PublicChannel } from "./types.js";
-import { readBoardroom } from "../storage/index.js";
+import { isNotFoundError, readBoardroom } from "../storage/index.js";
 import { DEFAULT_CHANNEL_ID, DEFAULT_CHANNEL_NAME } from "../protocol/index.js";
 
 export interface PlatformApiResponse {
@@ -71,7 +71,7 @@ async function attachChannels(root: string, room: ControlPlaneRoom): Promise<Pub
     // legacy default, exactly as the host room server does at runtime. Only a
     // genuine "no store" (ENOENT) falls back; any other failure (e.g. a corrupt
     // store) is a real error and propagates as a 500 rather than being masked.
-    const isMissingStore = error instanceof Error && "code" in error && (error as { code?: unknown }).code === "ENOENT";
+    const isMissingStore = isNotFoundError(error);
     if (isMissingStore) {
       return { ...room, channels: [{ id: DEFAULT_CHANNEL_ID, name: DEFAULT_CHANNEL_NAME, type: "chat" }] };
     }
