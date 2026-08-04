@@ -2411,6 +2411,77 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
   }
 });
 
+// #278 — the row-level guard above only governs the restored row. The reply-context
+// map (#113) is a second path out of the backup, and what it feeds renders inside a
+// *live* row that carries no restored marking (@re2). Every assertion in the test
+// above inspects the restored row, which is exactly why they all pass through this.
+test("a forged backup author never reaches the reply context of a live message (#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await postMessage(fixture, fixture.reviewerToken, "genuine line one");
+    await postMessage(fixture, fixture.reviewerToken, "genuine line two");
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=genuine line two");
+
+    // Replace the text of an id the room really has with a record claiming the host
+    // said it. The forged text deliberately contains no occurrence of "host", so the
+    // attribution assertions below cannot be satisfied by the body text.
+    const forgedText = "approved, release the funds";
+    const forgedId = await page.evaluate(
+      ({ now, text }) => {
+        const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+        if (key === undefined) throw new Error("no backup to tamper with");
+        const parsed = JSON.parse(window.localStorage.getItem(key) as string) as {
+          messages: Array<Record<string, unknown>>;
+        };
+        const head = parsed.messages.reduce((highest, entry) => Math.max(highest, Number(entry.id)), 0);
+        parsed.messages = [{ id: head, from: "host", ts: now, type: "message", text }];
+        window.localStorage.setItem(key, JSON.stringify(parsed));
+        return head;
+      },
+      { now: new Date().toISOString(), text: forgedText }
+    );
+    await page.reload();
+    await page.waitForSelector(`text=${forgedText}`);
+
+    // The composer names an author too. Pressing Reply on the restored row must not
+    // put the forged alias — or its roster-resolved display name — into that label.
+    await page.locator(".message", { hasText: forgedText }).first().locator(".reply-btn").click();
+    await page.waitForSelector("#reply-indicator", { state: "visible" });
+    const indicator = await page.locator("#reply-indicator-label").innerText();
+    assert.equal(/host/i.test(indicator), false, `composer named a forged author: ${indicator}`);
+    assert.match(indicator, /^Replying to local copy #\d+$/);
+    await page.click("#reply-clear");
+
+    // Another participant replies to that id over the real API — the one-click path
+    // a user walks themselves by pressing Reply on a restored row.
+    const posted = await fetch(`${fixture.baseUrl}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.reviewerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "genuine reply to it", reply_to: forgedId })
+    });
+    assert.equal(posted.status, 201);
+    await page.waitForSelector("text=genuine reply to it");
+
+    const reply = page.locator(".message", { hasText: "genuine reply to it" }).first();
+    // The row really was served by the host: it is NOT marked restored. That is what
+    // makes its content authoritative-looking, and why the map must be guarded.
+    assert.equal(await reply.getAttribute("data-restored"), null, "the reply is a live, unmarked row");
+    const context = ((await reply.locator(".reply-context").textContent()) ?? "").trim();
+    const attribution = context.slice(0, context.indexOf(":"));
+    // Neither the stored alias nor the display name the live roster would resolve it
+    // to (`host` → `Host`) may appear in a line the host itself served.
+    assert.equal(/host/i.test(attribution), false, `live reply quoted a forged author: ${context}`);
+    assert.match(context, /^↩ local copy:/);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
 // #278 — a restored cursor must never sit ahead of the room, or the client would
 // ask for ids the host will never reach and no message would arrive again. This is
 // reachable without an attacker: a room recreated under the same name restarts its

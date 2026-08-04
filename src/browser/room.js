@@ -1432,11 +1432,18 @@ function participantStatusText(participant) {
 }
 
 function renderMessage(message, options = {}) {
+  const restoredRow = options.restored === true;
   // Record a minimal from/text preview so a later message carrying reply_to can
   // show its replied-to context, even for a message rendered earlier (#113).
-  state.messagesById.set(message.id, { from: labelFor(message.from), text: message.text });
+  // A restored row's stored alias must never enter this map (#278, @re2): the
+  // reply context it feeds renders inside a *live* row, which carries no restored
+  // marking, so a hand-edited author would be laundered into a line the host
+  // really served — and resolved through the live roster on the way in.
+  state.messagesById.set(message.id, {
+    from: restoredRow ? RESTORED_SENDER_LABEL : labelFor(message.from),
+    text: message.text,
+  });
 
-  const restoredRow = options.restored === true;
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
   // #278: a row restored from this device's backup is marked as such, so nothing
@@ -1566,7 +1573,12 @@ function setReply(message) {
   state.replyTo = message.id;
   clearPendingSendIfTextChanged();
   replyIndicator.hidden = false;
-  replyIndicatorLabel.textContent = `Replying to ${labelFor(message.from)} #${message.id}`;
+  // Attribution comes from the reply-context map, never from the raw `from` (#278):
+  // that map is where a restored row's stored alias has already been replaced with
+  // this device's own label, so every surface that names an author agrees, and a
+  // hand-edited alias cannot reach the composer either.
+  const label = state.messagesById.get(message.id)?.from ?? labelFor(message.from);
+  replyIndicatorLabel.textContent = `Replying to ${label} #${message.id}`;
   messageText.focus();
 }
 
