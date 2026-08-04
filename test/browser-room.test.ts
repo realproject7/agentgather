@@ -1536,3 +1536,211 @@ test("host offline with no cached messages shows an empty read-only backup (#211
     await fixture.close();
   }
 });
+
+// #250: the shared renderer discarded each ordered marker's ordinal and ended
+// the list at the first blank line, so `1.` / blank / `2.` rendered as three
+// lists each restarting at 1. Ordinals now survive through ol.start and
+// li.value, and blank lines keep a loose ORDERED list open.
+type OrderedList = { start: number; items: Array<{ text: string; value: string | null }> };
+type RenderedCase = {
+  olCount: number;
+  ulCount: number;
+  pCount: number;
+  headingCount: number;
+  quoteCount: number;
+  codeCount: number;
+  scriptCount: number;
+  lists: OrderedList[];
+};
+
+function soleList(rendered: RenderedCase, label: string): OrderedList {
+  assert.equal(rendered.olCount, 1, `${label}: expected exactly one <ol>`);
+  const list = rendered.lists[0];
+  assert.ok(list, `${label}: missing the rendered list`);
+  return list;
+}
+
+const values = (list: OrderedList): Array<string | null> => list.items.map((item) => item.value);
+const texts = (list: OrderedList): string[] => list.items.map((item) => item.text);
+
+test("ordered lists keep authored numbering across blank lines — ol.start / li.value (#250)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+
+    // Drive the real shared renderer (src/browser/markdown.js) and read the
+    // semantic DOM it produces — ol.start and the li value attribute are what
+    // the HTML spec says determine the visible marker.
+    const cases = await page.evaluate(async () => {
+      const spec = `./${"markdown"}.js`;
+      const mod = (await import(spec)) as { renderSafeMarkdown: (parent: Element, md: string, opts: object) => void };
+      const render = (markdown: string) => {
+        const host = document.createElement("div");
+        mod.renderSafeMarkdown(host, markdown, {});
+        return {
+          olCount: host.querySelectorAll("ol").length,
+          ulCount: host.querySelectorAll("ul").length,
+          pCount: host.querySelectorAll("p").length,
+          headingCount: host.querySelectorAll("h1, h2, h3").length,
+          quoteCount: host.querySelectorAll("blockquote").length,
+          codeCount: host.querySelectorAll(".code-block").length,
+          scriptCount: host.querySelectorAll("script").length,
+          lists: Array.from(host.querySelectorAll("ol")).map((ol) => ({
+            start: ol.start,
+            items: Array.from(ol.children).map((li) => ({
+              text: li.textContent || "",
+              value: li.getAttribute("value")
+            }))
+          }))
+        };
+      };
+      return {
+        contiguous: render("1. one\n2. two\n3. three"),
+        loose: render("1. one\n\n2. two\n\n3. three"),
+        looseWideGap: render("1. one\n\n\n\n2. two"),
+        nonOneStart: render("4. four\n5. five"),
+        looseNonOneStart: render("4. four\n\n5. five"),
+        discontinuity: render("1. one\n3. three"),
+        looseDiscontinuity: render("1. one\n\n3. three"),
+        unorderedLoose: render("- alpha\n\n- beta"),
+        boundaryHeading: render("1. one\n\n## Heading\n\n2. two"),
+        boundaryParagraph: render("1. one\n\nplain paragraph\n\n2. two"),
+        boundaryUnordered: render("1. one\n\n- bullet"),
+        boundaryQuote: render("1. one\n\n> quoted"),
+        boundaryFence: render("1. one\n\n```ts\nconst x = 1;\n```"),
+        trailingBlank: render("1. one\n\n"),
+        hostile: render("1. <script>window.__mdOrdinalXss = 1</script>\n\n2. <img src=x onerror=\"window.__mdOrdinalXss = 2\">")
+      };
+    });
+
+    // Contiguous 1/2/3 still renders as one list starting at 1, with no
+    // redundant per-item values.
+    const contiguous = soleList(cases.contiguous, "contiguous");
+    assert.equal(contiguous.start, 1);
+    assert.deepEqual(texts(contiguous), ["one", "two", "three"]);
+    assert.deepEqual(values(contiguous), [null, null, null]);
+
+    // THE REGRESSION: blank-line-separated 1/2/3 is ONE list numbered 1,2,3 —
+    // not three lists each restarting at 1.
+    const loose = soleList(cases.loose, "loose");
+    assert.equal(loose.start, 1);
+    assert.deepEqual(texts(loose), ["one", "two", "three"]);
+    assert.deepEqual(values(loose), [null, null, null]);
+
+    // More than one blank line between items is still the same list.
+    const looseWide = soleList(cases.looseWideGap, "looseWideGap");
+    assert.equal(looseWide.items.length, 2);
+    assert.equal(looseWide.start, 1);
+
+    // A non-1 start is preserved rather than normalized to 1.
+    const nonOne = soleList(cases.nonOneStart, "nonOneStart");
+    assert.equal(nonOne.start, 4);
+    assert.deepEqual(texts(nonOne), ["four", "five"]);
+    assert.deepEqual(values(nonOne), [null, null]);
+    const looseNonOne = soleList(cases.looseNonOneStart, "looseNonOneStart");
+    assert.equal(looseNonOne.start, 4);
+    assert.equal(looseNonOne.items.length, 2);
+
+    // An intentional discontinuity (1. then 3.) is carried on the item, not
+    // silently renumbered to 2.
+    const gap = soleList(cases.discontinuity, "discontinuity");
+    assert.equal(gap.start, 1);
+    assert.deepEqual(values(gap), [null, "3"]);
+    const looseGap = soleList(cases.looseDiscontinuity, "looseDiscontinuity");
+    assert.equal(looseGap.start, 1);
+    assert.deepEqual(texts(looseGap), ["one", "three"]);
+    assert.deepEqual(values(looseGap), [null, "3"]);
+
+    // Unordered lists are untouched: a blank line still ends them (#250 scope
+    // is ordered lists only).
+    assert.equal(cases.unorderedLoose.ulCount, 2, "blank-line-separated bullets still split");
+    assert.equal(cases.unorderedLoose.olCount, 0);
+
+    // Unrelated blocks must never be absorbed into the list.
+    assert.equal(cases.boundaryHeading.olCount, 2, "a heading ends the list");
+    assert.equal(cases.boundaryHeading.headingCount, 1);
+    assert.equal(cases.boundaryHeading.lists[1]?.start, 2, "the list after the heading keeps its own ordinal");
+    assert.equal(cases.boundaryParagraph.olCount, 2, "a paragraph ends the list");
+    assert.equal(cases.boundaryParagraph.pCount, 1);
+    assert.equal(cases.boundaryUnordered.olCount, 1, "a different list kind ends the list");
+    assert.equal(cases.boundaryUnordered.ulCount, 1);
+    assert.equal(cases.boundaryQuote.olCount, 1, "a quote ends the list");
+    assert.equal(cases.boundaryQuote.quoteCount, 1);
+    assert.equal(cases.boundaryFence.olCount, 1, "a code fence ends the list");
+    assert.equal(cases.boundaryFence.codeCount, 1);
+    assert.equal(soleList(cases.trailingBlank, "trailingBlank").items.length, 1, "trailing blank lines end the list");
+
+    // Ordinal handling did not open a markup hole: hostile item bodies stay inert.
+    assert.equal(cases.hostile.scriptCount, 0, "no <script> node from a list item");
+    assert.equal(cases.hostile.olCount, 1);
+    assert.equal(await page.evaluate(() => (window as Window & { __mdOrdinalXss?: unknown }).__mdOrdinalXss), undefined);
+
+    // Room timeline path — the same renderer through a real posted message.
+    await postMessage(fixture, fixture.reviewerToken, "1. one\n\n2. two\n\n3. three");
+    await page.waitForSelector(".message-text ol");
+    const timeline = await page.evaluate(() => {
+      const lists = Array.from(document.querySelectorAll(".message-text ol"));
+      return lists.map((ol) => ({
+        start: (ol as HTMLOListElement).start,
+        items: Array.from(ol.children).map((li) => ({
+          text: li.textContent || "",
+          value: li.getAttribute("value")
+        }))
+      }));
+    });
+    assert.equal(timeline.length, 1, "the timeline message renders one ordered list");
+    assert.equal(timeline[0]?.start, 1);
+    assert.deepEqual(timeline[0]?.items.map((item) => item.text), ["one", "two", "three"]);
+
+    // Room Brief path — loose list, a paragraph boundary, a non-1 start, and a
+    // deliberate discontinuity in one authored brief.
+    const brief = [
+      "## Steps",
+      "1. first",
+      "",
+      "2. second",
+      "",
+      "3. third",
+      "",
+      "Resuming later:",
+      "",
+      "4. fourth",
+      "",
+      "5. fifth",
+      "",
+      "Skipped a number on purpose:",
+      "",
+      "1. alpha",
+      "3. gamma"
+    ].join("\n");
+    const briefResponse = await fetch(`${fixture.baseUrl}/brief`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.hostToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ body: brief })
+    });
+    assert.equal(briefResponse.status, 200);
+    await page.click("#brief-refresh");
+    await page.click("#brief-open");
+    await page.waitForSelector("#brief-body ol");
+    const briefLists = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("#brief-body ol")).map((ol) => ({
+        start: (ol as HTMLOListElement).start,
+        items: Array.from(ol.children).map((li) => ({
+          text: li.textContent || "",
+          value: li.getAttribute("value")
+        }))
+      }))
+    );
+    assert.equal(briefLists.length, 3, "the brief keeps three distinct ordered lists");
+    assert.deepEqual(briefLists.map((list) => list.start), [1, 4, 1]);
+    assert.deepEqual(briefLists[0]?.items.map((item) => item.text), ["first", "second", "third"]);
+    assert.deepEqual(briefLists[1]?.items.map((item) => item.text), ["fourth", "fifth"]);
+    assert.deepEqual(briefLists[2]?.items.map((item) => item.value), [null, "3"]);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
