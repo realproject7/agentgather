@@ -180,7 +180,14 @@ async function sendRoomMessages(
   let messages;
   try {
     messages = (await readMessages(options.root, roomId)).filter((message) => message.id > sinceId);
-  } catch {
+  } catch (error) {
+    // #242: only a genuinely ABSENT host log is the expected offline condition
+    // (e.g. a remote host whose log this device does not hold) — that keeps the
+    // token-free empty timeline. Any other failure (corrupt JSONL, permission
+    // denied, I/O error) is a real local fault: rethrow so it takes the
+    // established server-error path instead of being presented as an
+    // authoritative empty history. The error itself is never echoed back.
+    if (!isMissingHostLogError(error)) throw error;
     // The room is registered but its host log is not present locally (e.g. a
     // remote host): report an empty, offline timeline rather than failing.
     sendJson(res, 200, { ok: true, messages: [], next_since_id: sinceId, host_log_available: false });
@@ -818,6 +825,16 @@ async function sendAsset(res: ServerResponse, file: string, contentType: string)
   const body = await readFile(new URL(`../browser/${file}`, import.meta.url));
   res.writeHead(200, { "content-type": contentType, "content-length": body.byteLength });
   res.end(body);
+}
+
+// #242: narrow classifier for "the host log is simply not here". Deliberately
+// only ENOENT — the same test the storage layer uses for a missing file — so
+// that corrupt JSON (a SyntaxError, no errno), EACCES, EISDIR and every other
+// errno are treated as faults rather than as an offline host. The equivalent
+// helper in src/storage is module-private and that tree is out of scope for
+// this change, so the idiom is mirrored here.
+function isMissingHostLogError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function parseSinceId(raw: string | null): number | null {

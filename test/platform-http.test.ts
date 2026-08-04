@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { request, type Server } from "node:http";
 import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
@@ -8,7 +8,7 @@ import test from "node:test";
 import { VERSION } from "../src/cli/help.js";
 import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
-import { appendServerMessage, createBoardroom, createRoom, recordJoinedRoom } from "../src/storage/index.js";
+import { appendServerMessage, createBoardroom, createRoom, recordJoinedRoom, roomPaths } from "../src/storage/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 
 function requestWithHost(baseUrl: string, hostHeader: string): Promise<{ status: number; body: string }> {
@@ -187,6 +187,82 @@ test("chat read reports the host log offline when the registered room has no loc
     const payload = await (await fetch(`${fixture.baseUrl}/rooms/remote-room/messages?since_id=0`)).json();
     assert.equal(payload.host_log_available, false);
     assert.deepEqual(payload.messages, []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+// #242: an absent host log and a broken local store used to be indistinguishable
+// — every readMessages failure returned HTTP 200 with an empty timeline and
+// host_log_available:false, so a real storage fault was presented as "the host is
+// simply offline". Only a genuinely missing log keeps that offline shape now.
+
+test("chat read keeps the offline shape when the host log file itself is absent (#242)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "no-log-room" }));
+  await createRoom({ root, roomId: "no-log-room", hostAlias: "host", briefBody: "go" });
+  // The room exists locally but its message log does not — the expected ENOENT
+  // condition, distinct from the whole room being absent.
+  await rm(roomPaths(root, "no-log-room").messages, { force: true });
+
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const response = await fetch(`${fixture.baseUrl}/rooms/no-log-room/messages?since_id=0`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.host_log_available, false);
+    assert.deepEqual(payload.messages, []);
+    assert.equal(payload.next_since_id, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("chat read surfaces a corrupt host log as a server error, never as an empty timeline (#242)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "corrupt-room" }));
+  await createRoom({ root, roomId: "corrupt-room", hostAlias: "host", briefBody: "go" });
+  await appendServerMessage({ root, roomId: "corrupt-room", from: "system", text: "sensitive-log-body" });
+  // A truncated/garbled line: JSON.parse throws a SyntaxError, which carries no
+  // errno and so must not be mistaken for an absent log.
+  await appendFile(roomPaths(root, "corrupt-room").messages, "{ not valid json\n", "utf8");
+
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const response = await fetch(`${fixture.baseUrl}/rooms/corrupt-room/messages?since_id=0`);
+    const body = await response.text();
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(body), { ok: false, error: "internal_error" });
+    // The whole point: a corrupt store must not claim the host is merely offline.
+    assert.doesNotMatch(body, /host_log_available/);
+    // and the failure must not disclose the log's contents or where it lives
+    assert.doesNotMatch(body, /sensitive-log-body/);
+    assert.doesNotMatch(body, /messages\.jsonl/);
+    assert.equal(body.includes(root), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("chat read surfaces an unreadable host log as a server error (#242)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "unreadable-room" }));
+  await createRoom({ root, roomId: "unreadable-room", hostAlias: "host", briefBody: "go" });
+  // Replace the log with a directory: reading it fails with EISDIR on every
+  // platform and for every user. A chmod-based case would be silently skipped
+  // wherever the suite runs as root.
+  const messagesPath = roomPaths(root, "unreadable-room").messages;
+  await rm(messagesPath, { force: true });
+  await mkdir(messagesPath);
+
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const response = await fetch(`${fixture.baseUrl}/rooms/unreadable-room/messages?since_id=0`);
+    const body = await response.text();
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(body), { ok: false, error: "internal_error" });
+    assert.doesNotMatch(body, /host_log_available/);
+    assert.equal(body.includes(root), false);
   } finally {
     await fixture.close();
   }
