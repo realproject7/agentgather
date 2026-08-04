@@ -54,12 +54,7 @@ async function startFixture(options: { rateLimitPerMinute?: number } = {}): Prom
     hostToken,
     reviewerToken,
     close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+      closeServer(server)
   };
 }
 
@@ -69,11 +64,8 @@ async function getFreePort(): Promise<number> {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address() as AddressInfo;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
   });
   return address.port;
 }

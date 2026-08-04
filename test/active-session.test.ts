@@ -21,6 +21,7 @@ import { startRoomServerFixture } from "./support/room-fixture.js";
 import { WaitHub } from "../src/server/wait.js";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
+import { closeServer } from "./support/close-server.js";
 
 // ---- shared helpers ----
 
@@ -72,12 +73,7 @@ async function startFixture(): Promise<{
     hostToken,
     agentToken,
     close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+      closeServer(server)
   };
 }
 
