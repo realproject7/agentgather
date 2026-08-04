@@ -202,19 +202,40 @@ test("overlapping poll intervals issue a single final closed-history fetch (seri
       body: JSON.stringify({ text: "entry-complete marker" })
     });
 
+    // One handler, two jobs. #270: hold entry's OWN first poll open for 2s so
+    // the pre-`bindEvents()` window is always wide here — the click on
+    // #close-button below needs a bound handler, and waiting on the brief let it
+    // land early, so `#room-status` never reached closed and waitForSelector
+    // timed out at ~30.7s in CI (run 30924706944). Baking the hold in means this
+    // test fails deterministically if the readiness wait is removed, rather than
+    // only on a loaded runner. Afterwards, `holdAll` makes every GET /messages
+    // hang — the "slow response" a naive poller would pile overlapping timer
+    // callbacks onto.
+    let firstPollHeld = false;
+    let holdAll = false;
+    await page.route("**/messages**", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      if (holdAll) {
+        held.push(route);
+        return;
+      }
+      if (!firstPollHeld) {
+        firstPollHeld = true;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      await route.continue();
+    });
+
     // Host enters the open room so the 3s poll timer is running.
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
-    // Wait for what the first poll must render — the marker above — which entry
-    // produces immediately before binding events. Same signal #264 established.
+    // Wait for what that first poll must render — the marker seeded above —
+    // which entry produces immediately before `bindEvents()`. #264's signal.
     await page.waitForSelector("text=entry-complete marker");
 
-    // From now on, hold every GET /messages so a poll's fetch never completes —
-    // this is the "slow response" that a naive poller would let overlapping timer
-    // callbacks pile onto (multiple concurrent final closed-history fetches).
-    await page.route("**/messages**", (route) => {
-      if (route.request().method() === "GET") held.push(route);
-      else void route.continue();
-    });
+    holdAll = true;
 
     // Close the room; subsequent polls take the closed-history path.
     await page.click("#close-button");
