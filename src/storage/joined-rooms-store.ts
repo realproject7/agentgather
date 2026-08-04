@@ -45,16 +45,37 @@ export async function readJoinedRooms(home: string): Promise<JoinedRoom[]> {
 // Upsert one joined-room record (keyed by roomId + baseUrl). Only the metadata
 // fields are written — the token is dropped even if present on the input, so this
 // store can never accumulate a secret.
+//
+// This is the EXPLICIT local join/import path (CLI `room join`, dashboard invite
+// import): its caller intentionally selects the opening identity, so the alias it
+// carries becomes the selected identity for the row (#248).
 export async function recordJoinedRoom(home: string, entry: JoinedRoom): Promise<void> {
   await ensureSecureDir(home);
   // Serialize the whole read-modify-write: a concurrent record/archive/delete on
   // this device-local store must not read a stale list and drop the other's edit.
   await withWriterLock(joinedRoomsLockPath(home), async () => {
-    await recordJoinedRoomLocked(home, entry);
+    await upsertJoinedRoomLocked(home, entry, { keepSelectedAlias: false });
   });
 }
 
-async function recordJoinedRoomLocked(home: string, entry: JoinedRoom): Promise<void> {
+// Refresh the non-identity metadata of a joined-room record from an observing
+// caller — the browser-origin, loopback-only room bridge (#248). Title/last-seen
+// may move, but the alias already stored for an existing (roomId, baseUrl) row is
+// the dashboard-selected opening identity and is NEVER replaced here: a stale room
+// tab authenticated as another participant must not be able to repoint the row at
+// its own credential. Identity authority is the function you call, not call order.
+export async function refreshJoinedRoomMetadata(home: string, entry: JoinedRoom): Promise<void> {
+  await ensureSecureDir(home);
+  await withWriterLock(joinedRoomsLockPath(home), async () => {
+    await upsertJoinedRoomLocked(home, entry, { keepSelectedAlias: true });
+  });
+}
+
+async function upsertJoinedRoomLocked(
+  home: string,
+  entry: JoinedRoom,
+  options: { keepSelectedAlias: boolean }
+): Promise<void> {
   const rooms = await readJoinedRooms(home);
   const index = rooms.findIndex((room) => room.roomId === entry.roomId && room.baseUrl === entry.baseUrl);
   // Keep the best-known display title (#216): a re-record that only carries the
@@ -65,6 +86,12 @@ async function recordJoinedRoomLocked(home: string, entry: JoinedRoom): Promise<
   const existingTitle = index === -1 ? undefined : rooms[index]?.title;
   const isRealTitle = (value: string | undefined): boolean =>
     value !== undefined && value.length > 0 && value !== entry.roomId;
+  // Selected opening identity (#248): on a metadata-only refresh the alias already
+  // stored for this row wins. A row that carries no alias yet opens nothing (the
+  // dashboard answers "no participant alias" instead), so filling that in is safe
+  // and keeps the first-time bridge useful.
+  const existingAlias = index === -1 ? undefined : rooms[index]?.alias;
+  const keptAlias = options.keepSelectedAlias && existingAlias !== undefined && existingAlias.length > 0;
   const record: JoinedRoom = {
     roomId: entry.roomId,
     title: isRealTitle(entry.title)
@@ -74,7 +101,7 @@ async function recordJoinedRoomLocked(home: string, entry: JoinedRoom): Promise<
         : entry.title.length > 0
           ? entry.title
           : entry.roomId,
-    alias: entry.alias,
+    alias: keptAlias ? (existingAlias as string) : entry.alias,
     baseUrl: entry.baseUrl,
     joinedAt: index === -1 ? entry.joinedAt : (rooms[index]?.joinedAt ?? entry.joinedAt),
     lastSeen: entry.lastSeen

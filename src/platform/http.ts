@@ -19,6 +19,7 @@ import { writeToken } from "../cli/state.js";
 import {
   readJoinedRooms,
   recordJoinedRoom,
+  refreshJoinedRoomMetadata,
   setJoinedRoomArchived,
   deleteJoinedRoom,
   readMessages
@@ -65,9 +66,10 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
   // is origin-scoped) POSTs its token-free metadata here so it appears in the
   // owner dashboard's "Rooms I'm in" alongside CLI joins. Localhost-only (the gate
   // above), metadata-only (the handler strips anything token-like) — the one write
-  // on this otherwise read-only surface.
+  // on this otherwise read-only surface. It is a metadata REFRESH, never an
+  // identity change (#248): the alias of an existing row stays as selected.
   if (req.method === "POST" && url.pathname === "/joined-rooms") {
-    await recordJoinedRoomFromRequest(options, req, res);
+    await refreshJoinedRoomFromBridgeRequest(options, req, res);
     return;
   }
   if (req.method === "POST" && url.pathname === "/joined-rooms/remember") {
@@ -288,11 +290,18 @@ function escapeHtml(value: string): string {
   });
 }
 
-// Record a browser join into the device-local store (the same-device bridge). The
+// Refresh a browser join in the device-local store (the same-device bridge). The
 // record is rebuilt from a strict metadata allowlist and the base URL is reduced to
 // origin+path, so a token in any field or in the URL (?token=/#token=) can never be
 // persisted. Bad input is a 400; it never throws the request open.
-async function recordJoinedRoomFromRequest(
+//
+// A room tab observes only its OWN credential, so this surface is metadata-only
+// (#248): `refreshJoinedRoomMetadata` keeps the alias already selected for an
+// existing (roomId, baseUrl) row, and a stale tab authenticated as a different
+// participant cannot repoint that row at itself. Changing the selected identity
+// goes through the explicit local join/import path (`/joined-rooms/remember`, CLI
+// `room join`), which calls `recordJoinedRoom`.
+async function refreshJoinedRoomFromBridgeRequest(
   options: PlatformHttpServerOptions,
   req: IncomingMessage,
   res: ServerResponse
@@ -317,7 +326,7 @@ async function recordJoinedRoomFromRequest(
     return;
   }
   const now = new Date().toISOString();
-  await recordJoinedRoom(options.root, {
+  await refreshJoinedRoomMetadata(options.root, {
     roomId: shortString(body.roomId) ?? baseUrl,
     title: shortString(body.title) ?? shortString(body.roomId) ?? baseUrl,
     alias: shortString(body.alias) ?? "",
@@ -386,6 +395,10 @@ async function deleteJoinedRoomRequest(
   sendJson(res, 200, { ok: true, removed });
 }
 
+// Explicit local import of a tokenized invite. This IS the identity-selecting path
+// (#248): the alias the host confirms for this invite becomes the row's selected
+// opening identity, so `recordJoinedRoom` — not the metadata refresh — is correct
+// here, and a deliberate re-import is how a user changes the identity a row opens.
 async function rememberJoinedRoomFromInviteRequest(
   options: PlatformHttpServerOptions,
   req: IncomingMessage,

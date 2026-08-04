@@ -758,6 +758,13 @@ function recordJoinedRoomLocal() {
 // there so the join also appears in the dashboard's "Rooms I'm in". Fire-and-forget
 // and no-cors — we never read the response, and only metadata (never the token) is
 // sent.
+//
+// This tab knows only the credential it was opened with, so the POST is a metadata
+// REFRESH, never an identity claim (#248). The dashboard treats it that way: the
+// alias below is used to label a row it does not have yet, and can never replace
+// the identity already selected for an existing row — a stale tab authenticated as
+// another participant cannot repoint that row at itself. Changing the selected
+// identity is the dashboard's explicit invite import / CLI join.
 function bridgeJoinToDashboard(baseUrl) {
   const dashboard = new URLSearchParams(window.location.search).get("dashboard");
   if (!dashboard || !state.profile || !state.roomName) return;
