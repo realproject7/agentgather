@@ -2601,6 +2601,20 @@ test("a host that serves its page but not its API shows the held copy, not a bla
     assert.equal(await page.locator("#message-text").isDisabled(), true, "composer is disabled offline");
     // The divider must not imply the room holds more than it does.
     assert.match((await page.locator(".restored-divider").textContent()) ?? "", /Restored from this device/);
+
+    // Entering without a profile must not be a one-way door: when the host answers
+    // again the identity this tab entered without has to load, or the messages come
+    // back while the composer and own-message marking stay degraded for the life of
+    // the tab. The composer identity is the surface that shows it.
+    assert.equal(((await page.locator("#composer-identity").textContent()) ?? "").trim(), "");
+    await page.unroute(/\/(profile|brief|status|messages)(\?|$)/);
+    await page.waitForFunction(
+      () => (document.getElementById("composer-identity")?.textContent ?? "").trim().length > 0,
+      undefined,
+      { timeout: 15000 }
+    );
+    assert.match((await page.locator("#composer-identity").textContent()) ?? "", /Host/);
+    assert.equal(await page.locator("#message-text").isDisabled(), false, "composer works again once live");
   } finally {
     await browser?.close();
     await fixture.close();

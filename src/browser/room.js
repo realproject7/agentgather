@@ -538,6 +538,18 @@ async function loadStatus() {
     return;
   }
   markConnectionLive();
+  // Entry can now proceed without a profile when the host's API is down (#279).
+  // That must not be a one-way door: the host is answering again here, so load the
+  // identity this tab entered without. Otherwise the messages recover on the next
+  // poll while the composer label, own-message marking and notification
+  // suppression stay degraded for the life of the tab.
+  if (state.profile === null) {
+    try {
+      state.profile = (await authFetch("/profile")).participant;
+    } catch {
+      // Still unavailable — the next status tick tries again.
+    }
+  }
   state.roomStatus = payload.room_status;
   state.roomName = payload.room;
   state.boardroomTitle = payload.boardroom?.name ?? null;
