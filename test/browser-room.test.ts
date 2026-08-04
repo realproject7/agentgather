@@ -1264,6 +1264,19 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "default");
+    // #270: the brief is painted while entry is still in flight; `#notify-toggle`
+    // binds in `bindEvents()` after entry's awaited first poll. Seed a message and
+    // hold that poll open so the window is always wide, then wait on what the poll
+    // must render — an early click is a no-op and `aria-pressed` never flips.
+    await postMessage(fixture, fixture.reviewerToken, "entry-complete marker");
+    let firstPollHeld = false;
+    await page.route("**/messages**", async (route) => {
+      if (!firstPollHeld && route.request().method() === "GET") {
+        firstPollHeld = true;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      await route.continue();
+    });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1272,7 +1285,7 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
-    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("text=entry-complete marker");
 
     // Opt in: the click is the user gesture that grants permission (double → granted).
     await page.click("#notify-toggle");
@@ -1316,6 +1329,19 @@ test("permission-denied degrades silently to the title badge with no OS notifica
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "denied");
+    // #270: the brief is painted while entry is still in flight; `#notify-toggle`
+    // binds in `bindEvents()` after entry's awaited first poll. Seed a message and
+    // hold that poll open so the window is always wide, then wait on what the poll
+    // must render — an early click is a no-op and `aria-pressed` never flips.
+    await postMessage(fixture, fixture.reviewerToken, "entry-complete marker");
+    let firstPollHeld = false;
+    await page.route("**/messages**", async (route) => {
+      if (!firstPollHeld && route.request().method() === "GET") {
+        firstPollHeld = true;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      await route.continue();
+    });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1324,7 +1350,7 @@ test("permission-denied degrades silently to the title badge with no OS notifica
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
-    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("text=entry-complete marker");
 
     await page.click("#notify-toggle");
     await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
@@ -1347,6 +1373,22 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "default");
+    // #270: the brief renders BEFORE `enterRoom` awaits its first `/messages`
+    // poll, and `#notify-toggle`'s handler is attached by `bindEvents()` after
+    // that poll. Waiting on the brief let the click land on an unbound control,
+    // so `aria-pressed` never flipped and `waitForFunction` timed out at ~30.7s
+    // in CI (run 30924706944). Hold that first poll open on purpose so the
+    // window is ALWAYS wide here — this test now fails deterministically if the
+    // readiness wait below is removed, instead of only on a loaded CI runner.
+    await postMessage(fixture, fixture.reviewerToken, "entry-complete marker");
+    let firstPollHeld = false;
+    await page.route("**/messages**", async (route) => {
+      if (!firstPollHeld && route.request().method() === "GET") {
+        firstPollHeld = true;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      await route.continue();
+    });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1355,7 +1397,9 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
-    await page.waitForSelector("text=Ship the browser room safely.");
+    // Wait for what that first poll must render — not for the brief, which is
+    // painted while entry is still in flight.
+    await page.waitForSelector("text=entry-complete marker");
     await page.click("#notify-toggle");
     await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
@@ -1385,6 +1429,19 @@ test("a notification body never carries an invite URL or token from the message 
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
     await installNotificationDouble(page, "default");
+    // #270: the brief is painted while entry is still in flight; `#notify-toggle`
+    // binds in `bindEvents()` after entry's awaited first poll. Seed a message and
+    // hold that poll open so the window is always wide, then wait on what the poll
+    // must render — an early click is a no-op and `aria-pressed` never flips.
+    await postMessage(fixture, fixture.reviewerToken, "entry-complete marker");
+    let firstPollHeld = false;
+    await page.route("**/messages**", async (route) => {
+      if (!firstPollHeld && route.request().method() === "GET") {
+        firstPollHeld = true;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      await route.continue();
+    });
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1393,7 +1450,7 @@ test("a notification body never carries an invite URL or token from the message 
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
-    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("text=entry-complete marker");
     await page.click("#notify-toggle");
     await page.waitForFunction(() => document.getElementById("notify-toggle")?.getAttribute("aria-pressed") === "true");
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
