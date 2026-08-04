@@ -116,6 +116,18 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     await page.fill("#display-name", "Remote Human");
     await page.click("#join-button");
     await page.waitForSelector("text=Forward through the broker.");
+    // #264: the brief rendering does NOT mean entry has finished. `enterRoom`
+    // paints the brief, then still awaits the first `/messages` poll — another
+    // full relay round-trip through the broker — before `bindEvents()` attaches
+    // the composer's submit handler. `#send-button` is a `type="submit"` inside
+    // `<form id="composer">`, so a click landing in that window performs a NATIVE
+    // form submission: the page navigates, the composer clears, and no message is
+    // ever posted. On a quiet machine the window is sub-millisecond; under
+    // full-suite load each round-trip stretches and the click lands inside it.
+    // Wait for what that first poll must render — the curl agent's message, posted
+    // above and already in the host log — which entry produces immediately before
+    // binding the composer.
+    await page.waitForSelector("text=@operator curl agent through broker");
     await page.fill("#message-text", "@operator browser through broker");
     await page.click("#send-button");
     await page.waitForSelector("text=@operator browser through broker");
