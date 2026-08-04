@@ -1489,10 +1489,54 @@ body {
   line-height: 1.35;
 }
 
-.platform-version span:first-child {
+/* Scoped to a DIRECT child (#280): the version value now sits inside a row
+   wrapper, and an unscoped `span:first-child` would also match it there and
+   render it uppercase/bold. Same rule, same brand span — this keeps the existing
+   appearance rather than changing it. */
+.platform-version > span:first-child {
   color: var(--muted);
   font-weight: 700;
   text-transform: uppercase;
+}
+
+/* Version value and repository link on one row (#280). The link is a quiet
+   footer affordance: it inherits the footer's own faint colour and only lifts to
+   the accent on hover/focus. */
+.platform-version-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-version-line #platform-version-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-repo-link {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  text-decoration: none;
+}
+
+.platform-repo-link:hover {
+  color: var(--accent);
+}
+
+.platform-repo-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+.platform-repo-mark {
+  display: block;
 }
 
 /* ---- overlays (create-room, invite cards) ---- */
