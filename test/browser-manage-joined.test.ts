@@ -322,3 +322,155 @@ test("the manage view does not overflow horizontally at 1280 or 390 (#277)", asy
     await fixture.close();
   }
 });
+
+// A mixed selection spans two device-local stores: joined-rooms.json (platform,
+// via the loopback API) and this browser's localStorage. The tests below drive
+// the failure of each half and assert the other half did not half-apply — the
+// case @re1 raised on PR #282.
+const LOCAL_KEY = "agentgather.joinedRooms";
+
+interface LocalRoom {
+  roomId: string;
+  title: string;
+  alias: string;
+  baseUrl: string;
+  joinedAt: string;
+  lastSeen: string;
+}
+
+function localRooms(count: number, port: number): LocalRoom[] {
+  return Array.from({ length: count }, (_value, index) => ({
+    roomId: `synthetic-local-${index}`,
+    title: `Browser Room ${index}`,
+    alias: "operator",
+    baseUrl: `http://127.0.0.1:${port}/local-${index}`,
+    joinedAt: new Date(Date.UTC(2026, 2, 1, 0, index)).toISOString(),
+    lastSeen: new Date(Date.UTC(2026, 2, 1, 0, index)).toISOString()
+  }));
+}
+
+// Seed browser-owned rows into localStorage before the shell boots, so the manage
+// view holds a genuinely mixed selection.
+async function startMixedFixture(localCount: number): Promise<Fixture & { local: LocalRoom[] }> {
+  const fixture = await startFixture();
+  const local = localRooms(localCount, await getFreePort());
+  await fixture.page.evaluate(
+    ([key, rooms]) => window.localStorage.setItem(key as string, JSON.stringify({ rooms })),
+    [LOCAL_KEY, local] as const
+  );
+  await fixture.page.reload();
+  await fixture.page.waitForSelector("#manage-open:not([hidden])", { timeout: 30_000 });
+  return { ...fixture, local };
+}
+
+async function readLocalRooms(page: Page): Promise<LocalRoom[]> {
+  return page.evaluate((key) => {
+    const raw = window.localStorage.getItem(key as string);
+    return raw === null ? [] : ((JSON.parse(raw) as { rooms: LocalRoom[] }).rooms ?? []);
+  }, LOCAL_KEY);
+}
+
+test("a failed platform write leaves the browser-local half applied and SAYS so, per store (#277)", async () => {
+  // Per the operator ruling (msg 1246): the two device-local stores are applied
+  // independently and reported per store. This is deliberately NOT atomic across
+  // them — what it must never be is silent.
+  const fixture = await startMixedFixture(4);
+  try {
+    const { page, root } = fixture;
+    const before = await readJoinedRooms(root);
+
+    await page.click("#manage-open");
+    await page.waitForSelector("#manage:not([hidden])");
+    await page.waitForFunction((expected) => document.querySelectorAll(".manage-row").length === expected, TOTAL + 4);
+
+    await page.route("**/joined-rooms/delete-bulk", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, message: "storage unavailable" })
+      })
+    );
+
+    await page.locator("#manage-select-all").check();
+    await page.click("#manage-delete");
+    await page.waitForSelector("#manage-confirm:not([hidden])");
+    await page.click("#manage-confirm-delete");
+    await page.waitForSelector("#manage-error:not([hidden])");
+
+    // The message must name what actually happened on each store — a count that
+    // went and a count that did not — rather than a bare failure.
+    const message = (await page.locator("#manage-error").textContent()) ?? "";
+    assert.match(message, /Deleted 4 rooms\./, `message must report the store that committed, got: ${message}`);
+    assert.match(message, new RegExp(`${TOTAL} rooms could not be deleted`), `message must report the failure count, got: ${message}`);
+
+    // The platform store is untouched, and the browser-local rows really were
+    // removed — the honest partial the message describes.
+    assert.deepEqual(await readJoinedRooms(root), before, "the platform store must be untouched");
+    assert.deepEqual(await readLocalRooms(page), [], "the browser-local half committed, as reported");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a failed browser-local write is reported rather than swallowed (#277)", async () => {
+  // The pre-review code called the forgiving writeJoinedLocal(), whose catch
+  // swallows a quota failure outright: the platform rows went, the browser rows
+  // silently did not, and nothing was shown. That silence is the defect.
+  const fixture = await startMixedFixture(3);
+  try {
+    const { page, root } = fixture;
+    await page.evaluate(() => {
+      window.localStorage.setItem = () => {
+        throw new Error("QuotaExceededError");
+      };
+    });
+
+    await page.click("#manage-open");
+    await page.waitForSelector("#manage:not([hidden])");
+    await page.locator("#manage-select-all").check();
+    await page.click("#manage-delete");
+    await page.waitForSelector("#manage-confirm:not([hidden])");
+    await page.click("#manage-confirm-delete");
+    await page.waitForSelector("#manage-error:not([hidden])");
+
+    const message = (await page.locator("#manage-error").textContent()) ?? "";
+    assert.match(message, /3 rooms this browser remembers could not be deleted/, `got: ${message}`);
+    assert.match(message, new RegExp(`Deleted ${TOTAL} rooms\\.`), `got: ${message}`);
+    // The platform half did commit, exactly as the message says.
+    assert.equal((await readJoinedRooms(root)).length, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a platform-only selection still commits normally when no browser rows are involved (#277)", async () => {
+  // Guards against the rollback path making the ordinary case conditional on a
+  // browser-local store that most selections never touch.
+  const fixture = await startMixedFixture(2);
+  try {
+    const { page, root } = fixture;
+    await page.click("#manage-open");
+    await page.waitForSelector("#manage:not([hidden])");
+    await page.waitForFunction((expected) => document.querySelectorAll(".manage-row").length === expected, TOTAL + 2);
+
+    const keys = await page.locator(".manage-row").evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLElement).dataset.key ?? "")
+    );
+    // Rows whose key names a platform-seeded room only.
+    const platformKeys = keys.filter((key) => key.includes("synthetic-dead-")).slice(0, 3);
+    assert.equal(platformKeys.length, 3);
+    for (const key of platformKeys) await page.locator(`.manage-row[data-key="${key}"] .manage-check`).check();
+
+    await page.click("#manage-archive");
+    await page.waitForFunction(
+      (expected) => document.querySelectorAll('.manage-row[data-archived="true"]').length === expected,
+      3
+    );
+    const after = await readJoinedRooms(root);
+    assert.equal(after.filter((room) => room.archived === true).length, 3);
+    assert.equal(after.length, TOTAL, "archive must not remove rows");
+    assert.deepEqual(await readLocalRooms(page), await readLocalRooms(page));
+  } finally {
+    await fixture.close();
+  }
+});

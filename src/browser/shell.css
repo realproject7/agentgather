@@ -2227,7 +2227,7 @@ body {
 }
 
 .manage-ctl {
-  padding: 6px 12px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: transparent;
@@ -2315,7 +2315,7 @@ body {
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .manage-name {
@@ -2342,7 +2342,7 @@ body {
 }
 
 .manage-reach {
-  padding: 2px 8px;
+  padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   background: var(--bg-input);
@@ -2369,7 +2369,7 @@ body {
 }
 
 .manage-tag {
-  padding: 2px 8px;
+  padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   color: var(--muted);
@@ -2395,7 +2395,8 @@ body {
 
   .manage-aside {
     width: 100%;
-    padding-left: 28px;
+    /* Clears the 20px checkbox plus its 12px row gap, on the 4px scale. */
+    padding-left: 32px;
   }
 
   .manage-ctl {

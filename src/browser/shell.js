@@ -1524,6 +1524,66 @@ function showManageError(message) {
   manageError.textContent = message;
 }
 
+// Apply one bulk action to the two device-local stores a selection can span
+// (#277, @re1 + operator ruling msg 1246).
+//
+// A selection may include rows the platform owns (joined-rooms.json, via the
+// loopback API) and rows this browser owns (localStorage). Each store's own write
+// is atomic — one lock, one atomic replacement for the platform; one setItem for
+// the browser — but this is deliberately NOT atomic ACROSS them, and does not
+// pretend to be. There is no compensating transaction and no two-phase protocol:
+// that is distributed-systems machinery for a device-local list manager, and the
+// failure it would guard against is a storage-quota error on one of two local
+// writes.
+//
+// Instead each store is applied independently and the outcome is reported per
+// store, so a partial result is never SILENT. The caller turns this into a
+// message naming what actually happened.
+async function applyPerStore(entries, applyPlatform, applyBrowser) {
+  const { platform, browser } = splitBySource(entries);
+  const outcome = { platform: null, browser: null };
+  if (platform.length > 0) {
+    try {
+      await applyPlatform(platform);
+      outcome.platform = { count: platform.length, ok: true };
+    } catch (error) {
+      outcome.platform = { count: platform.length, ok: false, error };
+    }
+  }
+  // Runs regardless of the platform result: these are separate stores, and
+  // skipping this one on an unrelated failure would withhold a change the user
+  // asked for while reporting nothing about it.
+  if (browser.length > 0) {
+    try {
+      applyBrowser(browser);
+      outcome.browser = { count: browser.length, ok: true };
+    } catch (error) {
+      outcome.browser = { count: browser.length, ok: false, error };
+    }
+  }
+  return outcome;
+}
+
+// Turn a per-store outcome into an honest sentence. Returns null when everything
+// the user selected was applied.
+function describePerStoreOutcome(outcome, verb) {
+  const failed = [outcome.platform, outcome.browser].filter((part) => part !== null && !part.ok);
+  if (failed.length === 0) return null;
+  const applied = [outcome.platform, outcome.browser]
+    .filter((part) => part !== null && part.ok)
+    .reduce((total, part) => total + part.count, 0);
+  const lost = failed.reduce((total, part) => total + part.count, 0);
+  const appliedText = applied > 0 ? `${verb} ${applied} ${applied === 1 ? "room" : "rooms"}. ` : "";
+  const source =
+    outcome.browser !== null && !outcome.browser.ok && (outcome.platform === null || outcome.platform.ok)
+      ? " this browser remembers"
+      : "";
+  return (
+    `${appliedText}${lost} ${lost === 1 ? "room" : "rooms"}${source} could not be ${verb.toLowerCase()} — ` +
+    "nothing else was affected. Try those again."
+  );
+}
+
 // Split a selection into its two device-local homes: rows the platform owns
 // (joined-rooms.json, via the loopback API) and rows this browser owns
 // (localStorage). Both are this device only.
@@ -1543,17 +1603,18 @@ async function runManageArchive(archived) {
   hideManageConfirm();
   updateManageSelectionUi();
   try {
-    const { platform, browser } = splitBySource(entries);
-    if (platform.length > 0) {
-      await apiPost("./joined-rooms/archive-bulk", {
-        targets: platform.map((entry) => ({ roomId: entry.roomId, baseUrl: entry.baseUrl })),
-        archived
-      });
-    }
-    if (browser.length > 0) setLocalArchivedMany(browser, archived);
+    const outcome = await applyPerStore(
+      entries,
+      (platform) =>
+        apiPost("./joined-rooms/archive-bulk", {
+          targets: platform.map((entry) => ({ roomId: entry.roomId, baseUrl: entry.baseUrl })),
+          archived
+        }),
+      (browser) => setLocalArchivedMany(browser, archived)
+    );
+    const problem = describePerStoreOutcome(outcome, archived ? "Archived" : "Unarchived");
+    if (problem !== null) showManageError(problem);
     state.manage.selected.clear();
-  } catch (error) {
-    showManageError(error instanceof Error ? error.message : "Could not update those rooms on this device.");
   } finally {
     state.manage.busy = false;
     await loadJoinedRooms();
@@ -1570,18 +1631,22 @@ async function runManageDelete() {
   updateManageSelectionUi();
   try {
     const { platform, browser } = splitBySource(entries);
-    if (platform.length > 0) {
-      await apiPost("./joined-rooms/delete-bulk", {
-        targets: platform.map((entry) => ({ roomId: entry.roomId, baseUrl: entry.baseUrl }))
-      });
-    }
-    if (browser.length > 0) removeLocalJoinedMany(browser);
-    // Clear each deleted room's device-local message cache, exactly as the
-    // single-row delete does (never host data).
-    for (const entry of entries) if (entry.roomId) clearCache(entry.roomId);
+    const outcome = await applyPerStore(
+      entries,
+      (targets) =>
+        apiPost("./joined-rooms/delete-bulk", {
+          targets: targets.map((entry) => ({ roomId: entry.roomId, baseUrl: entry.baseUrl }))
+        }),
+      (targets) => removeLocalJoinedMany(targets)
+    );
+    // Clear the device-local message cache only for rows whose own store actually
+    // committed (never host data): dropping the cache for a room still in the list
+    // would throw away a transcript the row still points at.
+    if (outcome.platform?.ok === true) for (const entry of platform) if (entry.roomId) clearCache(entry.roomId);
+    if (outcome.browser?.ok === true) for (const entry of browser) if (entry.roomId) clearCache(entry.roomId);
+    const problem = describePerStoreOutcome(outcome, "Deleted");
+    if (problem !== null) showManageError(problem);
     state.manage.selected.clear();
-  } catch (error) {
-    showManageError(error instanceof Error ? error.message : "Could not delete those rooms from this device.");
   } finally {
     state.manage.busy = false;
     await loadJoinedRooms();
@@ -1592,7 +1657,7 @@ async function runManageDelete() {
 // both roomId and baseUrl so a sibling room on the same host is never swept in.
 function setLocalArchivedMany(entries, archived) {
   const keys = new Set(entries.map((entry) => joinedKey(entry)));
-  writeJoinedLocal(
+  writeJoinedLocalStrict(
     readJoinedLocal().map((room) => {
       if (!keys.has(joinedKey(room))) return room; // bystander: untouched
       const next = { ...room };
@@ -1605,7 +1670,7 @@ function setLocalArchivedMany(entries, archived) {
 
 function removeLocalJoinedMany(entries) {
   const keys = new Set(entries.map((entry) => joinedKey(entry)));
-  writeJoinedLocal(readJoinedLocal().filter((room) => !keys.has(joinedKey(room))));
+  writeJoinedLocalStrict(readJoinedLocal().filter((room) => !keys.has(joinedKey(room))));
 }
 
 // A reachable joined room opens against its host, exactly as before. An
@@ -1827,6 +1892,14 @@ function writeJoinedLocal(rooms) {
     // Storage may be unavailable or full; the list simply will not persist.
   }
 }
+
+// Strict variant for bulk operations (#277). The forgiving write above is right
+// for incidental persistence, but a bulk action must never report success for a
+// write that silently did not happen — so this one throws and the caller decides.
+function writeJoinedLocalStrict(rooms) {
+  window.localStorage.setItem(JOINED_KEY, JSON.stringify({ rooms }));
+}
+
 
 async function addJoinedFromInput() {
   joinedError.hidden = true;
