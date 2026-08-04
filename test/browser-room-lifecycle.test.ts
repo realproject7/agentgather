@@ -262,9 +262,10 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
   const roomId = `identity-${Math.random().toString(36).slice(2, 10)}`;
   const humanToken = `tgl_human_${roomId}`;
   const agentToken = `tgl_agent_${roomId}`;
+  const hostToken = `tgl_host_${roomId}`;
   await createRoom({ root, roomId, hostAlias: "host", briefBody: "Keep the selected identity honest." });
   await writeParticipants(root, roomId, [
-    { ...participant("host", "human", true, `tgl_host_${roomId}`), display_name: "Host" },
+    { ...participant("host", "human", true, hostToken), display_name: "Host" },
     { ...participant("project7", "human", false, humanToken), display_name: "project7" },
     participant("agent-bot", "agent", false, agentToken)
   ]);
@@ -275,6 +276,14 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
   // The dashboard the open comes from. Unreachable on purpose: its bridge POST is
   // best-effort, so this stays a pure room-side lifecycle test.
   const deadDashboard = `http://127.0.0.1:${await getFreePort()}`;
+  // One host message already in the log. Rendering it is the deterministic signal
+  // that entry finished its FIRST poll — entry binds the composer synchronously
+  // right after that poll, so seeing this line means the send handler is wired.
+  await fetch(`${baseUrl}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ text: "entry marker from host" })
+  });
 
   const browser = await chromium.launch();
   try {
@@ -310,6 +319,9 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
     assert.equal(page.url().includes("token="), false);
 
     // 4) A sent message is authored by the selected participant, not the stale one.
+    //    Wait for the first poll to render before composing: entry wires the send
+    //    handler immediately after it, so this rules out a click into a dead button.
+    await page.waitForSelector("text=entry marker from host");
     await page.fill("#message-text", "posting as the selected identity");
     await page.click("#send-button");
     await page.waitForSelector("text=posting as the selected identity");
