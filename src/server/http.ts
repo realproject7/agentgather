@@ -655,9 +655,11 @@ async function postClose(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   enforceWriteRateLimit(context, auth.participant.alias, "close");
   requireHost(auth.participant);
-  const state = await closeRoom(context.options.root, context.options.roomId);
-  // #249: a closed room must never fire a delayed continuation.
+  // #249: cancel BEFORE the awaited close. `closeRoom` yields, and a timer that
+  // fires during that window would otherwise append an approval to a room that
+  // is being closed.
   cancelPendingAutoContinue(context.options.roomId);
+  const state = await closeRoom(context.options.root, context.options.roomId);
   await appendSystem(context, "room closed");
   context.options.waitHub.notify(context.options.roomId);
   sendJson(context.res, 200, { ok: true, room_status: state.status });
@@ -930,9 +932,9 @@ async function closeExpiredRoomIfNeeded(context: RequestContext): Promise<Awaite
   const paths = roomPaths(context.options.root, context.options.roomId);
   const state = await readRoomState(paths);
   if (state.status === "open" && state.expires_at !== undefined && Date.now() >= Date.parse(state.expires_at)) {
-    const closed = await closeRoom(context.options.root, context.options.roomId);
-    // #249: an expired room must never fire a delayed continuation.
+    // #249: cancel BEFORE the awaited close, for the same reason as postClose.
     cancelPendingAutoContinue(context.options.roomId);
+    const closed = await closeRoom(context.options.root, context.options.roomId);
     await appendSystem(context, "room closed by ttl");
     context.options.waitHub.notify(context.options.roomId);
     return closed;
@@ -1111,8 +1113,30 @@ function schedulePendingAutoContinue(context: RequestContext, alias: string, del
 // under its own wake policy.
 async function completeAutoContinue(options: Required<RoomHttpServerOptions>, alias: string): Promise<void> {
   const roomId = options.roomId;
-  const pending = pendingAutoContinue.get(roomId);
-  if (pending === undefined) return;
+  if (!pendingAutoContinue.has(roomId)) return;
+  // A close or TTL expiry can be in flight when this fires. Read the room's real
+  // status first and let closure win: a closed or expired room never receives an
+  // approval, and the pending entry is dropped either way.
+  let state: RoomState;
+  try {
+    state = await readRoomState(roomPaths(options.root, roomId));
+  } catch {
+    cancelPendingAutoContinue(roomId);
+    return;
+  }
+  // Re-check after the await: a human post, a disable, or a close may have
+  // cancelled this cycle while the state read was in flight.
+  if (!pendingAutoContinue.has(roomId)) return;
+  // TTL expiry is PASSIVE: if no request arrives after a room expires, nothing
+  // ever runs a cancellation path, and the room's persisted status is still
+  // "open". Status alone is therefore not enough — the deadline must be checked
+  // here too, immediately before the append.
+  const expired =
+    state.expires_at !== undefined && Date.now() >= Date.parse(state.expires_at);
+  if (state.status !== "open" || expired) {
+    cancelPendingAutoContinue(roomId);
+    return;
+  }
   pendingAutoContinue.delete(roomId);
   clearRoomLoopCounts(roomId);
   autoContinueCounts.set(roomId, (autoContinueCounts.get(roomId) ?? 0) + 1);

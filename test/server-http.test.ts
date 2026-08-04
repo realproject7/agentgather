@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  closeRoom,
   createRoom,
   readMessages,
   writeParticipants
@@ -23,7 +24,7 @@ async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-server-test-"));
 }
 
-async function startFixture(options: { waitHoldMs?: number } = {}): Promise<{
+async function startFixture(options: { waitHoldMs?: number; expiresAt?: Date } = {}): Promise<{
   root: string;
   roomId: string;
   baseUrl: string;
@@ -39,7 +40,8 @@ async function startFixture(options: { waitHoldMs?: number } = {}): Promise<{
     root,
     roomId,
     hostAlias: "host",
-    briefBody: "Review the HTTP core."
+    briefBody: "Review the HTTP core.",
+    ...(options.expiresAt === undefined ? {} : { expiresAt: options.expiresAt })
   });
   await writeParticipants(root, roomId, [
     participant("host", "human", true, hostToken),
@@ -890,6 +892,68 @@ test("on expiry the guard re-arms with one system-authored approval mentioning o
     const guard = await loopGuardOf(fixture, fixture.hostToken);
     assert.equal(guard.pending, false);
     assert.equal(guard.auto_continue_count, 1, "the process-local audit count records exactly one continuation");
+  } finally {
+    await fixture.close();
+  }
+});
+
+// #249 (RE1): a pending continuation must never append an approval to a room
+// that is no longer open. Cancellation now runs BEFORE the awaited `closeRoom`
+// in both close paths, and `completeAutoContinue` re-reads the room's real
+// status as the backstop for any close it did not observe.
+//
+// This closes the room through the STORAGE api, deliberately bypassing the HTTP
+// handler's cancellation, so the armed timer survives and only the status guard
+// can stop it. That makes the regression deterministic: a wall-clock test cannot
+// reliably land inside the few-millisecond `await closeRoom` window, and an
+// earlier version of this test passed against the unfixed code for exactly that
+// reason.
+test("a pending continuation that survives into a closed room appends no approval (#249)", { timeout: 90_000 }, async () => {
+  const fixture = await startFixture();
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 30 });
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+    assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true);
+
+    // Close underneath the server: the timer stays armed.
+    await closeRoom(fixture.root, fixture.roomId);
+
+    // Wait past the deadline. Nothing may be appended to the closed room.
+    await new Promise((resolve) => setTimeout(resolve, 33_000));
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(
+      log.some((message) => message.text.includes("auto-continue approved")),
+      false,
+      "an approval was appended to a closed room"
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+// #249 (operator, msg 1037): TTL expiry is PASSIVE. With no request after the
+// room expires, no cancellation path runs at all — reordering the cancel cannot
+// help. Only re-reading status AND the deadline inside `completeAutoContinue`,
+// immediately before the append, prevents a continuation firing into an expired
+// room. This test makes no request at all between the pause and the deadline.
+test("a pending cycle that crosses room expiry with no intervening request appends nothing (#249)", { timeout: 90_000 }, async () => {
+  // Expires while the 30s continuation is still pending.
+  const fixture = await startFixture({ expiresAt: new Date(Date.now() + 5_000) });
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 30 });
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+    assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true);
+
+    // Deliberately no requests from here: nothing triggers the passive TTL close,
+    // so the room's persisted status is still "open" when the timer fires.
+    await new Promise((resolve) => setTimeout(resolve, 33_000));
+
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(
+      log.some((message) => message.text.includes("auto-continue approved")),
+      false,
+      "a continuation fired into an expired room"
+    );
   } finally {
     await fixture.close();
   }
