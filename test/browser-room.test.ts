@@ -737,11 +737,16 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
     assert.ok(groups.some((g) => g.includes("agents")));
     assert.notEqual((await page.textContent("#roster-last-message"))?.trim(), "—");
 
-    // #116 — host sees the control section; idle/pause are disabled (platform-managed),
+    // #116 — host sees the control section; idle is disabled (platform-managed),
     // tickets is disabled (no fabricated data), and the state segment shows "active".
+    // #249 replaced the fabricated disabled `paused` chip with a real host
+    // control, so one disabled chip remains where there were two; the assertion
+    // is re-pointed and the replacement is asserted rather than merely dropped.
     assert.equal(await page.isHidden("#host-controls"), false);
     assert.ok(await page.getAttribute("#rs-active", "class").then((c) => (c || "").includes("on")));
-    assert.equal(await page.$$eval(".rail-state .rs[data-disabled='true']", (e) => e.length), 2);
+    assert.equal(await page.$$eval(".rail-state .rs[data-disabled='true']", (e) => e.length), 1);
+    assert.equal(await page.$$eval(".rail-state .rs[data-disabled='true']", (e) => e[0]?.textContent?.trim()), "idle");
+    assert.equal(await page.locator("#auto-continue-toggle").count(), 1);
     assert.equal(await page.isDisabled("#tickets-button"), true);
   } finally {
     await browser.close();
@@ -1739,6 +1744,92 @@ test("ordered lists keep authored numbering across blank lines — ol.start / li
     assert.deepEqual(briefLists[0]?.items.map((item) => item.text), ["first", "second", "third"]);
     assert.deepEqual(briefLists[1]?.items.map((item) => item.text), ["fourth", "fifth"]);
     assert.deepEqual(briefLists[2]?.items.map((item) => item.value), [null, "3"]);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+// #249: the host rail gains a real auto-continue control in place of the
+// fabricated disabled `paused` chip. Host-only, off by default, seconds input
+// disabled until opted in, and a truthful pending state when the guard pauses.
+test("host rail auto-continue: host-only, off by default, opt-in enables the bounded delay, pending shows truthfully (#249)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    // A non-host never sees the host controls at all.
+    const guest = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await guest.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
+    await guest.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(await guest.locator("#host-controls").isVisible(), false, "a non-host must not see host controls");
+    await guest.close();
+
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector("#host-controls:not([hidden])");
+
+    // The fabricated disabled "paused" chip is gone.
+    assert.equal(await page.locator('.rail-state .rs[data-disabled="true"]:has-text("paused")').count(), 0);
+
+    // Off by default, and the seconds input is disabled until opted in.
+    await page.waitForSelector("#auto-continue-toggle");
+    assert.equal(await page.locator("#auto-continue-toggle").isChecked(), false);
+    assert.equal(await page.locator("#auto-continue-delay").isDisabled(), true);
+    assert.equal(await page.locator("#auto-continue-delay").inputValue(), "30");
+    // The bounds are advertised on the control itself, and the server enforces them.
+    assert.equal(await page.locator("#auto-continue-delay").getAttribute("min"), "30");
+    assert.equal(await page.locator("#auto-continue-delay").getAttribute("max"), "300");
+    // Nothing is claimed until something is actually pending.
+    assert.equal(await page.locator("#auto-continue-state").isVisible(), false);
+
+    // Opt in: the delay input becomes editable and the preference round-trips.
+    await page.check("#auto-continue-toggle");
+    await page.waitForSelector("#auto-continue-delay:not([disabled])");
+    await page.fill("#auto-continue-delay", "300");
+    await page.locator("#auto-continue-delay").blur();
+    await page.waitForFunction(async () => {
+      const response = await fetch("/status", { headers: { Authorization: `Bearer ${sessionStorage.getItem("agentgather.token") || ""}` } });
+      if (!response.ok) return false;
+      const payload = await response.json();
+      return payload.loop_guard?.auto_continue_enabled === true && payload.loop_guard?.auto_continue_delay_s === 300;
+    });
+
+    // Drive the guard to a pause as the agent; the rail must then tell the truth.
+    // Drive past the 30-message guard. The last post is expected to be refused
+    // with 429 — that refusal is what opens the pending cycle.
+    let guardStatus = 0;
+    for (let index = 0; index < 32 && guardStatus !== 429; index += 1) {
+      const response = await fetch(`${fixture.baseUrl}/messages`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${fixture.reviewerToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `agent ${index}` })
+      });
+      guardStatus = response.status;
+    }
+    assert.equal(guardStatus, 429, "the guard must pause before the rail can show a pending cycle");
+    await page.waitForSelector("#auto-continue-state:not([hidden])", { timeout: 15_000 });
+    const pendingText = await page.locator("#auto-continue-state").innerText();
+    assert.match(pendingText, /paused/i);
+    assert.match(pendingText, /@reviewer/, "the pending state names the blocked alias");
+    assert.match(pendingText, /continuing in \d+s/, "a real countdown, not a fabricated label");
+    // The countdown is never a token or URL.
+    assert.doesNotMatch(pendingText, /Bearer|tgl_|#token=|http/);
+
+    // The composer is untouched by any of this.
+    assert.equal(await page.locator("#message-text").isDisabled(), false);
+    assert.equal(await page.locator("#auto-continue-toggle").count(), 1, "the control lives in the rail only");
+    assert.equal(await page.locator(".composer #auto-continue-toggle").count(), 0);
+
+    // No overflow at desktop or narrow, and the control is a plain rail row —
+    // no modal, no nested card.
+    assert.equal(await page.locator(".rail-autocontinue dialog, .rail-autocontinue .card").count(), 0);
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 760 });
+      await page.waitForTimeout(120);
+      const noOverflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+      assert.equal(noOverflow, true, `no horizontal overflow at ${width}`);
+    }
   } finally {
     await browser.close();
     await fixture.close();

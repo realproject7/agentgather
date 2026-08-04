@@ -131,8 +131,25 @@
             <div class="rail-state" role="group" aria-label="Room state">
               <span class="rs" id="rs-active">active</span>
               <span class="rs" data-disabled="true" title="Platform-managed — not available for a local host room.">idle</span>
-              <span class="rs" data-disabled="true" title="Platform-managed — not available for a local host room.">paused</span>
               <button id="close-button" class="rs rs-close" type="button" title="Permanently close this room.">close</button>
+            </div>
+            <!-- #249: replaces the fabricated disabled `paused` chip. Unlike that
+                 chip this is a real, host-owned room preference: opt in and the
+                 server re-arms the loop guard after a visible delay. Off by
+                 default; the seconds input stays disabled until opted in. -->
+            <div class="rail-autocontinue" id="auto-continue">
+              <label class="ac-line" for="auto-continue-toggle">
+                <input type="checkbox" id="auto-continue-toggle" />
+                <span>Auto-continue after loop guard</span>
+              </label>
+              <label class="ac-line ac-delay" for="auto-continue-delay">
+                <span>delay</span>
+                <input type="number" id="auto-continue-delay" min="30" max="300" step="1" value="30" disabled
+                       aria-label="Auto-continue delay in seconds" />
+                <span>s</span>
+              </label>
+              <div id="auto-continue-state" class="rail-note ac-state" role="status" aria-live="polite" hidden></div>
+              <div id="auto-continue-error" class="rail-note session-error-note" role="alert" hidden></div>
             </div>
             <div class="rail-ctl">
               <button id="invite-button" class="rail-btn" type="button">invite</button>

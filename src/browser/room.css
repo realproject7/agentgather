@@ -1762,3 +1762,50 @@ button:disabled {
     display: none;
   }
 }
+
+/* #249 host loop-guard auto-continue control. Sits in the existing host rail —
+   no modal, no nested card, no new visual language. Tokens only. */
+.rail-autocontinue {
+  margin-top: 9px;
+  display: grid;
+  gap: 6px;
+}
+
+.rail-autocontinue[hidden] {
+  display: none;
+}
+
+.ac-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.ac-delay {
+  padding-left: 21px;
+}
+
+.ac-line input[type="number"] {
+  width: 62px;
+  min-height: 28px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}
+
+.ac-line input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ac-state {
+  margin-top: 3px;
+}

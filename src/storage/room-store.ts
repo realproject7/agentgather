@@ -81,6 +81,16 @@ export interface UpdateAttendancePolicyOptions {
   now?: Date;
 }
 
+export interface UpdateLoopGuardPreferenceOptions {
+  root: string;
+  roomId: string;
+  enabled: boolean;
+  /** Omitted keeps the stored delay, or the 30s default for a room that has none. */
+  delaySeconds?: number;
+  updatedBy: string;
+  now?: Date;
+}
+
 export interface StartActiveSessionOptions {
   root: string;
   roomId: string;
@@ -150,6 +160,50 @@ export async function updateAttendancePolicy(options: UpdateAttendancePolicyOpti
     await writeJson(paths.state, updatedState);
     return updatedState;
   });
+}
+
+// #249: host-only loop-guard preference, persisted through the SAME writer lock
+// every other room-state mutation uses, so a concurrent host update cannot lose
+// a write or interleave with an attendance/brief change. Bounds are enforced by
+// the caller (the HTTP boundary) and asserted again here.
+export const AUTO_CONTINUE_DELAY_MIN_S = 30;
+export const AUTO_CONTINUE_DELAY_MAX_S = 300;
+export const AUTO_CONTINUE_DELAY_DEFAULT_S = 30;
+
+export async function updateLoopGuardPreference(
+  options: UpdateLoopGuardPreferenceOptions
+): Promise<RoomState> {
+  assertSafeSlug(options.roomId, "room id");
+  assertSafeSlug(options.updatedBy, "updated by");
+  const delay = options.delaySeconds;
+  if (delay !== undefined && !isValidAutoContinueDelay(delay)) {
+    throw new Error(
+      `auto continue delay must be an integer between ${AUTO_CONTINUE_DELAY_MIN_S} and ${AUTO_CONTINUE_DELAY_MAX_S} seconds`
+    );
+  }
+  const now = options.now ?? new Date();
+  const paths = roomPaths(options.root, options.roomId);
+
+  return withWriterLock(paths.lock, async () => {
+    const state = withRoomDefaults(await readRoomState(paths));
+    const updatedState: RoomState = {
+      ...state,
+      auto_continue_enabled: options.enabled,
+      auto_continue_delay_s: delay ?? state.auto_continue_delay_s ?? AUTO_CONTINUE_DELAY_DEFAULT_S,
+      updatedAt: now.toISOString()
+    };
+    await writeJson(paths.state, updatedState);
+    return updatedState;
+  });
+}
+
+export function isValidAutoContinueDelay(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= AUTO_CONTINUE_DELAY_MIN_S &&
+    value <= AUTO_CONTINUE_DELAY_MAX_S
+  );
 }
 
 export async function updateBrief(options: UpdateBriefOptions): Promise<RoomBrief> {

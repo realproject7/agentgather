@@ -54,6 +54,12 @@ export interface RoomState {
   // T11: the single active chat session for this room, when one is running.
   // Absent when idle; cleared on end and on room close.
   active_session?: ActiveSession;
+  // #249: host-only opt-in to automatic continuation after a loop-guard pause.
+  // Both fields are optional so a room saved before this feature keeps exactly
+  // today's behavior: absent is read as disabled, never as enabled.
+  auto_continue_enabled?: boolean;
+  // Seconds to wait before re-arming the guard. Server-validated to 30..300.
+  auto_continue_delay_s?: number;
 }
 
 export interface Participant {

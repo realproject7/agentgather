@@ -26,6 +26,14 @@ const state = {
   // Serialize pollMessages (#241): a fetch slower than the 3s interval must not let
   // overlapping timer callbacks issue several concurrent (closed-history) fetches.
   pollInFlight: false,
+  // #249 host loop-guard control. Deadline is a local wall-clock target derived
+  // from the server's reported seconds-remaining; the tick only repaints text
+  // and never fetches, so this adds no poller of its own. Retained so it can be
+  // cleared the moment nothing is pending (same timer discipline as #241).
+  autoContinueDeadline: null,
+  autoContinuePendingAlias: "",
+  autoContinueCount: 0,
+  autoContinueTick: null,
   briefVersion: 0,
   replyTo: null,
   // Reply affordance (#113): minimal from/text record per rendered message id so
@@ -132,6 +140,10 @@ const sessionTitle = document.getElementById("session-title");
 const sessionDetail = document.getElementById("session-detail");
 const sessionControl = document.getElementById("session-control");
 const sessionToggle = document.getElementById("session-toggle");
+const autoContinueToggle = document.getElementById("auto-continue-toggle");
+const autoContinueDelay = document.getElementById("auto-continue-delay");
+const autoContinueState = document.getElementById("auto-continue-state");
+const autoContinueError = document.getElementById("auto-continue-error");
 const sessionError = document.getElementById("session-error");
 const historyStrip = document.getElementById("history-strip");
 const historySourceTag = document.getElementById("history-source-tag");
@@ -375,6 +387,10 @@ function bindEvents() {
   });
   closeButton.addEventListener("click", () => void closeRoom());
   sessionToggle.addEventListener("click", () => void toggleSession());
+  autoContinueToggle.addEventListener("change", () => void saveAutoContinue());
+  // Commit the delay on change/blur rather than per keystroke, so a partially
+  // typed number is never sent. The server validates the bounds regardless.
+  autoContinueDelay.addEventListener("change", () => void saveAutoContinue());
   exportButton.addEventListener("click", exportRoom);
   railBroadcast.addEventListener("click", () => {
     setBroadcast(true);
@@ -460,6 +476,7 @@ async function loadStatus() {
   // (open -> active, closed -> close). idle/pause are platform-managed and stay
   // disabled in a local host room (no fabricated state transitions).
   hostControls.hidden = !payload.is_host;
+  renderAutoContinue(payload.loop_guard, Boolean(payload.is_host));
   rsActive.classList.toggle("on", payload.room_status !== "closed");
   closeButton.classList.toggle("on", payload.room_status === "closed");
   // T11 (#183): idle when absent, active while a session runs; the banner and the
@@ -981,6 +998,77 @@ async function closeRoom() {
 // Host-only start/end of the T11 active chat session (#183). Start prompts for a
 // duration; end confirms. The server appends the start/end system message (T11),
 // so there is no separate toast — the timeline carries the "session ended" line.
+// #249: reflect the server's loop-guard state. The server is the authority —
+// this only renders what /status reports and posts host intent back. The
+// countdown ticks locally between status polls so the number stays honest
+// without adding a poller of its own.
+function renderAutoContinue(loopGuard, isHost) {
+  if (!isHost || !loopGuard) {
+    state.autoContinueDeadline = null;
+    return;
+  }
+  // Never fight the host mid-edit: skip while either control has focus.
+  const editing = document.activeElement === autoContinueToggle || document.activeElement === autoContinueDelay;
+  if (!editing) {
+    autoContinueToggle.checked = loopGuard.auto_continue_enabled === true;
+    autoContinueDelay.value = String(loopGuard.auto_continue_delay_s);
+    autoContinueDelay.disabled = loopGuard.auto_continue_enabled !== true;
+  }
+  state.autoContinueCount = loopGuard.auto_continue_count || 0;
+  state.autoContinueDeadline =
+    loopGuard.pending === true ? Date.now() + (loopGuard.pending_seconds_remaining || 0) * 1000 : null;
+  state.autoContinuePendingAlias = loopGuard.pending === true ? loopGuard.pending_alias || "" : "";
+  syncAutoContinueTick();
+  paintAutoContinueState();
+}
+
+// Exactly one repaint interval, and only while a continuation is pending.
+function syncAutoContinueTick() {
+  const shouldTick = state.autoContinueDeadline !== null;
+  if (shouldTick && state.autoContinueTick === null) {
+    state.autoContinueTick = setInterval(paintAutoContinueState, 1000);
+  } else if (!shouldTick && state.autoContinueTick !== null) {
+    clearInterval(state.autoContinueTick);
+    state.autoContinueTick = null;
+  }
+}
+
+function paintAutoContinueState() {
+  const parts = [];
+  if (state.autoContinueDeadline !== null) {
+    const seconds = Math.max(0, Math.ceil((state.autoContinueDeadline - Date.now()) / 1000));
+    const who = state.autoContinuePendingAlias ? ` for @${state.autoContinuePendingAlias}` : "";
+    parts.push(`paused${who} · continuing in ${seconds}s`);
+  }
+  if (state.autoContinueCount > 0) {
+    parts.push(`${state.autoContinueCount} auto-continue${state.autoContinueCount === 1 ? "" : "s"} this session`);
+  }
+  autoContinueState.textContent = parts.join(" · ");
+  autoContinueState.hidden = parts.length === 0;
+}
+
+async function saveAutoContinue() {
+  const enabled = autoContinueToggle.checked;
+  const delay = Number(autoContinueDelay.value);
+  autoContinueError.hidden = true;
+  autoContinueToggle.disabled = true;
+  autoContinueDelay.disabled = true;
+  try {
+    const payload = await authFetch("/loop-guard", {
+      method: "POST",
+      body: JSON.stringify({ enabled, delay_s: Number.isInteger(delay) ? delay : undefined })
+    });
+    renderAutoContinue(payload.loop_guard, true);
+  } catch (error) {
+    autoContinueError.textContent = error instanceof Error ? error.message : "could not save auto-continue";
+    autoContinueError.hidden = false;
+    autoContinueToggle.checked = !enabled;
+  } finally {
+    autoContinueToggle.disabled = false;
+    autoContinueDelay.disabled = !autoContinueToggle.checked;
+  }
+}
+
 async function toggleSession() {
   if (state.sessionInFlight || state.roomStatus === "closed") return;
   const active = Boolean(state.activeSession);
