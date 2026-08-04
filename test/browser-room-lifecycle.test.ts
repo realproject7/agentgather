@@ -191,9 +191,22 @@ test("overlapping poll intervals issue a single final closed-history fetch (seri
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
 
+    // #270: seed a message BEFORE entry so the first poll has something to
+    // render. The brief is painted before `enterRoom` awaits that poll, so
+    // "Lifecycle room." appearing does NOT mean entry finished — and everything
+    // below needs `bindEvents()` to have run (#close-button's handler) and needs
+    // the first poll to be OUT of the way before /messages is held.
+    await fetch(`${fixture.baseUrl}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.joinerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "entry-complete marker" })
+    });
+
     // Host enters the open room so the 3s poll timer is running.
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
-    await page.waitForSelector("text=Lifecycle room.");
+    // Wait for what the first poll must render — the marker above — which entry
+    // produces immediately before binding events. Same signal #264 established.
+    await page.waitForSelector("text=entry-complete marker");
 
     // From now on, hold every GET /messages so a poll's fetch never completes —
     // this is the "slow response" that a naive poller would let overlapping timer
