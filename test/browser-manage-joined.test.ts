@@ -449,6 +449,10 @@ test("a platform-only selection still commits normally when no browser rows are 
   const fixture = await startMixedFixture(2);
   try {
     const { page, root } = fixture;
+    // Captured BEFORE the action: comparing the browser-local list to a reading
+    // of itself taken after would hold no matter what the archive did.
+    const localBefore = await readLocalRooms(page);
+    assert.equal(localBefore.length, 2, "positive control: the browser-local rows must be seeded");
     await page.click("#manage-open");
     await page.waitForSelector("#manage:not([hidden])");
     await page.waitForFunction((expected) => document.querySelectorAll(".manage-row").length === expected, TOTAL + 2);
@@ -469,7 +473,9 @@ test("a platform-only selection still commits normally when no browser rows are 
     const after = await readJoinedRooms(root);
     assert.equal(after.filter((room) => room.archived === true).length, 3);
     assert.equal(after.length, TOTAL, "archive must not remove rows");
-    assert.deepEqual(await readLocalRooms(page), await readLocalRooms(page));
+    // A platform-only selection must leave the browser-owned store untouched —
+    // same rows, same contents, including the absence of `archived`.
+    assert.deepEqual(await readLocalRooms(page), localBefore, "browser-local rows must be untouched");
   } finally {
     await fixture.close();
   }
