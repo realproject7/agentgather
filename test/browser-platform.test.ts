@@ -8,7 +8,13 @@ import { chromium } from "playwright";
 import { VERSION } from "../src/cli/help.js";
 import type { Participant } from "../src/protocol/index.js";
 import { createPlatformHttpServer, createControlPlaneRoom } from "../src/platform/index.js";
-import { appendServerMessage, createRoom, recordJoinedRoom, writeParticipants } from "../src/storage/index.js";
+import {
+  appendServerMessage,
+  createRoom,
+  recordJoinedHistory,
+  recordJoinedRoom,
+  writeParticipants
+} from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { writeToken } from "../src/cli/state.js";
 import type { Server } from "node:http";
@@ -53,7 +59,12 @@ function roomInput(overrides: Record<string, unknown>): Record<string, unknown> 
 }
 
 async function listen(server: Server): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-  const port = await getFreePort();
+  return listenOn(server, await getFreePort());
+}
+
+// Bind a chosen port — needed when a room has to come back on the SAME base URL a
+// joined-room row already points at (#247 live recovery).
+async function listenOn(server: Server, port: number): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   return {
     baseUrl: `http://127.0.0.1:${port}`,
@@ -600,7 +611,7 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     openUrl.searchParams.set("base_url", "http://127.0.0.1:9");
     const redirect = await fetch(openUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
-    assert.match(redirect.headers.get("location") ?? "", /^http:\/\/127\.0\.0\.1:9\/?\?dashboard=.*#token=tgl_joined_cli_secret$/);
+    assert.match(redirect.headers.get("location") ?? "", /^http:\/\/127\.0\.0\.1:9\/?\?dashboard=.*#token=tgl_joined_cli_secret(&snapshot=[A-Za-z0-9_-]+)?$/);
 
     // Add a browser-recorded token-free pointer.
     await page.fill("#joined-input", "http://127.0.0.1:8787/saved-room");
@@ -669,7 +680,7 @@ test("the dashboard remembers tokenized root invite links as real joined rooms",
     openUrl.searchParams.set("base_url", roomEntry.baseUrl);
     const redirect = await fetch(openUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
-    assert.match(redirect.headers.get("location") ?? "", /#token=tgl_invite_root_secret$/);
+    assert.match(redirect.headers.get("location") ?? "", /#token=tgl_invite_root_secret(&snapshot=[A-Za-z0-9_-]+)?$/);
   } finally {
     await browser.close();
     await platform.close();
@@ -1615,7 +1626,7 @@ test("a stale agent room tab refreshes metadata but cannot overwrite the selecte
     openUrl.searchParams.set("base_url", roomEntry.baseUrl);
     const redirect = await fetch(openUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
-    assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${humanToken}$`));
+    assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${humanToken}(&snapshot=[A-Za-z0-9_-]+)?$`));
 
     // The dashboard list and rail stay token-free throughout.
     const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as { rooms: unknown[] };
@@ -1688,10 +1699,309 @@ test("an explicit invite import intentionally changes the selected joined-room i
     openUrl.searchParams.set("base_url", roomEntry.baseUrl);
     const redirect = await fetch(openUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
-    assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${agentToken}$`));
+    assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${agentToken}(&snapshot=[A-Za-z0-9_-]+)?$`));
   } finally {
     await browser.close();
     await platform.close();
     await roomEntry.close();
+  }
+});
+
+// #247 — a joined room whose host has stopped serving must still be readable from
+// the dashboard. While the host is reachable the room surface hands the dashboard
+// the history it has ALREADY loaded; once the host is gone, selecting the row
+// renders that device-local snapshot here instead of following a redirect to a
+// host that cannot answer.
+test("a dashboard-opened room bridges its loaded history, and the unreachable row then renders it offline (#247)", async () => {
+  const root = await makeRoot();
+  const humanToken = "tgl_snapshot_human_identity";
+  await createRoom({ root, roomId: "snap-room", hostAlias: "host", briefBody: "Snapshot bridge brief." });
+  await writeParticipants(root, "snap-room", [
+    { ...participant("host", "human", true, "tgl_snap_room_host"), display_name: "Host" },
+    { ...participant("project7", "human", false, humanToken), display_name: "project7" }
+  ]);
+  await writeToken(root, "snap-room", "project7", humanToken);
+  const roomEntry = await listen(
+    createRoomHttpServer({ root, roomId: "snap-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 })
+  );
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "snap-room",
+    title: "Snapshot Room",
+    alias: "project7",
+    baseUrl: roomEntry.baseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  // Host-authored history that this participant will actually load — including a
+  // credential-shaped body, which must never reach the snapshot intact.
+  for (const text of ["first saved line", "second saved line", `leaked ${humanToken} and http://evil.test/card`]) {
+    const posted = await fetch(`${roomEntry.baseUrl}/messages`, {
+      method: "POST",
+      headers: { Authorization: "Bearer tgl_snap_room_host", "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    assert.equal(posted.status, 201);
+  }
+
+  // Both servers are already listening, so the browser launch goes INSIDE the try:
+  // a launch failure must still run teardown, or the open handles keep the test
+  // process alive long after the failure and the run looks like a hang.
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  // The host is stopped mid-test on purpose; this keeps the teardown honest if an
+  // assertion fires before that point, so a failure never leaves a live handle.
+  let hostStopped = false;
+  const stopHost = async (): Promise<void> => {
+    if (hostStopped) return;
+    hostStopped = true;
+    await roomEntry.close();
+  };
+  try {
+    browser = await chromium.launch();
+    // The real open path mints the bridge capability; take the redirect the
+    // dashboard would have followed.
+    const openUrl = new URL(`${platform.baseUrl}/joined-rooms/open`);
+    openUrl.searchParams.set("room_id", "snap-room");
+    openUrl.searchParams.set("base_url", roomEntry.baseUrl);
+    const redirect = await fetch(openUrl, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    const roomUrl = redirect.headers.get("location") ?? "";
+    assert.match(roomUrl, /snapshot=/);
+
+    const roomPage = await browser!.newPage({ viewport: { width: 1100, height: 760 } });
+    await roomPage.goto(roomUrl);
+    await roomPage.waitForSelector("text=second saved line");
+    // The capability never survives in the address bar.
+    assert.equal(roomPage.url().includes("snapshot="), false);
+    assert.equal(roomPage.url().includes("token="), false);
+
+    // The bridge landed: the dashboard now owns a snapshot of what was loaded.
+    const readSnapshot = async (): Promise<{ cursor: number; savedAt: string; messages: Array<{ text: string }> } | null> => {
+      const url = new URL(`${platform.baseUrl}/joined-rooms/history`);
+      url.searchParams.set("room_id", "snap-room");
+      url.searchParams.set("base_url", roomEntry.baseUrl);
+      return ((await (await fetch(url)).json()) as { snapshot: { cursor: number; savedAt: string; messages: Array<{ text: string }> } | null }).snapshot;
+    };
+    let snapshot = await readSnapshot();
+    for (let attempt = 0; attempt < 100 && (snapshot?.messages.length ?? 0) < 3; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      snapshot = await readSnapshot();
+    }
+    assert.equal(snapshot?.messages.length, 3);
+    assert.equal(snapshot?.cursor, 3);
+    // Redacted on the way in — the token and card URL are gone, the prose stays.
+    const leaked = snapshot?.messages.at(-1)?.text ?? "";
+    assert.equal(/tgl_|Bearer|token=|evil\.test/i.test(leaked), false);
+    assert.match(leaked, /\[redacted-token\]/);
+
+    // Snapshot content never appears on the token-free metadata surface.
+    const metadata = await (await fetch(`${platform.baseUrl}/joined-rooms`)).text();
+    assert.equal(metadata.includes("first saved line"), false);
+    assert.equal(/tgl_|Bearer|token=/i.test(metadata), false);
+
+    // The host goes away — this is the restart/shutdown case the ticket is about.
+    await roomPage.close();
+    await stopHost();
+
+    const dashPage = await browser!.newPage({ viewport: { width: 1280, height: 900 } });
+    await dashPage.goto(platform.baseUrl);
+    await dashPage.waitForSelector('.joined-row[data-reachability="unreachable"]');
+    await dashPage.click(".joined-row");
+
+    // It stayed in the dashboard — no navigation attempt at the dead host.
+    await dashPage.waitForSelector('#history-source[data-source="snapshot"]');
+    assert.equal(dashPage.url().startsWith(platform.baseUrl), true);
+    assert.equal(
+      (await dashPage.locator("#history-source-label").textContent()) ?? "",
+      "Local snapshot · host offline"
+    );
+    // The saved transcript is here, bounded by an honest cursor + saved-at line.
+    await dashPage.waitForSelector("text=first saved line");
+    const band = (await dashPage.locator("#chat-offline").textContent()) ?? "";
+    assert.match(band, /saved on this device up to message #3/);
+    assert.match(band, /nothing can be sent until the host resumes/i);
+    assert.equal(/newer|unseen|complete history/i.test(band), false);
+    // Every host-owned mutation is absent, not fabricated-and-disabled.
+    assert.equal(await dashPage.locator("#host-controls").isVisible(), false);
+    assert.equal(await dashPage.locator("#info-panel").isVisible(), false);
+    assert.equal(await dashPage.locator("#shell-timeline .shell-message").count(), 3);
+    // And nothing token-shaped is rendered.
+    assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-detail").innerHTML()) ?? ""), false);
+  } finally {
+    await browser?.close();
+    await platform.close();
+    await stopHost();
+  }
+});
+
+// #247 — the no-snapshot case must be honest rather than empty-and-mysterious, and
+// the way back to the live room is gated on the reachability probe actually
+// reporting the host is back. Nothing here may imply history exists locally.
+test("an unreachable room with no snapshot shows an honest empty offline state, and retry opens only once the host is live (#247)", async () => {
+  const root = await makeRoot();
+  // A port with nothing listening: the row probes unreachable.
+  const port = await getFreePort();
+  const roomBaseUrl = `http://127.0.0.1:${port}`;
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "gone-room",
+    title: "Gone Room",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await createRoom({ root, roomId: "gone-room", hostAlias: "host", briefBody: "Recovered brief." });
+  await writeParticipants(root, "gone-room", [
+    { ...participant("host", "human", true, "tgl_gone_room_host"), display_name: "Host" },
+    { ...participant("project7", "human", false, "tgl_gone_room_human"), display_name: "project7" }
+  ]);
+  await writeToken(root, "gone-room", "project7", "tgl_gone_room_human");
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let host: { close: () => Promise<void> } | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
+    await page.click(".joined-row");
+
+    // Stayed in the dashboard, said plainly that nothing is saved, claimed nothing.
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+    assert.equal(page.url().startsWith(platform.baseUrl), true);
+    const band = (await page.locator("#chat-offline").textContent()) ?? "";
+    assert.match(band, /nothing from this room is saved on this device yet/i);
+    assert.equal(/newer|unseen|up to message/i.test(band), false);
+    assert.equal(await page.locator("#shell-timeline .shell-message").count(), 0);
+    assert.equal(await page.locator("#host-controls").isVisible(), false);
+
+    // While the host is still down, retry stays a retry — it never offers an open.
+    await page.click("#snapshot-retry");
+    await page.waitForFunction(
+      () => (document.querySelector("#snapshot-retry")?.textContent || "").includes("Still offline")
+    );
+    assert.equal(await page.locator('#snapshot-retry[data-live="true"]').count(), 0);
+
+    // The host comes back on the same base URL; now the probe can say so.
+    host = await listenOn(
+      createRoomHttpServer({ root, roomId: "gone-room", baseUrl: roomBaseUrl, rateLimitPerMinute: 1000 }),
+      port
+    );
+    await page.click("#snapshot-retry");
+    await page.waitForSelector('#snapshot-retry[data-live="true"]');
+    assert.match((await page.locator("#snapshot-retry").textContent()) ?? "", /Host is back/);
+  } finally {
+    await browser?.close();
+    await platform.close();
+    if (host !== null) await host.close();
+  }
+});
+
+// #247 — the saved cursor is a claim about what this device holds, and the offline
+// view must not overstate it: a snapshot that stops at #2 says so, shows exactly
+// those two rows, and reads without horizontal overflow on a narrow window.
+test("the offline view is bounded by its saved cursor and holds up at narrow width (#247)", async () => {
+  const root = await makeRoot();
+  const port = await getFreePort();
+  const roomBaseUrl = `http://127.0.0.1:${port}`;
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "stale-room",
+    title: "Stale Room",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  // This device only ever received the first two messages of a longer room. One of
+  // them is authored by a participant aliased after a card URL (#247, @re2): the
+  // rendered dashboard must show the redacted value, never the credential.
+  await recordJoinedHistory(root, {
+    roomId: "stale-room",
+    baseUrl: roomBaseUrl,
+    messages: [
+      { id: 1, from: "https://evil.example/card/abc123?token=tgl_leaked_secret_value", ts: now, type: "chat", text: "saved one" },
+      { id: 2, from: "project7", ts: now, type: "chat", text: "saved two" }
+    ],
+    forumPosts: [
+      {
+        id: "p1",
+        channel: "design",
+        title: "Saved forum thread",
+        author: "https://evil.example/card/xyz789",
+        ts: now,
+        status: "open",
+        body: "forum body kept locally",
+        comments: [{ id: "c1", author: "host", ts: now, body: "a saved comment" }]
+      }
+    ],
+    savedAt: now
+  });
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
+    await page.click(".joined-row");
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+
+    // Exactly what was saved: two chat rows plus the saved forum thread.
+    await page.waitForSelector("text=saved two");
+    assert.equal(await page.locator("#shell-timeline .shell-message").count(), 3);
+    assert.equal(await page.locator(".snapshot-forum").count(), 1);
+    await page.waitForSelector("text=Saved forum thread");
+    await page.waitForSelector("text=a saved comment");
+    // No nested card: the forum entry is a transcript row like any other.
+    assert.equal(await page.locator(".snapshot-forum .snapshot-forum").count(), 0);
+
+    // Rendered dashboard shows the redacted value, exactly — not the card URL.
+    assert.equal(
+      (await page.locator("#shell-timeline .shell-message").first().locator(".shell-message-from").textContent()) ?? "",
+      "[redacted-url]"
+    );
+    assert.equal(
+      (await page.locator(".snapshot-forum .shell-message-from").textContent()) ?? "",
+      "[redacted-url]"
+    );
+    const rendered = (await page.locator("#shell-timeline").innerHTML()) ?? "";
+    assert.equal(/tgl_|Bearer|token=|evil\.example/i.test(rendered), false);
+
+    const band = (await page.locator("#chat-offline").textContent()) ?? "";
+    assert.match(band, /up to message #2/);
+    assert.equal(/newer|unseen|complete history|all messages/i.test(band), false);
+
+    // Desktop and narrow: the offline surfaces wrap inside their own boxes rather
+    // than pushing content sideways. Measured per element, matching the existing
+    // responsive checks in this suite — the shell's own document-level narrow
+    // behaviour is pre-existing and not touched here.
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      const fits = await page.evaluate(() => {
+        const within = (selector: string): boolean => {
+          const element = document.querySelector(selector);
+          if (element === null) return true;
+          return element.scrollWidth <= element.clientWidth + 1;
+        };
+        return (
+          within("#chat-offline") &&
+          within("#history-source") &&
+          within("#snapshot-retry") &&
+          within(".snapshot-forum") &&
+          within(".snapshot-forum-title") &&
+          within(".snapshot-forum-comment") &&
+          within("#shell-timeline")
+        );
+      });
+      assert.equal(fits, true, `offline snapshot content overflowed at width ${width}`);
+    }
+  } finally {
+    await browser?.close();
+    await platform.close();
   }
 });

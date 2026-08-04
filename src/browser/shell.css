@@ -840,6 +840,13 @@ body {
   background: rgba(20, 20, 24, 0.7);
 }
 
+/* Explicit display:flex would otherwise defeat the UA [hidden] rule, so the #247
+   offline view could not actually remove the host-owned controls (same bug class
+   as .info/.detail above). */
+.host-controls[hidden] {
+  display: none;
+}
+
 .host-controls button,
 .control-link {
   min-height: 32px;
@@ -900,6 +907,51 @@ body {
 .history-source[data-source="empty"] {
   border-color: rgba(var(--shell-amber-rgb), 0.5);
   color: var(--warn);
+}
+
+/* #247 offline joined-room snapshot: same read-only treatment as the existing
+   host-offline cache state — this is a factual workspace state, not a new card. */
+.history-source[data-source="snapshot"] {
+  border-color: rgba(var(--shell-amber-rgb), 0.5);
+  color: var(--warn);
+}
+
+/* Re-probe control inside the offline band. Sits on the band, not in a card of
+   its own, and matches the band's own border/radius language. */
+.snapshot-retry {
+  display: block;
+  margin: 8px auto 0;
+  padding: 4px 12px;
+  border: 1px solid rgba(var(--shell-amber-rgb), 0.5);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--warn);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.snapshot-retry:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.snapshot-retry[data-live="true"] {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  color: var(--accent-strong);
+}
+
+/* A saved forum post reuses the transcript row; only its title is emphasized and
+   its comments indented, so no nested card appears in the timeline. */
+.snapshot-forum-title {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.snapshot-forum-comment {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
 }
 
 .chat-offline,

@@ -19,8 +19,14 @@ const fragmentToken = hashParams.get("token");
 // query string/history or persisted to host-owned room files (#172).
 const token = fragmentToken || sessionStorage.getItem("agentgather.token");
 if (token) sessionStorage.setItem("agentgather.token", token);
-// Strip the token from the address bar once read (mirrors the room surface).
-if (fragmentToken) history.replaceState(null, "", location.pathname + location.search);
+// Offline-snapshot capability (#247): a write-only grant carried from the room
+// surface for this dashboard-opened session. Memory only — never stored in
+// sessionStorage, never rendered, never logged — and cleared from the address bar
+// together with the token below.
+const snapshotCapability = hashParams.get("snapshot");
+// Strip the token and capability from the address bar once read (mirrors the room
+// surface).
+if (fragmentToken || snapshotCapability) history.replaceState(null, "", location.pathname + location.search);
 const channel = new URLSearchParams(location.search).get("channel");
 
 // Deep link (V2 #172): the selected forum post is addressable via a `post` query
@@ -272,6 +278,8 @@ function renderThread(thread) {
     }
     wrap.append(renderComment(comment));
   }
+  // The thread the participant just opened, with the comments it rendered (#247).
+  bridgeForumToDashboard([{ post, comments }]);
 }
 
 function renderComment(comment) {
@@ -399,6 +407,69 @@ function applyInitialSelection() {
   }
 }
 
+// ---- #247 dashboard-owned offline snapshot ----
+// Hand the dashboard the forum material this surface has ALREADY loaded, so an
+// unreachable room can still be read from the dashboard. Every call site passes
+// data the surface just rendered; nothing here fetches in order to back anything
+// up. One-way and fire-and-forget — the response is never read.
+const SNAPSHOT_MAX_TEXT_CHARS = 4_000;
+
+function redactForSnapshot(value) {
+  return String(value ?? "")
+    .replace(/https?:\/\/(?=\S*(?:token=|snapshot=|tgl_|\/card))\S+/gi, "[redacted-url]")
+    .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+    .replace(/[#?&]?(?:token|snapshot)=[^\s&#"']+/gi, "[redacted-token]")
+    .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]")
+    .slice(0, SNAPSHOT_MAX_TEXT_CHARS);
+}
+
+function dashboardBridgeUrl() {
+  const raw = new URLSearchParams(location.search).get("dashboard");
+  if (!raw || !snapshotCapability) return null;
+  let url;
+  try {
+    url = new URL("joined-rooms/history", raw.endsWith("/") ? raw : `${raw}/`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  // The dashboard is same-device. Refuse any non-loopback target so a hostile
+  // ?dashboard= can never receive this room's content.
+  const host = url.hostname;
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1" && host !== "[::1]") return null;
+  return url.toString();
+}
+
+function bridgeForumToDashboard(posts) {
+  const target = dashboardBridgeUrl();
+  if (target === null || posts.length === 0) return;
+  void fetch(target, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({
+      capability: snapshotCapability,
+      forumPosts: posts.map((entry) => ({
+        id: String(entry.post.id),
+        channel: channel || "",
+        title: redactForSnapshot(entry.post.title),
+        author: String(entry.post.author || ""),
+        ts: String(entry.post.created_at || ""),
+        status: String(entry.post.status || ""),
+        body: redactForSnapshot(entry.post.body),
+        comments: (entry.comments || []).map((comment) => ({
+          id: String(comment.id),
+          author: String(comment.author || ""),
+          ts: String(comment.created_at || ""),
+          body: redactForSnapshot(comment.body)
+        }))
+      }))
+    })
+  }).catch(() => {
+    // No dashboard reachable → the live forum view is unaffected.
+  });
+}
+
 async function loadParticipants() {
   try {
     const res = await authFetch("/status");
@@ -422,6 +493,8 @@ async function loadPosts() {
     renderFeed();
     renderRailPosts();
     setRailActive();
+    // The feed we just rendered — post rows without their comments (#247).
+    bridgeForumToDashboard(state.posts.map((post) => ({ post, comments: [] })));
   } catch {
     // Host unreachable → read-only: forum mutations are disabled (#211). Live
     // posting resumes when a later load succeeds.

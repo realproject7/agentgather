@@ -289,3 +289,89 @@ test("forum body and comments keep authored ordered-list numbering across blank 
     await fixture.close();
   }
 });
+
+// #247 — the forum surface is the other half of the offline snapshot: when the
+// dashboard opened this session, the material the participant has ALREADY loaded
+// (the feed, then the thread it opened) is handed to the dashboard so an
+// unreachable room stays readable. Nothing is fetched in order to back it up.
+test("forum bridges its loaded feed and opened thread to the dashboard snapshot (#247)", { timeout: 120_000 }, async () => {
+  const fixture = await startFixture();
+  // A dashboard on this device that tracks the same room, so the bridge has a
+  // real receiver and a real capability to present.
+  const dashRoot = await mkdtemp(path.join(os.tmpdir(), "agentgather-forum-snapshot-"));
+  const { createPlatformHttpServer } = await import("../src/platform/index.js");
+  const { recordJoinedRoom } = await import("../src/storage/index.js");
+  const { writeToken } = await import("../src/cli/state.js");
+  const now = new Date().toISOString();
+  await recordJoinedRoom(dashRoot, {
+    roomId: "demo",
+    title: "Demo Room",
+    alias: "host",
+    baseUrl: fixture.baseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await writeToken(dashRoot, "demo", "host", fixture.hostToken);
+  const dashPort = await getFreePort();
+  const dashboard = createPlatformHttpServer({ root: dashRoot, ownerUserId: "owner-1" });
+  await new Promise<void>((r) => dashboard.listen(dashPort, "127.0.0.1", r));
+  const dashboardUrl = `http://127.0.0.1:${dashPort}`;
+
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    // The capability exists only because the dashboard opened this room.
+    const openUrl = new URL(`${dashboardUrl}/joined-rooms/open`);
+    openUrl.searchParams.set("room_id", "demo");
+    openUrl.searchParams.set("base_url", fixture.baseUrl);
+    const redirect = await fetch(openUrl, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    const location = redirect.headers.get("location") ?? "";
+    const capability = new URLSearchParams(location.slice(location.indexOf("#") + 1)).get("snapshot");
+    assert.equal(typeof capability, "string");
+
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(
+      `${fixture.baseUrl}/forum.html?channel=design-forum&dashboard=${encodeURIComponent(dashboardUrl)}` +
+        `#token=${fixture.hostToken}&snapshot=${encodeURIComponent(capability as string)}`
+    );
+    // The feed loaded — that alone is bridgeable material.
+    await page.waitForSelector("text=Forum post layout — single column vs split");
+    // The capability is stripped from the address bar with the token.
+    assert.equal(page.url().includes("snapshot="), false);
+    assert.equal(page.url().includes("token="), false);
+
+    const readSnapshot = async (): Promise<{ forumPosts: Array<{ id: string; title: string; comments: unknown[] }> } | null> => {
+      const url = new URL(`${dashboardUrl}/joined-rooms/history`);
+      url.searchParams.set("room_id", "demo");
+      url.searchParams.set("base_url", fixture.baseUrl);
+      return ((await (await fetch(url)).json()) as { snapshot: { forumPosts: Array<{ id: string; title: string; comments: unknown[] }> } | null }).snapshot;
+    };
+    let snapshot = await readSnapshot();
+    for (let attempt = 0; attempt < 100 && (snapshot?.forumPosts.length ?? 0) === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      snapshot = await readSnapshot();
+    }
+    assert.equal(snapshot?.forumPosts[0]?.id, "rfc-1");
+    assert.match(snapshot?.forumPosts[0]?.title ?? "", /single column vs split/);
+    // The feed row carries no comments — they were never loaded yet.
+    assert.equal(snapshot?.forumPosts[0]?.comments.length, 0);
+
+    // Opening the thread loads its comments; only then are they snapshotted.
+    await page.click("text=Forum post layout — single column vs split");
+    await page.waitForSelector("text=Confirmed — reuses the safe renderer.");
+    for (let attempt = 0; attempt < 100 && (snapshot?.forumPosts[0]?.comments.length ?? 0) === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      snapshot = await readSnapshot();
+    }
+    assert.equal(snapshot?.forumPosts[0]?.comments.length, 1);
+    // Still exactly one post — a re-load merges rather than duplicating.
+    assert.equal(snapshot?.forumPosts.length, 1);
+    // And the saved copy carries nothing credential-shaped.
+    assert.equal(/tgl_|Bearer|token=|snapshot=/i.test(JSON.stringify(snapshot)), false);
+  } finally {
+    await browser?.close();
+    await new Promise<void>((r) => dashboard.close(() => r()));
+    await fixture.close();
+  }
+});

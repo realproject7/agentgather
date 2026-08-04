@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { deleteJoinedHistory } from "./joined-history-store.js";
 import { withWriterLock } from "./lock.js";
 import { ensureSecureDir, writeSecureFile } from "./secure-fs.js";
 
@@ -118,6 +119,11 @@ async function upsertJoinedRoomLocked(
 // Archive/unarchive one device-local joined-room record (#210). Writes ONLY the
 // joined-rooms.json store — it never touches host-owned room homes, host logs, or
 // any `rooms/<id>/` data. Returns true if a matching record was updated.
+//
+// Archiving KEEPS this device's offline history snapshot (#247): archive is a
+// reversible hide/restore, and once the host is gone that transcript cannot be
+// rebuilt from anywhere — so un-archiving restores a readable row. Only an explicit
+// delete clears it.
 export async function setJoinedRoomArchived(
   home: string,
   target: { roomId: string; baseUrl: string; archived: boolean }
@@ -136,18 +142,27 @@ export async function setJoinedRoomArchived(
 }
 
 // Hard-delete one device-local joined-room record (#210). Removes ONLY the entry
-// from joined-rooms.json — it deletes no host-owned room data (`rooms/<id>/`),
-// host logs, or tokens. Returns true if a matching record was removed.
+// from joined-rooms.json plus this device's own offline snapshot for it (#247) —
+// it deletes no host-owned room data (`rooms/<id>/`), host logs, or tokens.
+// Returns true if a matching record was removed.
 export async function deleteJoinedRoom(
   home: string,
   target: { roomId: string; baseUrl: string }
 ): Promise<boolean> {
   await ensureSecureDir(home);
-  return withWriterLock(joinedRoomsLockPath(home), async () => {
+  // Row FIRST, snapshot second (#247, @re1). A bridge write re-checks the row while
+  // holding the snapshot lock, so once the row is gone no accepted-but-unwritten
+  // post can still land; and the snapshot removal below waits for any write already
+  // in flight rather than racing it.
+  const removed = await withWriterLock(joinedRoomsLockPath(home), async () => {
     const rooms = await readJoinedRooms(home);
     const next = rooms.filter((room) => !(room.roomId === target.roomId && room.baseUrl === target.baseUrl));
     if (next.length === rooms.length) return false;
     await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms: next }, null, 2)}\n`);
     return true;
   });
+  // Unconditional: a snapshot must never outlive its row, even if the row was
+  // already gone when this call arrived.
+  await deleteJoinedHistory(home, { roomId: target.roomId, baseUrl: target.baseUrl });
+  return removed;
 }

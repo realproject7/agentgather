@@ -57,6 +57,11 @@ const state = {
   // bounded, redacted per-room snapshot. Drives the offline notice so the backup
   // view never implies complete unseen history beyond this cursor.
   backupCursor: 0,
+  // #247 offline-history bridge: the write-only capability this open was handed in
+  // its entry fragment, held in memory for the life of the tab and nowhere else.
+  // Absent unless the dashboard opened this room, which is exactly when a
+  // dashboard-owned snapshot is wanted.
+  snapshotCapability: null,
   // Browser notification layer (#186): opt-in, poll-driven (no push/SSE/worker).
   // enabled + scope persist per-room in sessionStorage; unread drives the title
   // badge + favicon dot while the tab is unfocused. ready gates out the initial
@@ -144,12 +149,12 @@ init().catch((error) => showError(error instanceof Error ? error.message : Strin
 
 async function init() {
   hydrateDashboardHome();
-  const token = tokenFromFragment() || sessionStorage.getItem("agentgather.token");
+  const token = tokenFromEntryFragment() || sessionStorage.getItem("agentgather.token");
   if (!token) {
     authError.hidden = false;
     shell.dataset.state = "auth-error";
     window.addEventListener("hashchange", () => {
-      const nextToken = tokenFromFragment();
+      const nextToken = tokenFromEntryFragment();
       if (nextToken) {
         authError.hidden = true;
         void startWithToken(nextToken);
@@ -385,10 +390,17 @@ function bindEvents() {
   });
 }
 
-function tokenFromFragment() {
+// Entry fragment. It carries this session's participant token and, when the open
+// came from the dashboard, the write-only offline-snapshot capability (#247). Both
+// are read here and the fragment is cleared in the same step, so neither value
+// survives in the address bar, a history entry, or a copied URL. The capability
+// stays in memory only — it is never stored, rendered, or logged.
+function tokenFromEntryFragment() {
   const fragment = new URLSearchParams(window.location.hash.slice(1));
   const token = fragment.get("token");
-  if (token) {
+  const capability = fragment.get("snapshot");
+  if (capability) state.snapshotCapability = capability;
+  if (token || capability) {
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }
   return token;
@@ -467,6 +479,26 @@ const BACKUP_PREFIX = "agentgather.backup.";
 const BACKUP_MAX_MESSAGES = 250;
 const BACKUP_MAX_BYTES = 200_000;
 
+// Scrub anything credential-shaped out of message text before it leaves the live
+// view: a bearer token, tgl_ token, `token=`/`snapshot=` parameter, invite URL, or
+// card URL is never written to the local backup nor handed to the dashboard
+// bridge. Used by both persistence paths so they cannot drift apart.
+function redactForBackup(value) {
+  return String(value ?? "")
+    .replace(/https?:\/\/(?=\S*(?:token=|snapshot=|tgl_|\/card))\S+/gi, "[redacted-url]")
+    .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+    .replace(/[#?&]?(?:token|snapshot)=[^\s&#"']+/gi, "[redacted-token]")
+    .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]")
+    .slice(0, SNAPSHOT_MAX_TEXT_CHARS);
+}
+
+// #247 dashboard-owned snapshot: the room origin's localStorage backup above is
+// unreadable once this host stops serving (its origin can no longer serve a page),
+// so the same already-loaded messages are also handed to the dashboard that opened
+// this room. Bounds mirror the local backup; the platform receiver re-checks them.
+const SNAPSHOT_MAX_TEXT_CHARS = 4_000;
+const SNAPSHOT_BRIDGE_MAX_BYTES = 150_000;
+
 // Persist a bounded, redacted device-local backup of the messages we've loaded
 // (#211): read the current per-room snapshot, append the new messages with any
 // bearer/tgl_ token, token= param, invite URL, or card URL scrubbed out, drop the
@@ -485,11 +517,7 @@ function recordBackupBatch(messages) {
     list = [];
   }
   for (const message of messages) {
-    const text = String(message.text)
-      .replace(/https?:\/\/(?=\S*(?:token=|tgl_|\/card))\S+/gi, "[redacted-url]")
-      .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
-      .replace(/[#?&]?token=[^\s&#"']+/gi, "[redacted-token]")
-      .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]");
+    const text = redactForBackup(message.text);
     list.push({ id: message.id, from: message.from, ts: message.ts, type: message.type, text });
     if (typeof message.id === "number" && message.id > state.backupCursor) state.backupCursor = message.id;
   }
@@ -501,6 +529,44 @@ function recordBackupBatch(messages) {
   } catch {
     // Storage full/unavailable — the live view is unaffected.
   }
+}
+
+// Hand one batch of ALREADY-RENDERED messages to the dashboard that opened this
+// room, so the row stays readable after this host stops serving (#247). One-way
+// and fire-and-forget: the response is never read, and no request is ever issued
+// to the host in order to fill it — the batch is whatever the live poll just
+// delivered. The capability travels in the body, never in a URL, and the target is
+// the loopback dashboard origin this open already carries.
+function bridgeHistoryToDashboard(messages) {
+  if (!state.snapshotCapability || messages.length === 0) return;
+  const dashboard = dashboardUrlFromQuery();
+  if (dashboard === null) return;
+  let target;
+  try {
+    target = new URL("joined-rooms/history", dashboard.endsWith("/") ? dashboard : `${dashboard}/`);
+  } catch {
+    return;
+  }
+  let batch = messages.map((message) => ({
+    id: message.id,
+    from: message.from,
+    ts: message.ts,
+    type: message.type,
+    text: redactForBackup(message.text)
+  }));
+  // Bound what one POST can carry — the receiver rejects an oversized body, and a
+  // first poll on a busy room can return a long history. Oldest go first.
+  const body = () => JSON.stringify({ capability: state.snapshotCapability, messages: batch });
+  while (batch.length > 1 && body().length > SNAPSHOT_BRIDGE_MAX_BYTES) batch = batch.slice(1);
+  void fetch(target.toString(), {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: body()
+  }).catch(() => {
+    // No dashboard reachable → the live view and the room-origin backup are
+    // unaffected; the snapshot simply misses this batch.
+  });
 }
 
 async function pollMessages() {
@@ -537,8 +603,12 @@ async function pollMessages() {
       maybeNotify(message);
       if (message.ts) state.lastMessageTs = message.ts;
     }
-    // Persist the redacted, bounded local backup of what we've now loaded (#211).
+    // Persist the redacted, bounded local backup of what we've now loaded (#211),
+    // and hand the same already-loaded batch to the dashboard snapshot (#247).
+    // Both take `fresh` — the messages this poll just rendered — so neither can
+    // reach for history the participant has not already received.
     recordBackupBatch(fresh);
+    bridgeHistoryToDashboard(fresh);
     updateLastMessage();
     state.cursor = payload.next_since_id;
     emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";

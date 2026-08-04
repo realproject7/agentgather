@@ -321,3 +321,283 @@ test("the joined-rooms bridge persists only sanitized metadata from a loopback O
     await fixture.close();
   }
 });
+
+// ---- #247 offline-history bridge ----
+// The receiver takes its target from the capability, never from the body, and
+// treats the body as hostile: size-capped, allowlisted, and re-redacted.
+
+function postJoinedHistory(baseUrl: string, origin: string, body: string): Promise<{ status: number; body: string }> {
+  const url = new URL("/joined-rooms/history", baseUrl);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: "POST",
+        headers: { origin, "content-type": "text/plain" }
+      },
+      (res) => {
+        let payload = "";
+        res.on("data", (chunk) => {
+          payload += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: payload }));
+      }
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// Take a real capability the only way one exists: from the open redirect.
+async function mintCapability(baseUrl: string, roomId: string, roomBaseUrl: string): Promise<string> {
+  const url = new URL("/joined-rooms/open", baseUrl);
+  url.searchParams.set("room_id", roomId);
+  url.searchParams.set("base_url", roomBaseUrl);
+  const res = await fetch(url, { redirect: "manual" });
+  assert.equal(res.status, 302);
+  const location = res.headers.get("location") ?? "";
+  const fragment = new URLSearchParams(location.slice(location.indexOf("#") + 1));
+  const capability = fragment.get("snapshot");
+  assert.equal(typeof capability, "string");
+  return capability as string;
+}
+
+async function seedJoinedRoom(root: string, roomId: string, roomBaseUrl: string): Promise<void> {
+  const { writeToken } = await import("../src/cli/state.js");
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, { roomId, title: "Snapshot Room", alias: "project7", baseUrl: roomBaseUrl, joinedAt: now, lastSeen: now });
+  await writeToken(root, roomId, "project7", "tgl_snapshot_open_token");
+}
+
+test("the history bridge refuses a non-loopback origin and an unknown capability (#247)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const capability = await mintCapability(fixture.baseUrl, "snap-room", roomBaseUrl);
+
+    const crossOrigin = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://evil.com",
+      JSON.stringify({ capability, messages: [{ id: 1, text: "x" }] })
+    );
+    assert.equal(crossOrigin.status, 403);
+    assert.equal(JSON.parse(crossOrigin.body).error, "bad_origin");
+
+    const forged = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({ capability: "made-up-capability", messages: [{ id: 1, text: "x" }] })
+    );
+    assert.equal(forged.status, 403);
+    assert.equal(JSON.parse(forged.body).error, "bad_capability");
+
+    // Neither attempt produced a snapshot.
+    const read = await fetch(
+      `${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`
+    );
+    assert.equal(((await read.json()) as { snapshot: unknown }).snapshot, null);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the history bridge writes only where its capability points, ignoring body-supplied targets (#247)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  await seedJoinedRoom(root, "other-room", "http://127.0.0.1:8");
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const capability = await mintCapability(fixture.baseUrl, "snap-room", roomBaseUrl);
+    // The body tries to name a different room and a filesystem path; both ignored.
+    const res = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({
+        capability,
+        roomId: "../../../../etc/passwd",
+        baseUrl: "http://127.0.0.1:8",
+        messages: [{ id: 1, from: "project7", ts: "", type: "chat", text: "landed" }]
+      })
+    );
+    assert.equal(res.status, 200);
+
+    const target = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`)
+    ).json()) as { snapshot: { messages: Array<{ text: string }> } | null };
+    assert.equal(target.snapshot?.messages[0]?.text, "landed");
+
+    const other = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=other-room&base_url=${encodeURIComponent("http://127.0.0.1:8")}`)
+    ).json()) as { snapshot: unknown };
+    assert.equal(other.snapshot, null, "the body could not redirect the write");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the history bridge re-redacts and bounds a hostile payload, and rejects an oversized body (#247)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const capability = await mintCapability(fixture.baseUrl, "snap-room", roomBaseUrl);
+    // A sender that skipped its own redaction must not be able to store a secret.
+    const res = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({
+        capability,
+        messages: [
+          { id: 1, from: "project7", ts: "", type: "chat", text: "raw tgl_unredacted_participant token" },
+          { id: 2, from: "project7", ts: "", type: "chat", text: "Bearer abc.def" },
+          { notAMessage: true },
+          { id: "not-a-number", text: "dropped" }
+        ]
+      })
+    );
+    assert.equal(res.status, 200);
+
+    const stored = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`)
+    ).json()) as { snapshot: { messages: Array<{ id: number; text: string }> } | null };
+    assert.equal(stored.snapshot?.messages.length, 2, "malformed entries were skipped, not coerced");
+    assert.equal(/tgl_|Bearer /i.test(JSON.stringify(stored.snapshot)), false);
+
+    // Anything past the body cap is refused outright rather than truncated silently.
+    const oversized = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({ capability, messages: [{ id: 3, text: "y".repeat(400_000) }] })
+    );
+    assert.equal(oversized.status, 400);
+    assert.equal(JSON.parse(oversized.body).error, "invalid_body");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("history is served only for a tracked room and never leaks into joined-room metadata (#247)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const capability = await mintCapability(fixture.baseUrl, "snap-room", roomBaseUrl);
+    await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({ capability, messages: [{ id: 1, from: "project7", ts: "", type: "chat", text: "private transcript line" }] })
+    );
+
+    // The token-free metadata surface carries no snapshot content.
+    const metadata = await (await fetch(`${fixture.baseUrl}/joined-rooms`)).text();
+    assert.equal(metadata.includes("private transcript line"), false);
+
+    // An untracked room has no readable transcript.
+    const untracked = await fetch(
+      `${fixture.baseUrl}/joined-rooms/history?room_id=never-joined&base_url=${encodeURIComponent(roomBaseUrl)}`
+    );
+    assert.equal(untracked.status, 404);
+
+    // Deleting the row removes the transcript with it.
+    const { deleteJoinedRoom } = await import("../src/storage/index.js");
+    await deleteJoinedRoom(root, { roomId: "snap-room", baseUrl: roomBaseUrl });
+    const afterDelete = await fetch(
+      `${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`
+    );
+    assert.equal(afterDelete.status, 404);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("the history bridge redacts every persisted field, including from/author, and archived rows stay readable (#247)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const capability = await mintCapability(fixture.baseUrl, "snap-room", roomBaseUrl);
+    // A sender that puts credential-shaped values in metadata fields, not just in
+    // bodies — the case that made a card URL renderable in the dashboard.
+    const res = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({
+        capability,
+        messages: [
+          {
+            id: 1,
+            from: "https://evil.example/card/abc123?token=tgl_leaked_secret_value",
+            ts: "Bearer sk-live-abcdef",
+            type: "tgl_type_secret_value",
+            text: "ordinary body"
+          }
+        ],
+        forumPosts: [
+          {
+            id: "p1",
+            channel: "design",
+            title: "ordinary title",
+            author: "https://evil.example/card/abc123",
+            ts: "Bearer sk-live-fedcba",
+            status: "tgl_status_secret_value",
+            body: "ordinary post body",
+            comments: [{ id: "c1", author: "Bearer sk-live-comment", ts: "", body: "ordinary comment" }]
+          }
+        ]
+      })
+    );
+    assert.equal(res.status, 200);
+
+    // Exact expected values in the API response, not merely "the token is missing".
+    const payload = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`)
+    ).json()) as {
+      snapshot: {
+        messages: Array<{ from: string; ts: string; type: string; text: string }>;
+        forumPosts: Array<{ author: string; ts: string; status: string; comments: Array<{ author: string }> }>;
+      } | null;
+    };
+    assert.equal(payload.snapshot?.messages[0]?.from, "[redacted-url]");
+    assert.equal(payload.snapshot?.messages[0]?.ts, "[redacted-credential]");
+    assert.equal(payload.snapshot?.messages[0]?.type, "[redacted-token]");
+    assert.equal(payload.snapshot?.messages[0]?.text, "ordinary body");
+    assert.equal(payload.snapshot?.forumPosts[0]?.author, "[redacted-url]");
+    assert.equal(payload.snapshot?.forumPosts[0]?.ts, "[redacted-credential]");
+    assert.equal(payload.snapshot?.forumPosts[0]?.status, "[redacted-token]");
+    assert.equal(payload.snapshot?.forumPosts[0]?.comments[0]?.author, "[redacted-credential]");
+    assert.equal(/tgl_|Bearer |token=|evil\.example/i.test(JSON.stringify(payload)), false);
+
+    // Archive keeps the transcript and the read path stays open, so un-archiving
+    // restores a readable row — asserted rather than assumed.
+    const { setJoinedRoomArchived } = await import("../src/storage/index.js");
+    await setJoinedRoomArchived(root, { roomId: "snap-room", baseUrl: roomBaseUrl, archived: true });
+    const archivedRead = await fetch(
+      `${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`
+    );
+    assert.equal(archivedRead.status, 200);
+    assert.equal(
+      ((await archivedRead.json()) as { snapshot: { messages: unknown[] } | null }).snapshot?.messages.length,
+      1,
+      "archive keeps the saved transcript readable"
+    );
+    // ...but an archived row stops ingesting new history.
+    const whileArchived = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({ capability, messages: [{ id: 2, from: "project7", ts: "", type: "chat", text: "after archive" }] })
+    );
+    assert.equal(whileArchived.status, 404);
+    assert.equal(JSON.parse(whileArchived.body).error, "not_tracked");
+  } finally {
+    await fixture.close();
+  }
+});
