@@ -23,6 +23,16 @@
 // is surfaced as the #general chat channel; no other chat channel is backed yet.
 const DEFAULT_CHANNEL_ID = "general";
 
+// #247 — this module is loaded before the surface script on both pages, so it
+// reads the entry fragment first. Two values are carried across a channel switch
+// so the surface the user lands on can keep the dashboard's offline snapshot
+// current: the dashboard origin (a loopback URL, not a secret) and the write-only
+// snapshot capability. The capability moves in the FRAGMENT only — same as the
+// token — so it never reaches the host's request log, and the target surface
+// strips it on read. Both are absent unless the dashboard opened this room.
+const ENTRY_DASHBOARD = new URLSearchParams(location.search).get("dashboard");
+const ENTRY_SNAPSHOT = new URLSearchParams(location.hash.slice(1)).get("snapshot");
+
 const rail = document.getElementById("channel-rail");
 if (rail) void initRail(rail);
 
@@ -264,11 +274,18 @@ function buildNotActivePane(token) {
 }
 
 // chat channel → the room surface; forum channel → the forum surface. The
-// session token rides the fragment so the target surface can authenticate.
+// session token rides the fragment so the target surface can authenticate, and
+// the dashboard hint + snapshot capability ride along (#247) so switching channels
+// does not silently stop the offline snapshot from being kept up to date.
 function channelHref(channel, token) {
-  const fragment = token ? `#token=${encodeURIComponent(token)}` : "";
+  const parts = [];
+  if (token) parts.push(`token=${encodeURIComponent(token)}`);
+  if (ENTRY_SNAPSHOT) parts.push(`snapshot=${encodeURIComponent(ENTRY_SNAPSHOT)}`);
+  const fragment = parts.length > 0 ? `#${parts.join("&")}` : "";
+  const dashboard = ENTRY_DASHBOARD ? `dashboard=${encodeURIComponent(ENTRY_DASHBOARD)}` : "";
   if (channel.type === "forum") {
-    return `forum.html?channel=${encodeURIComponent(channel.id)}${fragment}`;
+    const query = `channel=${encodeURIComponent(channel.id)}${dashboard ? `&${dashboard}` : ""}`;
+    return `forum.html?${query}${fragment}`;
   }
-  return `./${fragment}`;
+  return `./${dashboard ? `?${dashboard}` : ""}${fragment}`;
 }

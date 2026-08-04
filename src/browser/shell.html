@@ -157,7 +157,10 @@
               </div>
             </div>
 
-            <div class="host-controls" aria-label="Host controls">
+            <!-- Host-owned actions. Hidden outright in the #247 offline snapshot
+                 view: an unreachable room has no mutations to offer, and a
+                 disabled-but-present control would imply one exists. -->
+            <div class="host-controls" id="host-controls" aria-label="Host controls">
               <button id="invite-button" type="button">Invite cards</button>
               <button id="export-button" type="button">Export transcript</button>
               <button id="clear-cache-button" type="button">Clear cached history</button>

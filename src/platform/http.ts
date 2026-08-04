@@ -11,6 +11,7 @@
 // message log via the same storage the room server uses.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
@@ -22,7 +23,15 @@ import {
   refreshJoinedRoomMetadata,
   setJoinedRoomArchived,
   deleteJoinedRoom,
-  readMessages
+  readMessages,
+  readJoinedHistory,
+  recordJoinedHistory,
+  redactSnapshotText,
+  SNAPSHOT_MAX_COMMENTS_PER_POST,
+  SNAPSHOT_MAX_FORUM_POSTS,
+  SNAPSHOT_MAX_MESSAGES,
+  type SnapshotForumPost,
+  type SnapshotMessage
 } from "../storage/index.js";
 import { devOwnerIdentityFromEnv, type DevOwnerIdentityConfig, type PlatformOwnerQuery } from "./accounts.js";
 import { listRoomsResponse, readRoomResponse } from "./api.js";
@@ -72,6 +81,14 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
     await refreshJoinedRoomFromBridgeRequest(options, req, res);
     return;
   }
+  // Offline-history bridge (#247): a room surface this dashboard opened posts back
+  // the history it has ALREADY loaded, so the row stays readable once the host
+  // stops serving. One-way and local-only — it writes a device-local snapshot and
+  // returns nothing about it.
+  if (req.method === "POST" && url.pathname === "/joined-rooms/history") {
+    await receiveJoinedHistoryRequest(options, req, res);
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/joined-rooms/remember") {
     await rememberJoinedRoomFromInviteRequest(options, req, res);
     return;
@@ -111,6 +128,13 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
   // honest, token-free reachability probed live per request. No central copy.
   if (url.pathname === "/joined-rooms/open") {
     await openJoinedRoom(options, req, url, res);
+    return;
+  }
+  // The dashboard's own read of a saved transcript (#247). Deliberately a separate
+  // path from the metadata list: /joined-rooms stays a token-free metadata surface
+  // and never carries snapshot content.
+  if (url.pathname === "/joined-rooms/history") {
+    await sendJoinedHistory(options, url, res);
     return;
   }
   if (url.pathname === "/joined-rooms") {
@@ -219,13 +243,60 @@ async function openJoinedRoom(
   }
   const target = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
   target.searchParams.set("dashboard", dashboardOrigin(req));
-  target.hash = `token=${encodeURIComponent(token)}`;
+  // Offline-history bridge capability (#247): an ephemeral, write-only grant that
+  // lets THIS open post its already-loaded history back to this dashboard for the
+  // one room it was minted for. It rides the fragment beside the token — never the
+  // query — so it is not sent to the host, not logged in its access log, and is
+  // stripped from the address bar by the room surface on read. It carries no host
+  // authentication and cannot read a snapshot back.
+  const capability = mintSnapshotCapability(joined.roomId, joined.baseUrl);
+  target.hash = `token=${encodeURIComponent(token)}&snapshot=${encodeURIComponent(capability)}`;
   res.writeHead(302, {
     location: target.toString(),
     "referrer-policy": "no-referrer",
     "cache-control": "no-store"
   });
   res.end();
+}
+
+// ---- #247 offline-history bridge capability ----
+// Process-local and in-memory ONLY: never written to disk, never logged, never
+// rendered, and gone when the dashboard process exits. A capability names exactly
+// one (roomId, baseUrl) — the receiver takes the target from HERE, never from the
+// request body, so a bridge POST cannot be steered at an untracked room or at a
+// filesystem path of the sender's choosing. Expiry slides on use, so a live room
+// session keeps bridging while an abandoned tab's grant lapses.
+const SNAPSHOT_CAPABILITY_TTL_MS = 6 * 60 * 60 * 1000;
+const SNAPSHOT_CAPABILITY_MAX = 64;
+const snapshotCapabilities = new Map<string, { roomId: string; baseUrl: string; expiresAt: number }>();
+
+function mintSnapshotCapability(roomId: string, baseUrl: string): string {
+  pruneSnapshotCapabilities();
+  // Oldest-first eviction keeps a long-running dashboard from accumulating grants.
+  while (snapshotCapabilities.size >= SNAPSHOT_CAPABILITY_MAX) {
+    const oldest = snapshotCapabilities.keys().next();
+    if (oldest.done === true) break;
+    snapshotCapabilities.delete(oldest.value);
+  }
+  const capability = randomBytes(24).toString("base64url");
+  snapshotCapabilities.set(capability, { roomId, baseUrl, expiresAt: Date.now() + SNAPSHOT_CAPABILITY_TTL_MS });
+  return capability;
+}
+
+function resolveSnapshotCapability(value: unknown): { roomId: string; baseUrl: string } | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  pruneSnapshotCapabilities();
+  const grant = snapshotCapabilities.get(value);
+  if (grant === undefined) return null;
+  grant.expiresAt = Date.now() + SNAPSHOT_CAPABILITY_TTL_MS;
+  return { roomId: grant.roomId, baseUrl: grant.baseUrl };
+}
+
+function pruneSnapshotCapabilities(): void {
+  const now = Date.now();
+  for (const [capability, grant] of snapshotCapabilities) {
+    if (grant.expiresAt <= now) snapshotCapabilities.delete(capability);
+  }
 }
 
 async function readStoredParticipantToken(root: string, roomId: string, alias: string): Promise<string | null> {
@@ -335,6 +406,143 @@ async function refreshJoinedRoomFromBridgeRequest(
     lastSeen: now
   });
   sendJson(res, 200, { ok: true });
+}
+
+// Receive one batch of already-loaded history from a room surface (#247).
+//
+// Everything that decides WHERE this lands comes from the capability, not from the
+// caller: the body carries no room id, no base URL, and no path, so a bridge POST
+// cannot target an untracked room or steer a filesystem write. The body itself is
+// treated as hostile — it is size-capped before parsing, count-capped per batch,
+// and every persisted string is re-redacted here even though the sender redacts
+// too, so a compromised or buggy sender cannot put a credential on disk. The
+// response says only that the write happened; it never returns snapshot content.
+async function receiveJoinedHistoryRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "history bridge is loopback-only" });
+    return;
+  }
+  let body: { capability?: unknown; messages?: unknown; forumPosts?: unknown };
+  try {
+    body = JSON.parse(await readRequestBody(req, SNAPSHOT_BODY_MAX_BYTES)) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_body", message: "body must be JSON within the size limit" });
+    return;
+  }
+  const target = resolveSnapshotCapability(body.capability);
+  if (target === null) {
+    sendJson(res, 403, { ok: false, error: "bad_capability", message: "unknown or expired bridge capability" });
+    return;
+  }
+  // The row must still be tracked on this device — an archived/deleted row stops
+  // accepting history rather than resurrecting a snapshot the user just removed.
+  const rooms = await readJoinedRooms(options.root);
+  const joined = rooms.find((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
+  if (joined === undefined || joined.archived === true) {
+    sendJson(res, 404, { ok: false, error: "not_tracked", message: "no active joined-room record for this bridge" });
+    return;
+  }
+  const messages = snapshotMessagesFrom(body.messages);
+  const forumPosts = snapshotForumPostsFrom(body.forumPosts);
+  if (messages.length === 0 && forumPosts.length === 0) {
+    sendJson(res, 200, { ok: true, stored: false });
+    return;
+  }
+  await recordJoinedHistory(options.root, {
+    roomId: target.roomId,
+    baseUrl: target.baseUrl,
+    messages,
+    forumPosts,
+    savedAt: new Date().toISOString()
+  });
+  sendJson(res, 200, { ok: true, stored: true });
+}
+
+// Serve this device's saved transcript to its own dashboard (#247). Loopback-only
+// like the rest of this surface, keyed by the same canonical (roomId, baseUrl) as
+// the row, and 404 for a room this device does not track.
+async function sendJoinedHistory(options: PlatformHttpServerOptions, url: URL, res: ServerResponse): Promise<void> {
+  const roomId = url.searchParams.get("room_id") ?? "";
+  const baseUrl = sanitizeBaseUrl(url.searchParams.get("base_url"));
+  if (baseUrl === null || !isSafeRoomId(roomId)) {
+    sendJson(res, 400, { ok: false, error: "invalid_target", message: "room_id and base_url are required" });
+    return;
+  }
+  const joined = (await readJoinedRooms(options.root)).find(
+    (room) => room.roomId === roomId && room.baseUrl === baseUrl
+  );
+  if (joined === undefined) {
+    sendJson(res, 404, { ok: false, error: "not_tracked", message: "this room is not tracked on this device" });
+    return;
+  }
+  const snapshot = await readJoinedHistory(options.root, { roomId, baseUrl });
+  sendJson(res, 200, { ok: true, snapshot });
+}
+
+const SNAPSHOT_BODY_MAX_BYTES = 256 * 1024;
+
+// Rebuild the incoming batch from a strict allowlist: unknown fields are dropped,
+// ids must be real numbers/strings, the batch is capped, and every string is
+// re-redacted. Anything that does not fit the shape is skipped, never coerced into
+// a half-record.
+function snapshotMessagesFrom(value: unknown): SnapshotMessage[] {
+  if (!Array.isArray(value)) return [];
+  const messages: SnapshotMessage[] = [];
+  for (const raw of value.slice(0, SNAPSHOT_MAX_MESSAGES)) {
+    const entry = raw as { id?: unknown; from?: unknown; ts?: unknown; type?: unknown; text?: unknown };
+    if (typeof entry?.id !== "number" || !Number.isFinite(entry.id)) continue;
+    messages.push({
+      id: entry.id,
+      from: shortString(entry.from) ?? "",
+      ts: shortString(entry.ts) ?? "",
+      type: shortString(entry.type) ?? "chat",
+      text: redactSnapshotText(entry.text)
+    });
+  }
+  return messages;
+}
+
+function snapshotForumPostsFrom(value: unknown): SnapshotForumPost[] {
+  if (!Array.isArray(value)) return [];
+  const posts: SnapshotForumPost[] = [];
+  for (const raw of value.slice(0, SNAPSHOT_MAX_FORUM_POSTS)) {
+    const entry = raw as {
+      id?: unknown;
+      channel?: unknown;
+      title?: unknown;
+      author?: unknown;
+      ts?: unknown;
+      status?: unknown;
+      body?: unknown;
+      comments?: unknown;
+    };
+    const id = shortString(entry?.id);
+    if (id === undefined) continue;
+    const comments = Array.isArray(entry.comments) ? entry.comments.slice(0, SNAPSHOT_MAX_COMMENTS_PER_POST) : [];
+    posts.push({
+      id,
+      channel: shortString(entry.channel) ?? "",
+      title: redactSnapshotText(entry.title),
+      author: shortString(entry.author) ?? "",
+      ts: shortString(entry.ts) ?? "",
+      status: shortString(entry.status) ?? "",
+      body: redactSnapshotText(entry.body),
+      comments: comments.map((rawComment) => {
+        const comment = rawComment as { id?: unknown; author?: unknown; ts?: unknown; body?: unknown };
+        return {
+          id: shortString(comment?.id) ?? "",
+          author: shortString(comment?.author) ?? "",
+          ts: shortString(comment?.ts) ?? "",
+          body: redactSnapshotText(comment?.body)
+        };
+      })
+    });
+  }
+  return posts;
 }
 
 // Device-local archive/unarchive of a joined-room row (#210). Loopback-only, like
@@ -542,13 +750,13 @@ function shortString(value: unknown): string | undefined {
   return trimmed.slice(0, 200);
 }
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
+async function readRequestBody(req: IncomingMessage, limit = 8_192): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
     size += buffer.length;
-    if (size > 8_192) throw new Error("body too large");
+    if (size > limit) throw new Error("body too large");
     chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString("utf8");

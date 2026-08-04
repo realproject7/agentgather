@@ -17,7 +17,10 @@ const state = {
   // Selected launch template (#214), or null for a blank room.
   createTemplate: null,
   // Whether archived "Rooms I'm in" entries are shown (#210); default hidden.
-  showArchived: false
+  showArchived: false,
+  // The joined room currently shown from its device-local snapshot (#247), or
+  // null. Distinct from activeRoomId, which always names a host-owned room.
+  activeJoined: null
 };
 
 // Browser-local, per-room cache namespaces. Stores only already-received,
@@ -75,6 +78,7 @@ const channelsMore = document.getElementById("channels-more");
 
 // Right info panel (#218b): shown only in the selected-room (three-panel) state.
 const infoPanel = document.getElementById("info-panel");
+const hostControls = document.getElementById("host-controls");
 const infoRoomName = document.getElementById("info-room-name");
 const infoRoomStatus = document.getElementById("info-room-status");
 const infoRoomRoute = document.getElementById("info-room-route");
@@ -409,6 +413,10 @@ function relativeAge(value) {
 
 async function selectRoom(roomId) {
   state.activeRoomId = roomId;
+  // Leaving any #247 offline snapshot view: host-owned affordances come back.
+  state.activeJoined = null;
+  delete detail.dataset.mode;
+  hostControls.hidden = false;
   state.chatCursor = 0;
   state.seen = new Set();
   state.messages = [];
@@ -453,11 +461,14 @@ function goHome() {
     state.pollTimer = null;
   }
   state.activeRoomId = null;
+  state.activeJoined = null;
   state.messages = [];
   state.seen = new Set();
   state.cacheRendered = false;
   timeline.replaceChildren();
   shell.classList.remove("rooms-open");
+  delete detail.dataset.mode;
+  hostControls.hidden = false;
   detail.hidden = true;
   detailEmpty.hidden = false;
   lowerRoom.hidden = true;
@@ -1264,9 +1275,153 @@ function setLocalArchived(entry, archived) {
   writeJoinedLocal(rooms);
 }
 
+// A reachable joined room opens against its host, exactly as before. An
+// unreachable one no longer follows a redirect to a host that cannot answer
+// (#247): it stays here and shows this device's saved transcript instead.
 function openJoinedRoom(entry) {
   if (!entry?.baseUrl) return;
-  window.location.assign(joinedOpenUrl(entry));
+  if ((entry.reachability || "saved") === "live") {
+    window.location.assign(joinedOpenUrl(entry));
+    return;
+  }
+  void showJoinedSnapshot(entry);
+}
+
+// Offline joined-room view (#247). Renders the device-local snapshot in the
+// dashboard: read-only by construction — the host-owned controls are hidden
+// rather than fabricated-and-disabled, chat polling is stopped, and nothing here
+// issues a request to the unreachable host.
+async function showJoinedSnapshot(entry) {
+  if (state.pollTimer !== null) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  state.activeRoomId = null;
+  state.messages = [];
+  state.seen = new Set();
+  state.cacheRendered = false;
+  state.activeJoined = entry;
+  timeline.replaceChildren();
+  shell.classList.remove("rooms-open");
+  shell.classList.add("room-selected");
+  detailEmpty.hidden = true;
+  detail.hidden = false;
+  detail.dataset.mode = "snapshot";
+  lowerHome.hidden = true;
+  lowerRoom.hidden = false;
+  // Host-owned controls and the live info panel belong to a reachable host room;
+  // offline they are absent, not disabled-in-place.
+  hostControls.hidden = true;
+  infoPanel.hidden = true;
+  detailTitle.textContent = entry.title || entry.roomId || hostLabel(entry.baseUrl);
+  detailStatus.dataset.status = "offline";
+  detailStatus.textContent = "host offline";
+  detailReason.textContent = `${hostLabel(entry.baseUrl)} · saved on this device`;
+  routeReachable.dataset.on = "false";
+  routeHost.dataset.on = "false";
+  renderChannelNav({ room_id: entry.roomId, title: entry.title, channels: entry.channels });
+  setBreadcrumb({ room_id: entry.roomId, title: entry.title });
+
+  let snapshot = null;
+  try {
+    const payload = await apiFetch(
+      `./joined-rooms/history?room_id=${encodeURIComponent(entry.roomId || "")}&base_url=${encodeURIComponent(entry.baseUrl)}`
+    );
+    snapshot = payload.snapshot ?? null;
+  } catch {
+    // Treated exactly like "nothing saved yet" — this view never guesses.
+    snapshot = null;
+  }
+  renderJoinedSnapshot(entry, snapshot);
+}
+
+// The saved transcript plus an honest band naming what it is and where it stops.
+// It never claims newer or unseen history exists — only what the cursor covers.
+function renderJoinedSnapshot(entry, snapshot) {
+  const messages = snapshot?.messages ?? [];
+  const forumPosts = snapshot?.forumPosts ?? [];
+  timeline.replaceChildren();
+  for (const message of messages) renderMessage(message);
+  for (const post of forumPosts) renderSnapshotForumPost(post);
+
+  historySource.dataset.source = "snapshot";
+  historySourceLabel.textContent = "Local snapshot · host offline";
+  chatEmpty.hidden = true;
+  chatOffline.hidden = false;
+  chatOffline.replaceChildren();
+  const detailLine = document.createElement("span");
+  if (messages.length === 0 && forumPosts.length === 0) {
+    detailLine.textContent =
+      `The host at ${hostLabel(entry.baseUrl)} is offline and nothing from this room is saved on this device yet. ` +
+      "Nothing can be sent or loaded until the host is reachable again.";
+  } else {
+    const savedAt = snapshot?.savedAt ? formatTime(snapshot.savedAt) : "an earlier session";
+    const upTo = snapshot?.cursor ? ` up to message #${snapshot.cursor}` : "";
+    detailLine.textContent =
+      `The host at ${hostLabel(entry.baseUrl)} is offline. This is the transcript saved on this device${upTo}, ` +
+      `last updated ${savedAt}. Anything sent after that is not here, and nothing can be sent until the host resumes.`;
+  }
+  chatOffline.append(detailLine, buildSnapshotRetry(entry));
+}
+
+// Re-probe on demand. The action only becomes an open when the probe itself says
+// the host is live — it never offers to open a host we have no evidence for.
+function buildSnapshotRetry(entry) {
+  const retry = document.createElement("button");
+  retry.id = "snapshot-retry";
+  retry.type = "button";
+  retry.className = "snapshot-retry";
+  retry.textContent = "Check again";
+  retry.addEventListener("click", () => {
+    void (async () => {
+      retry.disabled = true;
+      retry.textContent = "Checking…";
+      await loadJoinedRooms();
+      const fresh = state.joinedRooms.find(
+        (room) => room.roomId === entry.roomId && room.baseUrl === entry.baseUrl
+      );
+      retry.disabled = false;
+      if ((fresh?.reachability || "saved") === "live") {
+        retry.textContent = "Host is back — open room";
+        retry.dataset.live = "true";
+        retry.addEventListener("click", () => window.location.assign(joinedOpenUrl(fresh)), { once: true });
+        return;
+      }
+      retry.textContent = "Still offline — check again";
+    })();
+  });
+  return retry;
+}
+
+// A saved forum post reuses the transcript row rather than introducing a nested
+// card: same row treatment, with the channel/title as its meta line.
+function renderSnapshotForumPost(post) {
+  const item = document.createElement("li");
+  item.className = "shell-message snapshot-forum";
+  const meta = document.createElement("div");
+  meta.className = "shell-message-meta";
+  const from = document.createElement("span");
+  from.className = "shell-message-from";
+  from.textContent = post.author || "unknown";
+  const where = document.createElement("time");
+  where.className = "shell-message-time";
+  where.dateTime = post.ts || "";
+  where.textContent = `#${post.channel || "forum"} · ${formatTime(post.ts)}`;
+  meta.append(from, where);
+  const title = document.createElement("div");
+  title.className = "shell-message-text snapshot-forum-title";
+  title.textContent = post.title || "(untitled post)";
+  const body = document.createElement("div");
+  body.className = "shell-message-text";
+  body.textContent = post.body || "";
+  item.append(meta, title, body);
+  for (const comment of post.comments || []) {
+    const line = document.createElement("div");
+    line.className = "shell-message-text snapshot-forum-comment";
+    line.textContent = `${comment.author || "unknown"}: ${comment.body || ""}`;
+    item.append(line);
+  }
+  timeline.append(item);
 }
 
 function joinedOpenUrl(entry) {

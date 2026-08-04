@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { deleteJoinedHistory } from "./joined-history-store.js";
 import { withWriterLock } from "./lock.js";
 import { ensureSecureDir, writeSecureFile } from "./secure-fs.js";
 
@@ -118,11 +119,16 @@ async function upsertJoinedRoomLocked(
 // Archive/unarchive one device-local joined-room record (#210). Writes ONLY the
 // joined-rooms.json store — it never touches host-owned room homes, host logs, or
 // any `rooms/<id>/` data. Returns true if a matching record was updated.
+//
+// Archiving also drops this device's offline history snapshot for the row (#247):
+// the user is putting the room away, so the saved transcript goes with it rather
+// than lingering on disk for a row the dashboard no longer shows.
 export async function setJoinedRoomArchived(
   home: string,
   target: { roomId: string; baseUrl: string; archived: boolean }
 ): Promise<boolean> {
   await ensureSecureDir(home);
+  if (target.archived) await deleteJoinedHistory(home, { roomId: target.roomId, baseUrl: target.baseUrl });
   return withWriterLock(joinedRoomsLockPath(home), async () => {
     const rooms = await readJoinedRooms(home);
     const index = rooms.findIndex((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
@@ -136,13 +142,15 @@ export async function setJoinedRoomArchived(
 }
 
 // Hard-delete one device-local joined-room record (#210). Removes ONLY the entry
-// from joined-rooms.json — it deletes no host-owned room data (`rooms/<id>/`),
-// host logs, or tokens. Returns true if a matching record was removed.
+// from joined-rooms.json plus this device's own offline snapshot for it (#247) —
+// it deletes no host-owned room data (`rooms/<id>/`), host logs, or tokens.
+// Returns true if a matching record was removed.
 export async function deleteJoinedRoom(
   home: string,
   target: { roomId: string; baseUrl: string }
 ): Promise<boolean> {
   await ensureSecureDir(home);
+  await deleteJoinedHistory(home, { roomId: target.roomId, baseUrl: target.baseUrl });
   return withWriterLock(joinedRoomsLockPath(home), async () => {
     const rooms = await readJoinedRooms(home);
     const next = rooms.filter((room) => !(room.roomId === target.roomId && room.baseUrl === target.baseUrl));

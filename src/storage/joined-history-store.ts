@@ -1,0 +1,238 @@
+import { createHash } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
+import path from "node:path";
+import { withWriterLock } from "./lock.js";
+import { ensureSecureDir, writeSecureFile } from "./secure-fs.js";
+
+// Dashboard-owned, device-local snapshot of the history this participant has
+// ALREADY received in a joined room (#247). It exists so that a room whose host
+// has stopped serving can still be read from the dashboard: the room origin's own
+// #211 backup lives in that origin's localStorage, which a dead host can no longer
+// serve a page for.
+//
+// Boundaries this file holds:
+//   - device-local only. It lives under AGENTGATHER_HOME; nothing here is uploaded,
+//     relayed, or synced, and the host's own log is never read to build it.
+//   - NEVER a secret. Text is redacted on the way in (and the platform receiver
+//     redacts independently, so a sender that skipped it cannot poison the file).
+//   - bounded. Count and byte caps are enforced on every write, oldest dropped
+//     first, so a long-lived room cannot grow the file without limit.
+//   - atomic + serialized. Writes go through writeSecureFile (temp + rename) under
+//     the same writer lock as the rest of a snapshot's read-modify-write.
+
+export interface SnapshotMessage {
+  id: number;
+  from: string;
+  ts: string;
+  type: string;
+  text: string;
+}
+
+export interface SnapshotForumComment {
+  id: string;
+  author: string;
+  ts: string;
+  body: string;
+}
+
+export interface SnapshotForumPost {
+  id: string;
+  channel: string;
+  title: string;
+  author: string;
+  ts: string;
+  status: string;
+  body: string;
+  comments: SnapshotForumComment[];
+}
+
+export interface JoinedHistorySnapshot {
+  roomId: string;
+  baseUrl: string;
+  /** Highest message id in `messages` — what the offline view honestly claims to hold. */
+  cursor: number;
+  /** When this device last received history for this room. */
+  savedAt: string;
+  messages: SnapshotMessage[];
+  forumPosts: SnapshotForumPost[];
+}
+
+export const SNAPSHOT_MAX_MESSAGES = 250;
+export const SNAPSHOT_MAX_FORUM_POSTS = 50;
+export const SNAPSHOT_MAX_COMMENTS_PER_POST = 100;
+export const SNAPSHOT_MAX_BYTES = 200_000;
+// Per-field cap. The byte cap alone cannot hold when a SINGLE entry is enormous
+// (trimming keeps at least one message), so each stored string is truncated here.
+export const SNAPSHOT_MAX_TEXT_CHARS = 4_000;
+
+export function joinedHistoryDir(home: string): string {
+  return path.join(home, "joined-history");
+}
+
+// The file name is a hash of the canonical (roomId, baseUrl) pair, never the ids
+// themselves: a room id or base URL that contains `/` or `..` therefore cannot
+// steer a write outside this directory. Hashing the length-prefixed pair keeps
+// ("ab","c") and ("a","bc") distinct.
+export function joinedHistoryPath(home: string, key: { roomId: string; baseUrl: string }): string {
+  const digest = createHash("sha256")
+    .update(`${key.roomId.length}:${key.roomId}\n${key.baseUrl.length}:${key.baseUrl}`)
+    .digest("hex");
+  return path.join(joinedHistoryDir(home), `${digest}.json`);
+}
+
+function joinedHistoryLockPath(home: string, key: { roomId: string; baseUrl: string }): string {
+  return `${joinedHistoryPath(home, key)}.lock`;
+}
+
+// Strip anything credential-shaped out of persisted text. Mirrors the room and
+// dashboard cache guards (#211) — a bearer token, tgl_ token, `token=` parameter,
+// invite/card URL, or bridge capability never reaches disk.
+export function redactSnapshotText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/https?:\/\/(?=\S*(?:token=|snapshot=|tgl_|\/card))\S+/gi, "[redacted-url]")
+    .replace(/Bearer\s+\S+/gi, "[redacted-credential]")
+    .replace(/[#?&]?(?:token|snapshot)=[^\s&#"']+/gi, "[redacted-token]")
+    .replace(/tgl_[A-Za-z0-9_-]+/g, "[redacted-token]")
+    .slice(0, SNAPSHOT_MAX_TEXT_CHARS);
+}
+
+export async function readJoinedHistory(
+  home: string,
+  key: { roomId: string; baseUrl: string }
+): Promise<JoinedHistorySnapshot | null> {
+  try {
+    const parsed = JSON.parse(await readFile(joinedHistoryPath(home, key), "utf8")) as JoinedHistorySnapshot;
+    if (parsed.roomId !== key.roomId || parsed.baseUrl !== key.baseUrl) return null;
+    return {
+      roomId: parsed.roomId,
+      baseUrl: parsed.baseUrl,
+      cursor: typeof parsed.cursor === "number" ? parsed.cursor : 0,
+      savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : "",
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      forumPosts: Array.isArray(parsed.forumPosts) ? parsed.forumPosts : []
+    };
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    // A truncated or hand-edited snapshot is treated as absent rather than fatal:
+    // the offline view then shows its honest empty state instead of failing open.
+    return null;
+  }
+}
+
+// Merge one batch of ALREADY-RECEIVED history into the snapshot. The caller never
+// fetches to fill this — it hands over only what its surface had already loaded.
+// Messages de-duplicate by id and forum posts by post id, so a reconnect or a
+// re-open cannot double up the transcript.
+export async function recordJoinedHistory(
+  home: string,
+  entry: {
+    roomId: string;
+    baseUrl: string;
+    messages?: SnapshotMessage[];
+    forumPosts?: SnapshotForumPost[];
+    savedAt: string;
+  }
+): Promise<JoinedHistorySnapshot> {
+  const key = { roomId: entry.roomId, baseUrl: entry.baseUrl };
+  await ensureSecureDir(joinedHistoryDir(home));
+  return withWriterLock(joinedHistoryLockPath(home, key), async () => {
+    const current = (await readJoinedHistory(home, key)) ?? {
+      roomId: entry.roomId,
+      baseUrl: entry.baseUrl,
+      cursor: 0,
+      savedAt: entry.savedAt,
+      messages: [],
+      forumPosts: []
+    };
+    const next: JoinedHistorySnapshot = {
+      roomId: entry.roomId,
+      baseUrl: entry.baseUrl,
+      cursor: current.cursor,
+      savedAt: entry.savedAt,
+      messages: mergeMessages(current.messages, entry.messages ?? []),
+      forumPosts: mergeForumPosts(current.forumPosts, entry.forumPosts ?? [])
+    };
+    next.cursor = next.messages.reduce((highest, message) => Math.max(highest, message.id), 0);
+    bound(next);
+    await writeSecureFile(joinedHistoryPath(home, key), `${JSON.stringify(next, null, 2)}\n`);
+    return next;
+  });
+}
+
+// Remove a snapshot (archive or delete of the joined-room row, #210). Returns true
+// when a snapshot was actually removed.
+export async function deleteJoinedHistory(
+  home: string,
+  key: { roomId: string; baseUrl: string }
+): Promise<boolean> {
+  const file = joinedHistoryPath(home, key);
+  try {
+    await rm(file, { force: false });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function mergeMessages(current: SnapshotMessage[], incoming: SnapshotMessage[]): SnapshotMessage[] {
+  const byId = new Map<number, SnapshotMessage>();
+  for (const message of [...current, ...incoming]) {
+    byId.set(message.id, {
+      id: message.id,
+      from: String(message.from ?? ""),
+      ts: String(message.ts ?? ""),
+      type: String(message.type ?? "chat"),
+      text: redactSnapshotText(message.text)
+    });
+  }
+  return [...byId.values()].sort((left, right) => left.id - right.id);
+}
+
+// A re-loaded post replaces its stored copy: the later load is the more complete
+// one (a thread open carries the comments a feed row does not).
+function mergeForumPosts(current: SnapshotForumPost[], incoming: SnapshotForumPost[]): SnapshotForumPost[] {
+  const byId = new Map<string, SnapshotForumPost>();
+  for (const post of current) byId.set(post.id, post);
+  for (const post of incoming) {
+    const existing = byId.get(post.id);
+    const comments = post.comments.length > 0 ? post.comments : (existing?.comments ?? []);
+    byId.set(post.id, {
+      id: post.id,
+      channel: String(post.channel ?? ""),
+      title: redactSnapshotText(post.title),
+      author: String(post.author ?? ""),
+      ts: String(post.ts ?? ""),
+      status: String(post.status ?? ""),
+      body: redactSnapshotText(post.body),
+      comments: comments.slice(-SNAPSHOT_MAX_COMMENTS_PER_POST).map((comment) => ({
+        id: String(comment.id ?? ""),
+        author: String(comment.author ?? ""),
+        ts: String(comment.ts ?? ""),
+        body: redactSnapshotText(comment.body)
+      }))
+    });
+  }
+  return [...byId.values()];
+}
+
+// Enforce the retention caps in place: oldest messages and oldest forum posts go
+// first, then the byte cap trims further until the serialized snapshot fits. The
+// cursor is recomputed from what actually survives, so the offline view never
+// claims to hold a message that was dropped.
+function bound(snapshot: JoinedHistorySnapshot): void {
+  if (snapshot.messages.length > SNAPSHOT_MAX_MESSAGES) {
+    snapshot.messages = snapshot.messages.slice(snapshot.messages.length - SNAPSHOT_MAX_MESSAGES);
+  }
+  if (snapshot.forumPosts.length > SNAPSHOT_MAX_FORUM_POSTS) {
+    snapshot.forumPosts = snapshot.forumPosts.slice(snapshot.forumPosts.length - SNAPSHOT_MAX_FORUM_POSTS);
+  }
+  while (
+    JSON.stringify(snapshot).length > SNAPSHOT_MAX_BYTES &&
+    (snapshot.messages.length > 1 || snapshot.forumPosts.length > 0)
+  ) {
+    if (snapshot.forumPosts.length > 0) snapshot.forumPosts = snapshot.forumPosts.slice(1);
+    else snapshot.messages = snapshot.messages.slice(1);
+  }
+  snapshot.cursor = snapshot.messages.reduce((highest, message) => Math.max(highest, message.id), 0);
+}
