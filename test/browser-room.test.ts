@@ -2358,13 +2358,24 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     await page.reload();
     await page.waitForSelector("text=forged host claim");
 
-    // Every restored row — forged or not — is marked as restored from this device,
-    // so nothing read back out of local storage can present itself as a line the
-    // host just served, including one claiming to be `system` or the host.
-    for (const text of ["forged system claim", "forged host claim"]) {
-      const row = page.locator(".message", { hasText: text }).first();
-      assert.equal(await row.getAttribute("data-restored"), "true", `${text} is marked restored`);
-    }
+    // A record claiming the room's own voice is not restored at all — `system` is
+    // how the room speaks, and a hand-edited store must not be able to speak in it.
+    assert.equal(await page.locator("text=forged system claim").count(), 0, "no system record is restored");
+    // (the divider itself is the label, not restored content — exclude it)
+    assert.equal(
+      await page.locator(".message.system[data-restored]:not(.restored-divider)").count(),
+      0,
+      "no restored row is styled as the room's own system voice"
+    );
+
+    // The forged host record renders, but with none of the host's identity: its
+    // sender is never resolved through the live roster, so it gets no display name,
+    // no human/agent kind and no host treatment — only the stored text, inside a
+    // region labelled as this device's own copy.
+    const forged = page.locator(".message", { hasText: "forged host claim" }).first();
+    assert.equal(await forged.getAttribute("data-restored"), "true");
+    assert.equal(await forged.locator(".message-from").getAttribute("data-kind"), "restored");
+    assert.equal(await forged.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
     // Malformed records are dropped rather than coerced into a half-rendered row.
     for (const text of ["malformed id", "malformed from", "malformed empty ts"]) {
       assert.equal(await page.locator(`text=${text}`).count(), 0, `${text} was dropped`);

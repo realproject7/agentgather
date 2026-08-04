@@ -589,10 +589,12 @@ function recordBackupBatch(messages) {
   }
 }
 
-// The message types the backup may restore. An unrecognised type is normalised to
-// a plain message rather than trusted, so a hand-edited store cannot invent a new
-// rendering mode.
-const BACKUP_RESTORABLE_TYPES = new Set(["message", "system", "status"]);
+// A restored record is ALWAYS rendered as an ordinary message. The stored `type`
+// is discarded rather than normalised, because `system` is the room's own voice —
+// a hand-edited store must not be able to speak in it — and `status` is a broadcast
+// treatment. System records are not restored at all: they are room-authority
+// statements ("<alias> joined", "room closed") whose value on a warm entry is low
+// and whose forgery value is high.
 
 // #278 — the reader the local backup never had. Every record is re-validated on the
 // way in: this is data the page previously only wrote, and localStorage is editable
@@ -618,11 +620,12 @@ function readBackupForSeed() {
     if (!Number.isInteger(entry.id) || entry.id <= 0) continue;
     if (typeof entry.from !== "string" || typeof entry.text !== "string") continue;
     if (typeof entry.ts !== "string" || entry.ts.length === 0) continue;
+    if (entry.type === "system") continue;
     byId.set(entry.id, {
       id: entry.id,
       from: entry.from,
       ts: entry.ts,
-      type: BACKUP_RESTORABLE_TYPES.has(entry.type) ? entry.type : "message",
+      type: "message",
       text: redactForBackup(entry.text)
     });
   }
@@ -1475,13 +1478,21 @@ function renderMessage(message, options = {}) {
 
   const from = document.createElement("div");
   from.className = "message-from";
-  from.textContent = state.participantLabels.get(message.from) || message.from;
-  const senderKind = state.participantKinds.get(message.from) || "human";
+  // #278: a restored row shows its stored sender as plain text and is NEVER looked
+  // up in the live roster. The roster is what confers identity here — display name,
+  // human/agent kind, avatar treatment — so resolving an attacker-controlled `from`
+  // through it is exactly how a hand-edited record would acquire the host's
+  // identity. Restored rows get a neutral kind and no roster-derived label.
+  const restoredRow = options.restored === true;
+  from.textContent = restoredRow
+    ? message.from
+    : state.participantLabels.get(message.from) || message.from;
+  const senderKind = restoredRow ? "restored" : state.participantKinds.get(message.from) || "human";
   from.dataset.kind = senderKind;
 
   const avatar = document.createElement("div");
-  avatar.className = `message-avatar ${senderKind === "agent" ? "agent" : "human"}`;
-  avatar.textContent = initialsFor(state.participantLabels.get(message.from) || message.from);
+  avatar.className = `message-avatar ${restoredRow ? "restored" : senderKind === "agent" ? "agent" : "human"}`;
+  avatar.textContent = initialsFor(restoredRow ? message.from : state.participantLabels.get(message.from) || message.from);
 
   const text = document.createElement("div");
   text.className = "message-text";

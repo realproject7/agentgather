@@ -732,6 +732,13 @@ h1::before {
   opacity: 0.92;
 }
 
+/* A restored sender gets a neutral avatar: the human/agent treatment is identity
+   the live roster confers, and a stored `from` has not been through it. */
+.message-avatar.restored {
+  background: var(--chip);
+  color: var(--muted);
+}
+
 .restored-divider .message-text {
   color: var(--muted);
   font-size: var(--fs-sm);
