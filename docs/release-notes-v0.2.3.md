@@ -1,6 +1,6 @@
 # v0.2.3
 
-Range: `v0.2.2` (`8e99bf3`) → `main`. Twenty pull requests merged since v0.2.2;
+Range: `v0.2.2` (commit `9e15000`) → `main`. Twenty pull requests merged since v0.2.2;
 the audit that opened the most recent cycle (#238) is closed.
 
 The headline for this release is not a feature. At the start of this cycle the
