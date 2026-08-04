@@ -1828,3 +1828,87 @@ test("host rail auto-continue: host-only, off by default, opt-in enables the bou
     await fixture.close();
   }
 });
+
+// #268: `bindEvents()` runs at the END of `enterRoom()`, after several awaits,
+// but the composer is on screen and clickable for that whole window. With a
+// `type="submit"` button and no handler yet, a click natively submits the form
+// and NAVIGATES — and entry has already cleared the token fragment, so the
+// reload lands unauthenticated and ejects the participant from the room.
+//
+// The window is opened deterministically by holding the entry `/status`
+// response, not by racing a fast machine.
+test("Send before entry completes cannot navigate or eject the participant (#268)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+
+    // Hold the FIRST /status only; later polls proceed normally.
+    let releaseEntry = (): void => {};
+    const entryHeld = new Promise<void>((resolve) => {
+      releaseEntry = resolve;
+    });
+    let heldOnce = false;
+    await page.route("**/status*", async (route) => {
+      if (!heldOnce) {
+        heldOnce = true;
+        await entryHeld;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+
+    // The composer is present and the Send button clickable while entry is still
+    // in flight — this is the window the defect lives in.
+    await page.waitForSelector("#send-button", { state: "visible" });
+    const urlDuringEntry = page.url();
+    // Entry has already cleared the token fragment, which is what makes a
+    // navigation unrecoverable. Confirm that precondition rather than assume it.
+    assert.equal(urlDuringEntry.includes("#token="), false, "the fragment is cleared before entry finishes");
+
+    await page.fill("#message-text", "sent too early");
+
+    // (a) A click must not navigate.
+    await page.click("#send-button");
+    await page.waitForTimeout(250);
+    assert.equal(page.url(), urlDuringEntry, "clicking Send before entry navigated the page");
+    assert.equal(await page.locator("#auth-error").isVisible(), false, "the participant was ejected to the auth error");
+
+    // (b) Enter with the button focused must not submit either, whatever has focus.
+    await page.focus("#send-button");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(250);
+    assert.equal(page.url(), urlDuringEntry, "Enter on the focused Send button navigated the page");
+    assert.equal(await page.locator("#auth-error").isVisible(), false);
+
+    // The refusal is honest rather than silent, and token-free.
+    const notice = await page.locator("#send-error").innerText();
+    assert.match(notice, /still joining/i);
+    assert.doesNotMatch(notice, /tgl_|Bearer|#token=|http/);
+
+    // Let entry finish; the room must be fully usable afterwards.
+    // No unroute: the handler already passes every later /status straight
+    // through, and unrouting can race a request already in flight.
+    releaseEntry();
+    await page.waitForSelector("text=Ship the browser room safely.");
+    await page.waitForSelector(".composer");
+
+    // Post-entry click-to-send still works (the button is no longer a submit,
+    // so this proves the replacement click path is wired).
+    await page.fill("#message-text", "click after entry");
+    await page.click("#send-button");
+    await page.waitForSelector("text=click after entry");
+
+    // Post-entry Enter-to-send still works.
+    await page.fill("#message-text", "enter after entry");
+    await page.press("#message-text", "Enter");
+    await page.waitForSelector("text=enter after entry");
+
+    // And still no navigation from either.
+    assert.equal(page.url(), urlDuringEntry, "sending after entry navigated the page");
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

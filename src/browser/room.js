@@ -34,6 +34,10 @@ const state = {
   autoContinuePendingAlias: "",
   autoContinueCount: 0,
   autoContinueTick: null,
+  // #268: true only once bindEvents() has attached the composer handlers. NOT
+  // the same as entryPhase, which enterRoom() sets to "entered" BEFORE its
+  // awaits — the whole window this guards is inside those awaits.
+  composerReady: false,
   briefVersion: 0,
   replyTo: null,
   // Reply affordance (#113): minimal from/text record per rendered message id so
@@ -114,6 +118,38 @@ let dottedFavicon = null;
 const composer = document.getElementById("composer");
 const messageText = document.getElementById("message-text");
 const sendButton = document.getElementById("send-button");
+
+// #268: the composer is on screen and clickable from first paint, but
+// `bindEvents()` only runs at the END of `enterRoom()` — after several awaits.
+// In that window a native form submission would navigate the page, and entry has
+// already cleared the token fragment (`replaceState`), so the reload lands
+// unauthenticated and EJECTS the participant from the room. These two listeners
+// are attached at load rather than in `bindEvents()` precisely because the bug is
+// that bindings are late; `#send-button` is also `type="button"` so a click
+// cannot submit at all. Both together mean no click and no Enter, with focus on
+// any control, can navigate in any phase.
+composer.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!state.composerReady) {
+    showEarlySendNotice();
+    return;
+  }
+  void submitMessage();
+});
+sendButton.addEventListener("click", () => {
+  if (!state.composerReady) {
+    showEarlySendNotice();
+    return;
+  }
+  void submitMessage();
+});
+
+// Honest, token-free notice: the message was not sent and the room is still
+// being joined. Reuses the composer's existing role="alert" region.
+function showEarlySendNotice() {
+  sendError.textContent = "Still joining the room — wait for the roster to load, then send.";
+  sendError.hidden = false;
+}
 const sendError = document.getElementById("send-error");
 const replyIndicator = document.getElementById("reply-indicator");
 const replyIndicatorLabel = document.getElementById("reply-indicator-label");
@@ -312,6 +348,8 @@ async function claimDisplayName(displayName) {
 }
 
 function bindEvents() {
+  // #268: from here the composer's handlers exist, so Send may act.
+  state.composerReady = true;
   rosterToggle.addEventListener("click", () => shell.classList.toggle("roster-open"));
   notifyToggle.addEventListener("click", () => void toggleNotify());
   notifyScope.addEventListener("click", () => toggleNotifyScope());
@@ -380,10 +418,6 @@ function bindEvents() {
   replyClear.addEventListener("click", () => {
     clearReply();
     messageText.focus();
-  });
-  composer.addEventListener("submit", (event) => {
-    event.preventDefault();
-    void submitMessage();
   });
   closeButton.addEventListener("click", () => void closeRoom());
   sessionToggle.addEventListener("click", () => void toggleSession());
