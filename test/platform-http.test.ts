@@ -517,3 +517,87 @@ test("history is served only for a tracked room and never leaks into joined-room
     await fixture.close();
   }
 });
+
+test("the history bridge redacts every persisted field, including from/author, and archived rows stay readable (#247)", async () => {
+  const root = await makeRoot();
+  const roomBaseUrl = "http://127.0.0.1:9";
+  await seedJoinedRoom(root, "snap-room", roomBaseUrl);
+  const fixture = await startServer(root, "owner-1");
+  try {
+    const capability = await mintCapability(fixture.baseUrl, "snap-room", roomBaseUrl);
+    // A sender that puts credential-shaped values in metadata fields, not just in
+    // bodies — the case that made a card URL renderable in the dashboard.
+    const res = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({
+        capability,
+        messages: [
+          {
+            id: 1,
+            from: "https://evil.example/card/abc123?token=tgl_leaked_secret_value",
+            ts: "Bearer sk-live-abcdef",
+            type: "tgl_type_secret_value",
+            text: "ordinary body"
+          }
+        ],
+        forumPosts: [
+          {
+            id: "p1",
+            channel: "design",
+            title: "ordinary title",
+            author: "https://evil.example/card/abc123",
+            ts: "Bearer sk-live-fedcba",
+            status: "tgl_status_secret_value",
+            body: "ordinary post body",
+            comments: [{ id: "c1", author: "Bearer sk-live-comment", ts: "", body: "ordinary comment" }]
+          }
+        ]
+      })
+    );
+    assert.equal(res.status, 200);
+
+    // Exact expected values in the API response, not merely "the token is missing".
+    const payload = (await (
+      await fetch(`${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`)
+    ).json()) as {
+      snapshot: {
+        messages: Array<{ from: string; ts: string; type: string; text: string }>;
+        forumPosts: Array<{ author: string; ts: string; status: string; comments: Array<{ author: string }> }>;
+      } | null;
+    };
+    assert.equal(payload.snapshot?.messages[0]?.from, "[redacted-url]");
+    assert.equal(payload.snapshot?.messages[0]?.ts, "[redacted-credential]");
+    assert.equal(payload.snapshot?.messages[0]?.type, "[redacted-token]");
+    assert.equal(payload.snapshot?.messages[0]?.text, "ordinary body");
+    assert.equal(payload.snapshot?.forumPosts[0]?.author, "[redacted-url]");
+    assert.equal(payload.snapshot?.forumPosts[0]?.ts, "[redacted-credential]");
+    assert.equal(payload.snapshot?.forumPosts[0]?.status, "[redacted-token]");
+    assert.equal(payload.snapshot?.forumPosts[0]?.comments[0]?.author, "[redacted-credential]");
+    assert.equal(/tgl_|Bearer |token=|evil\.example/i.test(JSON.stringify(payload)), false);
+
+    // Archive keeps the transcript and the read path stays open, so un-archiving
+    // restores a readable row — asserted rather than assumed.
+    const { setJoinedRoomArchived } = await import("../src/storage/index.js");
+    await setJoinedRoomArchived(root, { roomId: "snap-room", baseUrl: roomBaseUrl, archived: true });
+    const archivedRead = await fetch(
+      `${fixture.baseUrl}/joined-rooms/history?room_id=snap-room&base_url=${encodeURIComponent(roomBaseUrl)}`
+    );
+    assert.equal(archivedRead.status, 200);
+    assert.equal(
+      ((await archivedRead.json()) as { snapshot: { messages: unknown[] } | null }).snapshot?.messages.length,
+      1,
+      "archive keeps the saved transcript readable"
+    );
+    // ...but an archived row stops ingesting new history.
+    const whileArchived = await postJoinedHistory(
+      fixture.baseUrl,
+      "http://127.0.0.1:5999",
+      JSON.stringify({ capability, messages: [{ id: 2, from: "project7", ts: "", type: "chat", text: "after archive" }] })
+    );
+    assert.equal(whileArchived.status, 404);
+    assert.equal(JSON.parse(whileArchived.body).error, "not_tracked");
+  } finally {
+    await fixture.close();
+  }
+});

@@ -1916,12 +1916,14 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
     joinedAt: now,
     lastSeen: now
   });
-  // This device only ever received the first two messages of a longer room.
+  // This device only ever received the first two messages of a longer room. One of
+  // them is authored by a participant aliased after a card URL (#247, @re2): the
+  // rendered dashboard must show the redacted value, never the credential.
   await recordJoinedHistory(root, {
     roomId: "stale-room",
     baseUrl: roomBaseUrl,
     messages: [
-      { id: 1, from: "host", ts: now, type: "chat", text: "saved one" },
+      { id: 1, from: "https://evil.example/card/abc123?token=tgl_leaked_secret_value", ts: now, type: "chat", text: "saved one" },
       { id: 2, from: "project7", ts: now, type: "chat", text: "saved two" }
     ],
     forumPosts: [
@@ -1929,7 +1931,7 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
         id: "p1",
         channel: "design",
         title: "Saved forum thread",
-        author: "project7",
+        author: "https://evil.example/card/xyz789",
         ts: now,
         status: "open",
         body: "forum body kept locally",
@@ -1957,6 +1959,18 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
     await page.waitForSelector("text=a saved comment");
     // No nested card: the forum entry is a transcript row like any other.
     assert.equal(await page.locator(".snapshot-forum .snapshot-forum").count(), 0);
+
+    // Rendered dashboard shows the redacted value, exactly — not the card URL.
+    assert.equal(
+      (await page.locator("#shell-timeline .shell-message").first().locator(".shell-message-from").textContent()) ?? "",
+      "[redacted-url]"
+    );
+    assert.equal(
+      (await page.locator(".snapshot-forum .shell-message-from").textContent()) ?? "",
+      "[redacted-url]"
+    );
+    const rendered = (await page.locator("#shell-timeline").innerHTML()) ?? "";
+    assert.equal(/tgl_|Bearer|token=|evil\.example/i.test(rendered), false);
 
     const band = (await page.locator("#chat-offline").textContent()) ?? "";
     assert.match(band, /up to message #2/);
