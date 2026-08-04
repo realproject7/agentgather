@@ -2411,11 +2411,10 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
   }
 });
 
-// #278 — the row-level guard above only governs the restored row. The reply-context
-// map (#113) is a second path out of the backup, and what it feeds renders inside a
-// *live* row that carries no restored marking (@re2). Every assertion in the test
-// above inspects the restored row, which is exactly why they all pass through this.
-test("a forged backup author never reaches the reply context of a live message (#278)", async () => {
+// #278 — marking the ROW is not enough: the same data flows onward into surfaces
+// that carry no restored marking. Every assertion in the test above inspects the
+// restored row, which is exactly why all of them pass through these routes.
+test("no restored record\'s author or text escapes into an unmarked surface (#278)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
   try {
@@ -2430,7 +2429,7 @@ test("a forged backup author never reaches the reply context of a live message (
     // said it. The forged text deliberately contains no occurrence of "host", so the
     // attribution assertions below cannot be satisfied by the body text.
     const forgedText = "approved, release the funds";
-    const forgedId = await page.evaluate(
+    const { forgedId, storedAfterTamper } = await page.evaluate(
       ({ now, text }) => {
         const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
         if (key === undefined) throw new Error("no backup to tamper with");
@@ -2439,25 +2438,43 @@ test("a forged backup author never reaches the reply context of a live message (
         };
         const head = parsed.messages.reduce((highest, entry) => Math.max(highest, Number(entry.id)), 0);
         parsed.messages = [{ id: head, from: "host", ts: now, type: "message", text }];
-        window.localStorage.setItem(key, JSON.stringify(parsed));
-        return head;
+        const serialised = JSON.stringify(parsed);
+        window.localStorage.setItem(key, serialised);
+        return { forgedId: head, storedAfterTamper: serialised };
       },
       { now: new Date().toISOString(), text: forgedText }
     );
     await page.reload();
     await page.waitForSelector(`text=${forgedText}`);
 
-    // The composer names an author too. Pressing Reply on the restored row must not
-    // put the forged alias — or its roster-resolved display name — into that label.
-    await page.locator(".message", { hasText: forgedText }).first().locator(".reply-btn").click();
-    await page.waitForSelector("#reply-indicator", { state: "visible" });
-    const indicator = await page.locator("#reply-indicator-label").innerText();
-    assert.equal(/host/i.test(indicator), false, `composer named a forged author: ${indicator}`);
-    assert.match(indicator, /^Replying to local copy #\d+$/);
-    await page.click("#reply-clear");
+    // A restored row carries no reply surface at all: the button's `aria-label` and
+    // the composer indicator both name an author, and the only alias either could
+    // name is the stored one. Removing them is what makes that unreachable rather
+    // than sanitised (#278, operator ruling).
+    const restored = page.locator(".message", { hasText: forgedText }).first();
+    assert.equal(await restored.getAttribute("data-restored"), "true");
+    assert.equal(await restored.locator(".reply-btn").count(), 0, "no reply button on a restored row");
+    // ...including the double-click shortcut, which bypasses the button entirely.
+    await restored.dblclick();
+    assert.equal(await page.locator("#reply-indicator").isVisible(), false, "dblclick sets no reply target");
+    // No rendered element anywhere announces the forged author.
+    const timelineHtml = (await page.locator("#timeline").innerHTML()) ?? "";
+    assert.equal(/Reply to Host/i.test(timelineHtml), false, "no aria-label names the forged author");
 
-    // Another participant replies to that id over the real API — the one-click path
-    // a user walks themselves by pressing Reply on a restored row.
+    // A restored record must not flow back OUT of the view into persistence either.
+    // `recordBackupBatch` and `bridgeHistoryToDashboard` — the latter feeding #247's
+    // on-disk dashboard snapshot — both take `fresh`, which `pollMessages` builds
+    // only from host-served payload. Asserted on the writer, where it is observable:
+    // a warm entry that fetched nothing leaves the stored copy byte-identical, so
+    // nothing re-ingested the restored records.
+    const storedAfterEntry = await page.evaluate(() => {
+      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+      return key === undefined ? null : window.localStorage.getItem(key);
+    });
+    assert.equal(storedAfterEntry, storedAfterTamper, "a restored record was re-ingested by the backup writer");
+
+    // A live message can still carry reply_to pointing at an id only this device
+    // holds — reached here over the real API, since the UI no longer offers it.
     const posted = await fetch(`${fixture.baseUrl}/messages`, {
       method: "POST",
       headers: { Authorization: `Bearer ${fixture.reviewerToken}`, "Content-Type": "application/json" },
@@ -2471,11 +2488,12 @@ test("a forged backup author never reaches the reply context of a live message (
     // makes its content authoritative-looking, and why the map must be guarded.
     assert.equal(await reply.getAttribute("data-restored"), null, "the reply is a live, unmarked row");
     const context = ((await reply.locator(".reply-context").textContent()) ?? "").trim();
-    const attribution = context.slice(0, context.indexOf(":"));
-    // Neither the stored alias nor the display name the live roster would resolve it
-    // to (`host` → `Host`) may appear in a line the host itself served.
-    assert.equal(/host/i.test(attribution), false, `live reply quoted a forged author: ${context}`);
-    assert.match(context, /^↩ local copy:/);
+    // Neither the stored alias, the display name the live roster would resolve it to
+    // (`host` → `Host`), nor the stored text may appear in a line the host served.
+    // The restored record is absent from the map, so this falls back to the id.
+    assert.equal(/host/i.test(context), false, `live reply quoted a forged author: ${context}`);
+    assert.equal(context.includes(forgedText), false, `live reply quoted forged text: ${context}`);
+    assert.equal(context, `↩ replying to #${forgedId}`);
   } finally {
     await browser?.close();
     await fixture.close();

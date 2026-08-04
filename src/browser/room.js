@@ -1435,14 +1435,15 @@ function renderMessage(message, options = {}) {
   const restoredRow = options.restored === true;
   // Record a minimal from/text preview so a later message carrying reply_to can
   // show its replied-to context, even for a message rendered earlier (#113).
-  // A restored row's stored alias must never enter this map (#278, @re2): the
-  // reply context it feeds renders inside a *live* row, which carries no restored
-  // marking, so a hand-edited author would be laundered into a line the host
-  // really served — and resolved through the live roster on the way in.
-  state.messagesById.set(message.id, {
-    from: restoredRow ? RESTORED_SENDER_LABEL : labelFor(message.from),
-    text: message.text,
-  });
+  //
+  // Restored records do not take part in this at all (#278). Marking the ROW is
+  // not enough when its data flows onward: what this map feeds renders inside a
+  // *live* row, which carries no restored marking, so a hand-edited alias would be
+  // laundered — roster-resolved on the way in — into a line the host really served.
+  // Sanitising each consumer would leave the next one to be written unguarded, so
+  // the restored record never enters the map, and a live reply to an id only this
+  // device holds falls back to the existing `↩ replying to #n`.
+  if (!restoredRow) state.messagesById.set(message.id, { from: labelFor(message.from), text: message.text });
 
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
@@ -1524,17 +1525,21 @@ function renderMessage(message, options = {}) {
 
   // Discoverable per-message reply action (#113): a visible button (also
   // keyboard-focusable) that sets the composer reply target. Double-click still
-  // works as a shortcut.
-  const actions = document.createElement("div");
-  actions.className = "message-actions";
-  const replyBtn = document.createElement("button");
-  replyBtn.type = "button";
-  replyBtn.className = "reply-btn";
-  replyBtn.textContent = "↩ Reply";
-  replyBtn.setAttribute("aria-label", `Reply to ${state.participantLabels.get(message.from) || message.from} #${message.id}`);
-  replyBtn.addEventListener("click", () => setReply(message));
-  actions.append(replyBtn);
-  meta.append(actions);
+  // works as a shortcut. A restored row carries neither (#278): both name an
+  // author — the button in its `aria-label`, the composer in its indicator — and
+  // the only alias they could name is the stored one.
+  if (!restoredRow) {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    const replyBtn = document.createElement("button");
+    replyBtn.type = "button";
+    replyBtn.className = "reply-btn";
+    replyBtn.textContent = "↩ Reply";
+    replyBtn.setAttribute("aria-label", `Reply to ${state.participantLabels.get(message.from) || message.from} #${message.id}`);
+    replyBtn.addEventListener("click", () => setReply(message));
+    actions.append(replyBtn);
+    meta.append(actions);
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
@@ -1551,7 +1556,7 @@ function renderMessage(message, options = {}) {
   }
   bubble.append(text);
 
-  item.addEventListener("dblclick", () => setReply(message));
+  if (!restoredRow) item.addEventListener("dblclick", () => setReply(message));
   item.dataset.senderKind = senderKind;
   item.append(avatar, bubble);
   timeline.append(item);
@@ -1573,12 +1578,7 @@ function setReply(message) {
   state.replyTo = message.id;
   clearPendingSendIfTextChanged();
   replyIndicator.hidden = false;
-  // Attribution comes from the reply-context map, never from the raw `from` (#278):
-  // that map is where a restored row's stored alias has already been replaced with
-  // this device's own label, so every surface that names an author agrees, and a
-  // hand-edited alias cannot reach the composer either.
-  const label = state.messagesById.get(message.id)?.from ?? labelFor(message.from);
-  replyIndicatorLabel.textContent = `Replying to ${label} #${message.id}`;
+  replyIndicatorLabel.textContent = `Replying to ${labelFor(message.from)} #${message.id}`;
   messageText.focus();
 }
 
