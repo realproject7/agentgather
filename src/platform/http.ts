@@ -23,7 +23,9 @@ import {
   recordJoinedRoom,
   refreshJoinedRoomMetadata,
   setJoinedRoomArchived,
+  setJoinedRoomsArchived,
   deleteJoinedRoom,
+  deleteJoinedRooms,
   readMessages,
   readJoinedHistory,
   recordJoinedHistory,
@@ -31,6 +33,7 @@ import {
   SNAPSHOT_MAX_COMMENTS_PER_POST,
   SNAPSHOT_MAX_FORUM_POSTS,
   SNAPSHOT_MAX_MESSAGES,
+  type JoinedRoomTarget,
   type SnapshotForumPost,
   type SnapshotMessage
 } from "../storage/index.js";
@@ -100,6 +103,18 @@ async function handle(options: PlatformHttpServerOptions, req: IncomingMessage, 
   }
   if (req.method === "POST" && url.pathname === "/joined-rooms/delete") {
     await deleteJoinedRoomRequest(options, req, res);
+    return;
+  }
+  // Bulk device-local archive/delete over an explicit selection (#277). Separate
+  // paths rather than a variadic form of the single-row routes, so the existing
+  // #210 contracts are untouched and a malformed bulk body can never be read as a
+  // single-row request.
+  if (req.method === "POST" && url.pathname === "/joined-rooms/archive-bulk") {
+    await archiveJoinedRoomsBulkRequest(options, req, res);
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/joined-rooms/delete-bulk") {
+    await deleteJoinedRoomsBulkRequest(options, req, res);
     return;
   }
   if (req.method !== "GET") {
@@ -636,6 +651,117 @@ async function deleteJoinedRoomRequest(
   }
   const removed = await deleteJoinedRoom(options.root, { roomId, baseUrl });
   sendJson(res, 200, { ok: true, removed });
+}
+
+// Upper bound on one bulk batch (#277). The operator's list is ~63 rooms; this is
+// generous for that and still bounds the work a single loopback request can queue
+// behind the joined-rooms writer lock.
+const BULK_TARGET_LIMIT = 500;
+
+// Body cap for the bulk routes. The shared 8 KiB default is sized for single-row
+// bridge posts and is NOT enough here: a room id may be up to 200 chars and a
+// baseUrl longer still, so selecting the operator's ~63 rooms can exceed it —
+// and it would have surfaced as the misleading "body must be JSON". 256 KiB
+// comfortably holds BULK_TARGET_LIMIT worst-case targets while still bounding
+// what one loopback request can buffer.
+const BULK_BODY_LIMIT = 262_144;
+
+// Read and parse a bulk request body, distinguishing "too big" from "not JSON"
+// so an oversized selection reports something the caller can act on.
+async function readBulkBody(
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<Record<string, unknown> | null> {
+  let raw: string;
+  try {
+    raw = await readRequestBody(req, BULK_BODY_LIMIT);
+  } catch {
+    sendJson(res, 413, {
+      ok: false,
+      error: "body_too_large",
+      message: `bulk request bodies are limited to ${BULK_BODY_LIMIT} bytes`
+    });
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_json", message: "body must be JSON" });
+    return null;
+  }
+}
+
+// Parse and validate a bulk target list. Every entry goes through the SAME
+// sanitizers as the single-row routes, and one bad entry rejects the whole batch
+// rather than being skipped — a bulk delete must never quietly act on a subset of
+// what the caller asked for.
+function readBulkTargets(value: unknown): { targets: JoinedRoomTarget[] } | { error: string; message: string } {
+  if (!Array.isArray(value)) {
+    return { error: "invalid_targets", message: "targets must be an array" };
+  }
+  if (value.length === 0) {
+    return { error: "invalid_targets", message: "targets must not be empty" };
+  }
+  if (value.length > BULK_TARGET_LIMIT) {
+    return { error: "too_many_targets", message: `at most ${BULK_TARGET_LIMIT} targets per request` };
+  }
+  const targets: JoinedRoomTarget[] = [];
+  for (const entry of value) {
+    const target = entry as { roomId?: unknown; baseUrl?: unknown };
+    const baseUrl = sanitizeBaseUrl(target?.baseUrl);
+    const roomId = shortString(target?.roomId);
+    if (baseUrl === null || roomId === undefined) {
+      return { error: "invalid_target", message: "every target needs a roomId and baseUrl" };
+    }
+    targets.push({ roomId, baseUrl });
+  }
+  return { targets };
+}
+
+// Device-local bulk archive/unarchive (#277). Loopback-only and token-free, like
+// every other joined-room bridge; touches ONLY joined-rooms.json. Archiving keeps
+// the offline snapshot (#247) — only delete clears it.
+async function archiveJoinedRoomsBulkRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "joined-room archive is loopback-only" });
+    return;
+  }
+  const body = await readBulkBody(req, res);
+  if (body === null) return;
+  const parsed = readBulkTargets(body.targets);
+  if ("error" in parsed) {
+    sendJson(res, 400, { ok: false, error: parsed.error, message: parsed.message });
+    return;
+  }
+  const result = await setJoinedRoomsArchived(options.root, parsed.targets, body.archived === true);
+  sendJson(res, 200, { ok: true, ...result });
+}
+
+// Device-local bulk hard-delete (#277). Removes ONLY joined-rooms.json rows and
+// this device's own offline snapshots — never host-owned room data, host logs, or
+// tokens. The store write is atomic, so a failure cannot half-apply the batch.
+async function deleteJoinedRoomsBulkRequest(
+  options: PlatformHttpServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, error: "bad_origin", message: "joined-room delete is loopback-only" });
+    return;
+  }
+  const body = await readBulkBody(req, res);
+  if (body === null) return;
+  const parsed = readBulkTargets(body.targets);
+  if ("error" in parsed) {
+    sendJson(res, 400, { ok: false, error: parsed.error, message: parsed.message });
+    return;
+  }
+  const result = await deleteJoinedRooms(options.root, parsed.targets);
+  sendJson(res, 200, { ok: true, ...result });
 }
 
 // Explicit local import of a tokenized invite. This IS the identity-selecting path

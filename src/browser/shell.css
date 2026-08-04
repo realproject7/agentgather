@@ -2122,3 +2122,295 @@ body {
     display: none;
   }
 }
+
+/* ---- Bulk manage joined rooms (#277) ---- */
+/* Full joined-room list in the wide main panel. Sizing follows the 4px grid and
+   the shared token layer; nothing here hardcodes a colour or a font. */
+.manage {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.manage[hidden] {
+  display: none;
+}
+
+.manage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.manage-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+
+.manage-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.manage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.manage-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.manage-filter select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--text-soft);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+}
+
+.manage-shown {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* Selection bar: select-all, the live count, and the bulk actions. */
+.manage-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--chip);
+}
+
+.manage-selectall {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.manage-count {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.manage-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.manage-ctl {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.manage-ctl:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.manage-ctl:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.manage-ctl:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.manage-ctl-danger:hover:not(:disabled) {
+  border-color: rgba(var(--danger-rgb), 0.5);
+  color: var(--danger);
+}
+
+/* Explicit bulk-delete confirmation. Never a native dialog, and its own button is
+   the only control that issues the delete. */
+.manage-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(var(--danger-rgb), 0.32);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+}
+
+.manage-confirm[hidden] {
+  display: none;
+}
+
+.manage-confirm-msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: var(--fs-sm);
+}
+
+.manage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manage-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--chip);
+}
+
+.manage-row[data-archived="true"] {
+  opacity: 0.72;
+}
+
+.manage-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.manage-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.manage-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+  font-size: var(--fs-md);
+}
+
+.manage-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.manage-aside {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.manage-reach {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg-input);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.manage-reach[data-reachability="live"] {
+  border-color: rgba(var(--ok-rgb), 0.32);
+  background: rgba(var(--ok-rgb), 0.12);
+  color: var(--ok);
+}
+
+.manage-reach[data-reachability="expired"] {
+  border-color: rgba(var(--warn-rgb), 0.32);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.manage-reach[data-reachability="unreachable"] {
+  border-color: rgba(var(--danger-rgb), 0.32);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.manage-tag {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.manage-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* Narrow viewports (390px reference): the row stacks so the name never truncates
+   against the badges, and every control clears the 44px touch target. */
+@media (max-width: 440px) {
+  .manage {
+    padding: 12px;
+  }
+
+  .manage-row {
+    flex-wrap: wrap;
+  }
+
+  .manage-aside {
+    width: 100%;
+    /* Clears the 20px checkbox plus its 12px row gap, on the 4px scale. */
+    padding-left: 32px;
+  }
+
+  .manage-ctl {
+    min-height: 44px;
+    padding: 8px 16px;
+  }
+
+  .manage-check {
+    width: 20px;
+    height: 20px;
+  }
+
+  .manage-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
