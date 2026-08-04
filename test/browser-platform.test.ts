@@ -1247,10 +1247,25 @@ test("device-local archive/delete for joined rooms — hide/restore, confirm-del
     const confirmText = (await page.locator(".joined-confirm-msg").textContent()) ?? "";
     assert.match(confirmText, /won't close the host room or notify anyone/i);
     assert.equal(/tgl_|token=|Bearer/i.test(confirmText), false);
-    await page.click('[data-action="confirm-delete"]');
-    await page.waitForFunction(
-      () => [...document.querySelectorAll(".joined-name")].every((n) => n.textContent !== "Room B")
+    // #255: the old wait here was `every(.joined-name !== "Room B")`, which is
+    // already TRUE before this click — opening the confirm bar swaps the row's
+    // contents (`showJoinedDeleteConfirm` calls `item.replaceChildren()`), so the
+    // name is gone the moment the bar appears. That wait proved nothing, and the
+    // API read below then raced the still in-flight delete: on macOS it lost every
+    // time, on Linux it usually won and lost only under load. Wait on the server's
+    // own end state instead — the delete response, which the handler sends only
+    // after the store write is committed — and then on the rail settling from
+    // authoritative state. No sleep, and a delete that stops working still fails
+    // this test.
+    const deleteApplied = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/joined-rooms/delete") &&
+        response.status() === 200
     );
+    await page.click('[data-action="confirm-delete"]');
+    await deleteApplied;
+    await page.waitForFunction(() => document.querySelectorAll(".joined-row").length === 1);
 
     // Token-free rail + API; Room B is gone from the device-local store, Room A stays.
     assert.equal(/tgl_|token=|Bearer/i.test((await page.locator(".room-rail").innerHTML()) ?? ""), false);
