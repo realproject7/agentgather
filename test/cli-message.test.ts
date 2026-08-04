@@ -15,6 +15,7 @@ import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runWatchCommand } from "../src/cli/commands/watch/index.js";
 import { readMessages } from "../src/storage/index.js";
 import { startRoomServerFixture } from "./support/room-fixture.js";
+import { closeServer } from "./support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -74,7 +75,7 @@ test("watch reports a route/server mismatch on /wait 404 without leaking the tok
       return true;
     });
   } finally {
-    await new Promise<void>((resolve) => notFound.close(() => resolve()));
+    await closeServer(notFound);
   }
 });
 
@@ -258,17 +259,27 @@ test("non-JSON watch next line points to attend, not watch", async () => {
 test("attend keeps foreground attendance until room close", async () => {
   const fixture = await startRoomFixture();
   try {
-    setTimeout(() => {
-      void fetch(`${fixture.baseUrl}/close`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${fixture.hostToken}`,
-          "Content-Type": "application/json"
-        }
-      });
-    }, 5);
+    // #258: the /close that releases attend is tracked, not dropped on the floor.
+    // Teardown now destroys live sockets, so a request still in flight when the
+    // fixture closes rejects after the test has ended — an unhandled rejection that
+    // fails the whole file. Its own outcome is not what this test asserts; what is
+    // asserted is that attend saw the close, below.
+    const closeIssued = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fetch(`${fixture.baseUrl}/close`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${fixture.hostToken}`,
+            "Content-Type": "application/json"
+          }
+        })
+          .catch(() => undefined)
+          .finally(() => resolve());
+      }, 5);
+    });
 
     await runAttendCommand(["--since", "0", "--json"], fixture.context);
+    await closeIssued;
     const lines = fixture.stdout
       .text()
       .trim()

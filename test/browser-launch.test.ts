@@ -10,6 +10,7 @@ import type { CliContext } from "../src/cli/context.js";
 import { runLaunchCommand } from "../src/cli/commands/launch/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
 import { VERSION } from "../src/cli/help.js";
+import { closeServer } from "./support/close-server.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-launch-"));
@@ -67,7 +68,7 @@ test("the launcher's opened URL renders the existing dashboard at desktop width 
     },
     waitForShutdown: async (server: Server) => {
       await shutdownGate;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeServer(server);
     }
   });
 

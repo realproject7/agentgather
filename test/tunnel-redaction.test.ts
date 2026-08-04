@@ -8,6 +8,7 @@ import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   type BrokerLogSink,
   BrokerLogger,
@@ -133,7 +134,7 @@ test("broker access logs never contain tokens, query strings, message text, or b
     assert.equal(serialized.includes("route_hash"), true);
     assert.equal(serialized.includes("path_class"), true);
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+    await closeServer(brokerServer);
+    await closeServer(hostServer);
   }
 });

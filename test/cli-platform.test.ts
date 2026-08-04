@@ -8,6 +8,7 @@ import type { CliContext } from "../src/cli/context.js";
 import { runPlatformCommand } from "../src/cli/commands/platform/index.js";
 import { appendServerMessage, createRoom } from "../src/storage/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
+import { closeServer } from "./support/close-server.js";
 
 function makeCtx(home: string): { ctx: CliContext; out: () => string; err: () => string } {
   const out: string[] = [];
@@ -43,7 +44,7 @@ test("platform serve starts the owner shell on localhost by default with a no-se
   const { ctx, out } = makeCtx(root);
   await runPlatformCommand(["serve", "--port", "0", "--json"], ctx, {
     waitForShutdown: async (server) => {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeServer(server);
     }
   });
   const line = JSON.parse(out().trim()) as { ok: boolean; url: string; host: string; port: number; control_plane: string };
@@ -79,7 +80,7 @@ test("platform serve exposes the read-only rooms API and the live host chat with
         assert.equal(chatBody.host_log_available, true);
         assert.equal(chatBody.messages.some((m) => m.text === "alpha opened for review"), true);
       } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await closeServer(server);
       }
     }
   });

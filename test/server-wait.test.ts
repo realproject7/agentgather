@@ -8,6 +8,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { WaitHub } from "../src/server/wait.js";
+import { closeServer } from "./support/close-server.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-wait-test-"));
@@ -66,12 +67,7 @@ async function startWaitFixture(
     hostToken,
     agentToken,
     close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+      closeServer(server)
   };
 }
 

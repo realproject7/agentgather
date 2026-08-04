@@ -8,6 +8,7 @@ import { Writable } from "node:stream";
 import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runBrokerCommand } from "../src/cli/commands/broker/index.js";
+import { closeServer } from "./support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -98,7 +99,7 @@ test("broker serve binds, forwards with redaction-safe logs, and shuts down on s
       assert.equal(output.includes(secret), false, `broker log leaked: ${secret}`);
     }
   } finally {
-    await new Promise<void>((resolve) => echo.close(() => resolve()));
+    await closeServer(echo);
   }
 });
 

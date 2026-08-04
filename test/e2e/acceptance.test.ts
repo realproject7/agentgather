@@ -11,6 +11,7 @@ import { runMessagesCommand, runReadCommand, runReplyCommand, runSendCommand } f
 import { runRoomCommand } from "../../src/cli/commands/room/index.js";
 import { runWatchCommand } from "../../src/cli/commands/watch/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
+import { closeServer } from "../support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -154,27 +155,29 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
     const heldWait = fetch(`${baseUrl}/wait?participant=reviewer&since_id=999`, {
       headers: { Authorization: `Bearer ${reviewerInvite.token}` }
     });
-    setTimeout(() => {
-      void fetch(`${baseUrl}/close`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${started.token}`,
-          "Content-Type": "application/json"
-        }
-      });
-    }, 5);
+    // #258: tracked, not dropped — teardown destroys live sockets, so a request
+    // still in flight when the server closes rejects after the test has ended.
+    const closeIssued = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fetch(`${baseUrl}/close`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${started.token}`,
+            "Content-Type": "application/json"
+          }
+        })
+          .catch(() => undefined)
+          .finally(() => resolve());
+      }, 5);
+    });
     const closed = await heldWait;
     const closedBody = await closed.json();
     assert.equal(closedBody.room_status, "closed");
     assert.equal(closedBody.keep_waiting, false);
+    await closeIssued;
   } finally {
     await browser.close();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
+    await closeServer(server);
   }
 });
 
@@ -191,11 +194,8 @@ async function getFreePort(): Promise<number> {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address() as AddressInfo;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
   });
   return address.port;
 }

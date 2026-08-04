@@ -12,6 +12,7 @@ import {
   writeParticipants
 } from "../src/storage/index.js";
 import type { Participant } from "../src/protocol/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   createRoomHttpServer,
   participantTokenHash,
@@ -69,12 +70,7 @@ async function startFixture(options: { waitHoldMs?: number; expiresAt?: Date } =
     hostToken,
     agentToken,
     close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
+      closeServer(server)
   };
 }
 

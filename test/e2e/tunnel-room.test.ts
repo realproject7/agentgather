@@ -11,6 +11,7 @@ import { runRoomCommand } from "../../src/cli/commands/room/index.js";
 import { runTunnelCommand } from "../../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
 import { createBrokerHttpServer, readPublicBaseUrl, TunnelBroker } from "../../src/tunnel/index.js";
+import { closeServer } from "../support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -123,18 +124,24 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     const held = fetch(`${publicBaseUrl}/wait?participant=curl-agent&since_id=999`, {
       headers: { Authorization: `Bearer ${curlToken}` }
     });
-    setTimeout(() => {
-      void fetch(`${publicBaseUrl}/close`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" }
-      });
-    }, 10);
+    // #258: tracked, not dropped — see the same pattern in cli-message/tunnel tests.
+    const closeIssued = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fetch(`${publicBaseUrl}/close`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${hostToken}`, "Content-Type": "application/json" }
+        })
+          .catch(() => undefined)
+          .finally(() => resolve());
+      }, 10);
+    });
     const closed = (await (await held).json()) as { room_status: string; keep_waiting: boolean };
     assert.equal(closed.room_status, "closed");
     assert.equal(closed.keep_waiting, false);
+    await closeIssued;
   } finally {
     await browser.close();
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+    await closeServer(brokerServer);
+    await closeServer(hostServer);
   }
 });
