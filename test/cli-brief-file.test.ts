@@ -1,12 +1,38 @@
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
+import { createRoomHttpServer } from "../src/server/index.js";
 import { readBrief } from "../src/storage/index.js";
+
+// #254: serves an already-created room from the CLI's own AGENTGATHER_HOME on a
+// kernel-assigned port, so CLI commands under test can never reach a foreign
+// listener on the product default port.
+async function startCliRoomFixture(
+  root: string,
+  roomId: string
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0" });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      })
+  };
+}
 
 // #114: hosts can author a multiline Markdown brief from a file so real newlines
 // land in brief.md, instead of shell-escaped literal `\n` that renders visibly.
@@ -46,16 +72,31 @@ test("room start --brief-file writes a multiline brief with real newlines (no li
 });
 
 test("room brief set --brief-file updates the brief with real newlines", async () => {
-  const { context } = await makeContext();
-  await runRoomCommand(["start", "set-room", "--alias", "host", "--brief", "seed", "--json"], context);
+  const { context, stdout } = await makeContext();
+  await runRoomCommand(["start", "set-room", "--alias", "host", "--brief", "seed", "--show-token", "--json"], context);
+  const started = JSON.parse(stdout.text()) as { token: string };
 
-  const briefPath = path.join(context.home, "updated.md");
-  await writeFile(briefPath, MULTILINE, "utf8");
-  await runRoomCommand(["brief", "set", "--brief-file", briefPath, "--json"], context);
+  // #254: `brief set` POSTs to the current room's baseUrl, which `room start`
+  // derives as the product default 127.0.0.1:8787 — a real request to whatever
+  // process owns that port. Bind a fixture for this room and point the room at
+  // it so the request can only reach a listener this test owns.
+  const fixture = await startCliRoomFixture(context.home, "set-room");
+  try {
+    await runRoomCommand(
+      ["join", "set-room", "--alias", "host", "--token", started.token, "--url", fixture.baseUrl],
+      context
+    );
 
-  const brief = await readBrief(context.home, "set-room");
-  assert.equal(brief.body, MULTILINE);
-  assert.equal(brief.brief_version, 2);
+    const briefPath = path.join(context.home, "updated.md");
+    await writeFile(briefPath, MULTILINE, "utf8");
+    await runRoomCommand(["brief", "set", "--brief-file", briefPath, "--json"], context);
+
+    const brief = await readBrief(context.home, "set-room");
+    assert.equal(brief.body, MULTILINE);
+    assert.equal(brief.brief_version, 2);
+  } finally {
+    await fixture.close();
+  }
 });
 
 test("room create-boardroom --brief-file writes a multiline brief with real newlines", async () => {

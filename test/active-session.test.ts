@@ -281,27 +281,66 @@ test("room session start|end CLI persists the session, appends system messages, 
     stdout,
     stderr: new Capture()
   };
-  await runRoomCommand(["start", "cli-session", "--alias", "operator", "--json"], context);
+  await runRoomCommand(["start", "cli-session", "--alias", "operator", "--show-token", "--json"], context);
+  const bootstrap = stdout.json<{ ok: true; token: string }>();
 
-  stdout.chunks = [];
-  await runRoomCommand(["session", "start", "--duration-m", "20", "--json"], context);
-  const started = stdout.json<{ ok: true; active_session: ActiveSession }>();
-  assert.equal(started.active_session.channel_id, "general");
-  assert.equal(started.active_session.expected_duration_m, 20);
-  assert.equal(started.active_session.started_by, "operator");
+  // #254: `session start|end` POST to the current room's baseUrl, which `room
+  // start` derives as the product default 127.0.0.1:8787. Bind a fixture for
+  // this room and point the room at it, so the request can only ever reach a
+  // listener this test owns — never a `room serve` the developer is running.
+  const cliFixture = await startCliRoomFixture(context.home, "cli-session");
+  try {
+    await runRoomCommand(
+      ["join", "cli-session", "--alias", "operator", "--token", bootstrap.token, "--url", cliFixture.baseUrl],
+      context
+    );
 
-  const state = await readRoomState(roomPaths(context.home, "cli-session"));
-  assert.equal(state.active_session?.channel_id, "general");
-  const messages = await readMessages(context.home, "cli-session");
-  assert.equal(messages.some((m) => m.type === "system" && /active chat session started/i.test(m.text)), true);
+    stdout.chunks = [];
+    await runRoomCommand(["session", "start", "--duration-m", "20", "--json"], context);
+    const started = stdout.json<{ ok: true; active_session: ActiveSession }>();
+    assert.equal(started.active_session.channel_id, "general");
+    assert.equal(started.active_session.expected_duration_m, 20);
+    assert.equal(started.active_session.started_by, "operator");
 
-  stdout.chunks = [];
-  await runRoomCommand(["session", "end", "--json"], context);
-  const ended = stdout.json<{ ok: true; active_session: ActiveSession }>();
-  assert.equal(typeof ended.active_session.ended_at, "string");
-  const idle = await readRoomState(roomPaths(context.home, "cli-session"));
-  assert.equal(idle.active_session, undefined);
+    const state = await readRoomState(roomPaths(context.home, "cli-session"));
+    assert.equal(state.active_session?.channel_id, "general");
+    const messages = await readMessages(context.home, "cli-session");
+    assert.equal(messages.some((m) => m.type === "system" && /active chat session started/i.test(m.text)), true);
 
-  await assert.rejects(() => runRoomCommand(["session", "start", "--duration-m", "0", "--json"], context));
-  await assert.rejects(() => runRoomCommand(["session", "start", "--channel", "design-chat", "--json"], context));
+    stdout.chunks = [];
+    await runRoomCommand(["session", "end", "--json"], context);
+    const ended = stdout.json<{ ok: true; active_session: ActiveSession }>();
+    assert.equal(typeof ended.active_session.ended_at, "string");
+    const idle = await readRoomState(roomPaths(context.home, "cli-session"));
+    assert.equal(idle.active_session, undefined);
+
+    await assert.rejects(() => runRoomCommand(["session", "start", "--duration-m", "0", "--json"], context));
+    await assert.rejects(() => runRoomCommand(["session", "start", "--channel", "design-chat", "--json"], context));
+  } finally {
+    await cliFixture.close();
+  }
 });
+
+// #254: serves an already-created room from the CLI's own AGENTGATHER_HOME on a
+// kernel-assigned port, so CLI commands under test can never reach a foreign
+// listener on the product default port.
+async function startCliRoomFixture(
+  root: string,
+  roomId: string
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0" });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      })
+  };
+}

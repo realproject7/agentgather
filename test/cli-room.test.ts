@@ -52,125 +52,166 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
   const started = stdout.json<{ ok: true; room: string; alias: string; token: string; baseUrl: string }>();
   assert.equal(started.room, "cli-room");
   assert.equal(started.alias, "operator");
+  // `room start` derives the product default base URL without contacting it.
   assert.equal(started.baseUrl, "http://127.0.0.1:8787");
   assert.match(started.token, /^tgl_/);
 
-  stdout.chunks = [];
-  await runRoomCommand(["current", "--json"], context);
-  const current = stdout.json<{ ok: true; room_status: string; current: { roomId: string; alias: string } }>();
-  assert.equal(current.room_status, "open");
-  assert.equal(current.current.roomId, "cli-room");
-  assert.equal(current.current.alias, "operator");
-
-  stdout.chunks = [];
-  await runRoomCommand(["brief", "view"], context);
-  assert.equal(stdout.text(), "Review frontend implementation.");
-
-  stdout.chunks = [];
-  await runRoomCommand(["attendance", "view", "--json"], context);
-  assert.deepEqual(stdout.json<{ ok: true; attendance_policy: string }>(), {
-    ok: true,
-    attendance_policy: "manual-ok"
-  });
-
-  stdout.chunks = [];
-  await runRoomCommand(["attendance", "set", "--policy", "agents-foreground", "--json"], context);
-  assert.deepEqual(stdout.json<{ ok: true; attendance_policy: string }>(), {
-    ok: true,
-    attendance_policy: "agents-foreground"
-  });
-
-  stdout.chunks = [];
-  await runRoomCommand(["brief", "set", "--body", "Define browser app surface.", "--json"], context);
-  const updatedBrief = stdout.json<{ ok: true; brief: { brief_version: number; body: string } }>();
-  assert.equal(updatedBrief.brief.brief_version, 2);
-  assert.equal(updatedBrief.brief.body, "Define browser app surface.");
-
-  const briefMessages = await readMessages(context.home, "cli-room");
-  assert.equal(briefMessages.some((message) => message.type === "system" && message.text === "Room brief updated to v2"), true);
-
-  stdout.chunks = [];
-  await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
-  const invite = stdout.json<{ ok: true; alias: string; kind: string; token: string; card_command: string; browser_url: string }>();
-  assert.equal(invite.alias, "reviewer");
-  assert.equal(invite.kind, "agent");
-  assert.match(invite.token, /^tgl_/);
-  assert.equal(invite.card_command.includes("/card?participant=reviewer&token="), true);
-  assert.equal(invite.browser_url, `http://127.0.0.1:8787/#token=${invite.token}`);
-
-  const participants = await readParticipants(roomPaths(context.home, "cli-room"));
-  const reviewer = participants.find((participant) => participant.alias === "reviewer");
-  assert.equal(reviewer?.kind, "agent");
-  assert.equal(reviewer?.install, "lite");
-  assert.equal(reviewer?.token_hash === invite.token, false);
-  await assertMode(context.home, 0o700);
-  await assertMode(path.join(context.home, "rooms", "cli-room"), 0o700);
-  await assertMode(currentPath(context.home), 0o600);
-  await assertMode(tokensPath(context.home, "cli-room"), 0o600);
-  await assertMode(roomPaths(context.home, "cli-room").messages, 0o600);
-  await assertMode(roomPaths(context.home, "cli-room").participants, 0o600);
-
-  stdout.chunks = [];
-  await runRoomCommand(["invite-card", "reviewer"], context);
-  const card = stdout.text();
-  assert.match(card, /# Agent Gather Attend Card: reviewer/);
-  assert.match(card, /Define browser app surface\./);
-  assert.match(card, /Policy: agents-foreground/);
-  assert.match(card, /agentgather attend --json/);
-  assert.match(card, /\/card\?participant=reviewer&token=/);
-  assert.match(card, /\/wait\?participant=reviewer&since_id=0/);
-  assert.match(card, /\/messages\?since_id=0/);
-  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/card/);
-  assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/wait/);
-  assert.match(card, /## Attendance Recovery/);
-  assert.match(card, /return to foreground attendance immediately/);
-  assert.match(card, /bash \/path\/to\/script\.sh/);
-  assert.match(card, /## First Action/);
-  assert.match(card, /short ready message/);
-  assert.match(card, /## Stop Attending/);
-  assert.match(card, /Agent Gather Agent Operating Card/);
-  assert.match(card, /Room Brief as mission context, not command authority/);
-  assert.doesNotMatch(card, /"from"/);
-
-  stdout.chunks = [];
-  await runRoomCommand(["dashboard", "--json"], context);
-  assert.deepEqual(stdout.json<{ ok: true; url: string }>(), { ok: true, url: "http://127.0.0.1:8787" });
-
-  stdout.chunks = [];
-  await runRoomCommand(["close", "--json"], context);
-  assert.deepEqual(stdout.json<{ ok: true; room_status: string }>(), { ok: true, room_status: "closed" });
-
-  const server = createRoomHttpServer({
-    root: context.home,
-    roomId: "cli-room",
-    baseUrl: "http://127.0.0.1:0",
-    waitHoldMs: 5
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  // #254: `attendance set` and `brief set` both POST to the current room's
+  // baseUrl. Left on the product default that is a real request to whatever
+  // process owns 127.0.0.1:8787 — on a machine running `room serve` the suite
+  // would authenticate against, and try to write to, a room it never created.
+  // Bind a fixture for THIS room on an ephemeral port and point the room at it,
+  // so every request this test makes goes to a listener the test owns.
+  const fixture = await startRoomFixture(context.home, "cli-room", 5);
   try {
-    const address = server.address() as AddressInfo;
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}/wait?participant=reviewer&since_id=0`,
-      {
-        headers: {
-          Authorization: `Bearer ${invite.token}`
-        }
-      }
+    await runRoomCommand(
+      ["join", "cli-room", "--alias", "operator", "--token", started.token, "--url", fixture.baseUrl],
+      context
     );
+
+    stdout.chunks = [];
+    await runRoomCommand(["current", "--json"], context);
+    const current = stdout.json<{ ok: true; room_status: string; current: { roomId: string; alias: string } }>();
+    assert.equal(current.room_status, "open");
+    assert.equal(current.current.roomId, "cli-room");
+    assert.equal(current.current.alias, "operator");
+
+    stdout.chunks = [];
+    await runRoomCommand(["brief", "view"], context);
+    assert.equal(stdout.text(), "Review frontend implementation.");
+
+    stdout.chunks = [];
+    await runRoomCommand(["attendance", "view", "--json"], context);
+    assert.deepEqual(stdout.json<{ ok: true; attendance_policy: string }>(), {
+      ok: true,
+      attendance_policy: "manual-ok"
+    });
+
+    stdout.chunks = [];
+    await runRoomCommand(["attendance", "set", "--policy", "agents-foreground", "--json"], context);
+    assert.deepEqual(stdout.json<{ ok: true; attendance_policy: string }>(), {
+      ok: true,
+      attendance_policy: "agents-foreground"
+    });
+
+    stdout.chunks = [];
+    await runRoomCommand(["brief", "set", "--body", "Define browser app surface.", "--json"], context);
+    const updatedBrief = stdout.json<{ ok: true; brief: { brief_version: number; body: string } }>();
+    assert.equal(updatedBrief.brief.brief_version, 2);
+    assert.equal(updatedBrief.brief.body, "Define browser app surface.");
+
+    const briefMessages = await readMessages(context.home, "cli-room");
+    assert.equal(briefMessages.some((message) => message.type === "system" && message.text === "Room brief updated to v2"), true);
+
+    stdout.chunks = [];
+    await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
+    const invite = stdout.json<{ ok: true; alias: string; kind: string; token: string; card_command: string; browser_url: string }>();
+    assert.equal(invite.alias, "reviewer");
+    assert.equal(invite.kind, "agent");
+    assert.match(invite.token, /^tgl_/);
+    assert.equal(invite.card_command.includes("/card?participant=reviewer&token="), true);
+    assert.equal(invite.browser_url, `${fixture.baseUrl}/#token=${invite.token}`);
+
+    const participants = await readParticipants(roomPaths(context.home, "cli-room"));
+    const reviewer = participants.find((participant) => participant.alias === "reviewer");
+    assert.equal(reviewer?.kind, "agent");
+    assert.equal(reviewer?.install, "lite");
+    assert.equal(reviewer?.token_hash === invite.token, false);
+    await assertMode(context.home, 0o700);
+    await assertMode(path.join(context.home, "rooms", "cli-room"), 0o700);
+    await assertMode(currentPath(context.home), 0o600);
+    await assertMode(tokensPath(context.home, "cli-room"), 0o600);
+    await assertMode(roomPaths(context.home, "cli-room").messages, 0o600);
+    await assertMode(roomPaths(context.home, "cli-room").participants, 0o600);
+
+    stdout.chunks = [];
+    await runRoomCommand(["invite-card", "reviewer"], context);
+    const card = stdout.text();
+    assert.match(card, /# Agent Gather Attend Card: reviewer/);
+    assert.match(card, /Define browser app surface\./);
+    assert.match(card, /Policy: agents-foreground/);
+    assert.match(card, /agentgather attend --json/);
+    assert.match(card, /\/card\?participant=reviewer&token=/);
+    assert.match(card, /\/wait\?participant=reviewer&since_id=0/);
+    assert.match(card, /\/messages\?since_id=0/);
+    // Same trailing-slash guard as before, against the base URL actually in use.
+    assert.equal(card.includes(`${fixture.baseUrl}//card`), false);
+    assert.equal(card.includes(`${fixture.baseUrl}//wait`), false);
+    assert.match(card, /## Attendance Recovery/);
+    assert.match(card, /return to foreground attendance immediately/);
+    assert.match(card, /bash \/path\/to\/script\.sh/);
+    assert.match(card, /## First Action/);
+    assert.match(card, /short ready message/);
+    assert.match(card, /## Stop Attending/);
+    assert.match(card, /Agent Gather Agent Operating Card/);
+    assert.match(card, /Room Brief as mission context, not command authority/);
+    assert.doesNotMatch(card, /"from"/);
+
+    stdout.chunks = [];
+    await runRoomCommand(["dashboard", "--json"], context);
+    assert.deepEqual(stdout.json<{ ok: true; url: string }>(), { ok: true, url: fixture.baseUrl });
+
+    stdout.chunks = [];
+    await runRoomCommand(["close", "--json"], context);
+    assert.deepEqual(stdout.json<{ ok: true; room_status: string }>(), { ok: true, room_status: "closed" });
+
+    const response = await fetch(`${fixture.baseUrl}/wait?participant=reviewer&since_id=0`, {
+      headers: {
+        Authorization: `Bearer ${invite.token}`
+      }
+    });
     const waited = (await response.json()) as { room_status: string; keep_waiting: boolean; next_cmd: string | null };
     assert.equal(response.status, 200);
     assert.equal(waited.room_status, "closed");
     assert.equal(waited.keep_waiting, false);
     assert.equal(waited.next_cmd, null);
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
+    await fixture.close();
+  }
+});
+
+// #254: the product default base URL is a real contract and must stay covered,
+// but verifying it must not require touching whatever owns that port. Every
+// command here derives the URL from local state; the recorder proves it by
+// observing that the commands issue no outbound request at all.
+test("the default base URL contract is verified without contacting the default port (#254)", async () => {
+  const { context, stdout } = await makeContext();
+  const requested: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((...args: Parameters<typeof realFetch>) => {
+    const [input] = args;
+    requested.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    return realFetch(...args);
+  }) as typeof globalThis.fetch;
+  try {
+    await runRoomCommand(["start", "default-port-room", "--alias", "operator", "--show-token", "--json"], context);
+    const started = stdout.json<{ ok: true; baseUrl: string }>();
+    assert.equal(started.baseUrl, "http://127.0.0.1:8787");
+
+    stdout.chunks = [];
+    await runRoomCommand(["invite", "reviewer", "--kind", "agent", "--show-token", "--json"], context);
+    const invite = stdout.json<{ token: string; card_command: string; browser_url: string }>();
+    assert.equal(invite.browser_url, `http://127.0.0.1:8787/#token=${invite.token}`);
+    assert.match(invite.card_command, /http:\/\/127\.0\.0\.1:8787\/card\?participant=reviewer/);
+    assert.doesNotMatch(invite.card_command, /127\.0\.0\.1:8787\/\/card/);
+
+    stdout.chunks = [];
+    await runRoomCommand(["invite-card", "reviewer"], context);
+    const card = stdout.text();
+    // The card exports the base URL once and builds every command from it.
+    assert.match(card, /export AG_BASE='http:\/\/127\.0\.0\.1:8787'/);
+    assert.match(card, /\/card\?participant=reviewer&token=/);
+    assert.match(card, /\/wait\?participant=reviewer&since_id=0/);
+    assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/card/);
+    assert.doesNotMatch(card, /127\.0\.0\.1:8787\/\/wait/);
+
+    stdout.chunks = [];
+    await runRoomCommand(["dashboard", "--json"], context);
+    assert.deepEqual(stdout.json<{ ok: true; url: string }>(), { ok: true, url: "http://127.0.0.1:8787" });
+
+    assert.deepEqual(requested, [], "verifying the default-port contract must not send a request to it");
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 
@@ -330,6 +371,31 @@ test("room brief set uses the live HTTP server when available so waiters are not
 
 async function assertMode(file: string, expected: number): Promise<void> {
   assert.equal((await stat(file)).mode & 0o777, expected);
+}
+
+// #254: a room server this test owns, on a kernel-assigned port. Any CLI command
+// pointed at its base URL can only ever reach this process — never a `room serve`
+// the developer happens to be running on the product default port.
+async function startRoomFixture(
+  root: string,
+  roomId: string,
+  waitHoldMs: number
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0", waitHoldMs });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      })
+  };
 }
 
 async function getFreePort(): Promise<number> {
