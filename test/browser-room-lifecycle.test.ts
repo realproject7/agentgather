@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium, type Page } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
-import { createRoom, writeParticipants } from "../src/storage/index.js";
+import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 
 // #241 room-entry lifecycle: token-fragment entry must be idempotent (post-entry
@@ -248,5 +248,86 @@ test("a closed room loads its final history once and stops all polling timers", 
   } finally {
     await browser.close();
     await fixture.close();
+  }
+});
+
+// #248 — identity lifecycle. A device can hold valid credentials for more than one
+// participant in the same room. When the dashboard opens a row it delivers the
+// SELECTED credential in the URL fragment; that must win over whatever this tab was
+// previously authenticated as, and every visible identity surface (composer footer,
+// message authorship, the room-origin joined record) must follow it — with no
+// identity picker or modal on an ordinary open.
+test("a dashboard open re-authenticates over a stale tab credential and every identity surface follows (#248)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-lifecycle-identity-test-"));
+  const roomId = `identity-${Math.random().toString(36).slice(2, 10)}`;
+  const humanToken = `tgl_human_${roomId}`;
+  const agentToken = `tgl_agent_${roomId}`;
+  await createRoom({ root, roomId, hostAlias: "host", briefBody: "Keep the selected identity honest." });
+  await writeParticipants(root, roomId, [
+    { ...participant("host", "human", true, `tgl_host_${roomId}`), display_name: "Host" },
+    { ...participant("project7", "human", false, humanToken), display_name: "project7" },
+    participant("agent-bot", "agent", false, agentToken)
+  ]);
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const server = createRoomHttpServer({ root, roomId, baseUrl, rateLimitPerMinute: 1_000 });
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+  // The dashboard the open comes from. Unreachable on purpose: its bridge POST is
+  // best-effort, so this stays a pure room-side lifecycle test.
+  const deadDashboard = `http://127.0.0.1:${await getFreePort()}`;
+
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+
+    // 1) This tab is authenticated as the agent and caches that credential in its
+    //    own (tab-scoped) sessionStorage.
+    await page.goto(`${baseUrl}/#token=${agentToken}`);
+    await page.waitForSelector("text=Keep the selected identity honest.");
+    await page.waitForFunction(
+      () => (document.querySelector("#composer-identity")?.textContent || "").includes("agent-bot")
+    );
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem("agentgather.token")), agentToken);
+
+    // 2) The dashboard opens the row it has selected — a real document load in this
+    //    same tab, exactly what `/joined-rooms/open` redirects to: the selected
+    //    credential arrives in the fragment while the stale tab-scoped one is still
+    //    cached in sessionStorage.
+    await page.goto(`${baseUrl}/?dashboard=${encodeURIComponent(deadDashboard)}#token=${humanToken}`);
+    await page.waitForFunction(() => window.location.search.includes("dashboard="));
+    await page.waitForSelector("text=Keep the selected identity honest.");
+
+    // 3) The fragment credential wins, and the composer footer — the authoritative
+    //    visible identity — shows the selected participant. No picker, no modal.
+    await page.waitForFunction(
+      () => (document.querySelector("#composer-identity")?.textContent || "").startsWith("project7")
+    );
+    assert.equal(/agent-bot/.test((await page.locator("#composer-identity").textContent()) ?? ""), false);
+    assert.equal(await page.locator("#join-panel:not([hidden])").count(), 0);
+    // The stale tab-scoped credential was replaced, not merely ignored.
+    assert.equal(await page.evaluate(() => window.sessionStorage.getItem("agentgather.token")), humanToken);
+    // The credential never survives in the address bar after the handoff.
+    assert.equal(page.url().includes("token="), false);
+
+    // 4) A sent message is authored by the selected participant, not the stale one.
+    await page.fill("#message-text", "posting as the selected identity");
+    await page.click("#send-button");
+    await page.waitForSelector("text=posting as the selected identity");
+    const sent = (await readMessages(root, roomId)).filter((message) =>
+      message.text.includes("posting as the selected identity")
+    );
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.from, "project7");
+
+    // 5) The room-origin joined record converges to the authenticated profile and
+    //    still holds no credential.
+    const stored = (await page.evaluate(() => window.localStorage.getItem("agentgather.joinedRooms"))) ?? "";
+    const local = JSON.parse(stored) as { rooms: Array<{ roomId: string; alias: string }> };
+    assert.equal(local.rooms.filter((room) => room.roomId === roomId).length, 1);
+    assert.equal(local.rooms.find((room) => room.roomId === roomId)?.alias, "project7");
+    assert.equal(/tgl_|Bearer|token=/i.test(stored), false);
+  } finally {
+    await browser.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 });

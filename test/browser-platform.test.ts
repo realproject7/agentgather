@@ -1548,3 +1548,150 @@ test("channel nav caps at 8 with a view-more control (#233)", async () => {
     await platform.close();
   }
 });
+
+// #248 — the alias stored on an existing dashboard row IS the selected local
+// opening identity. A stale room tab authenticated as another participant still
+// bridges its own metadata; that refresh may move non-identity fields (last-seen)
+// but must never repoint the row at the tab's credential, or a later dashboard
+// open would silently post as the wrong participant.
+test("a stale agent room tab refreshes metadata but cannot overwrite the selected joined-room alias (#248)", async () => {
+  const root = await makeRoot();
+  const humanToken = "tgl_selected_human_identity";
+  const agentToken = "tgl_stale_agent_identity";
+  await createRoom({ root, roomId: "identity-room", hostAlias: "host", briefBody: "Identity authority brief." });
+  await writeParticipants(root, "identity-room", [
+    { ...participant("host", "human", true, "tgl_identity_room_host"), display_name: "Host" },
+    { ...participant("project7", "human", false, humanToken), display_name: "project7" },
+    participant("agent-bot", "agent", false, agentToken)
+  ]);
+  // Both credentials are valid on this device; the dashboard row selects the human.
+  await writeToken(root, "identity-room", "project7", humanToken);
+  await writeToken(root, "identity-room", "agent-bot", agentToken);
+
+  const roomEntry = await listen(
+    createRoomHttpServer({ root, roomId: "identity-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 })
+  );
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const seeded = "2026-01-01T00:00:00.000Z";
+  await recordJoinedRoom(root, {
+    roomId: "identity-room",
+    title: "Identity Room",
+    alias: "project7",
+    baseUrl: roomEntry.baseUrl,
+    joinedAt: seeded,
+    lastSeen: seeded
+  });
+
+  const browser = await chromium.launch();
+  try {
+    // The stale tab: authenticated as the agent, still carrying ?dashboard= from an
+    // earlier open, so it bridges on load exactly like the reported regression.
+    const stalePage = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    await stalePage.goto(`${roomEntry.baseUrl}/?dashboard=${encodeURIComponent(platform.baseUrl)}#token=${agentToken}`);
+    await stalePage.waitForSelector("text=Identity authority brief.");
+
+    // The bridge write landed once last-seen moves off the seeded value — that is
+    // the non-identity metadata the bridge IS allowed to refresh.
+    const readRow = async (): Promise<{ alias: string; title: string; lastSeen: string } | undefined> => {
+      const payload = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as {
+        rooms: Array<{ roomId: string; alias: string; title: string; lastSeen: string }>;
+      };
+      return payload.rooms.find((room) => room.roomId === "identity-room");
+    };
+    let row = await readRow();
+    for (let attempt = 0; attempt < 100 && row?.lastSeen === seeded; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      row = await readRow();
+    }
+    assert.notEqual(row?.lastSeen, seeded);
+    // ...and the selected identity did not move with it. Title preservation (#216)
+    // still holds against the slug-only title the bridge carries.
+    assert.equal(row?.alias, "project7");
+    assert.equal(row?.title, "Identity Room");
+
+    // Opening the row resolves the selected human credential, never the stale agent's.
+    const openUrl = new URL(`${platform.baseUrl}/joined-rooms/open`);
+    openUrl.searchParams.set("room_id", "identity-room");
+    openUrl.searchParams.set("base_url", roomEntry.baseUrl);
+    const redirect = await fetch(openUrl, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${humanToken}$`));
+
+    // The dashboard list and rail stay token-free throughout.
+    const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as { rooms: unknown[] };
+    assert.equal(/tgl_|Bearer|token=/i.test(JSON.stringify(api)), false);
+    const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await dashPage.goto(platform.baseUrl);
+    await dashPage.waitForSelector(".joined-row");
+    assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-rail").innerHTML()) ?? ""), false);
+  } finally {
+    await browser.close();
+    await platform.close();
+    await roomEntry.close();
+  }
+});
+
+// #248 — the other half of the contract: an EXPLICIT local import is still the
+// authority that changes which participant a row opens as.
+test("an explicit invite import intentionally changes the selected joined-room identity (#248)", async () => {
+  const root = await makeRoot();
+  const humanToken = "tgl_import_human_identity";
+  const agentToken = "tgl_import_agent_identity";
+  await createRoom({ root, roomId: "import-room", hostAlias: "host", briefBody: "Explicit import brief." });
+  await writeParticipants(root, "import-room", [
+    { ...participant("host", "human", true, "tgl_import_room_host"), display_name: "Host" },
+    { ...participant("project7", "human", false, humanToken), display_name: "project7" },
+    participant("agent-bot", "agent", false, agentToken)
+  ]);
+  await writeToken(root, "import-room", "project7", humanToken);
+
+  const roomEntry = await listen(
+    createRoomHttpServer({ root, roomId: "import-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 })
+  );
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "import-room",
+    title: "Import Room",
+    alias: "project7",
+    baseUrl: roomEntry.baseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".joined-row");
+
+    // Pasting the agent's invite is a deliberate identity change, not an observation.
+    await page.fill("#joined-input", `${roomEntry.baseUrl}/#token=${agentToken}`);
+    await page.click("#joined-add-button");
+    await page.waitForFunction(
+      () => [...document.querySelectorAll(".joined-sub")].some((n) => (n.textContent || "").includes("agent-bot")),
+      { timeout: 15000 }
+    );
+
+    const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as {
+      rooms: Array<{ roomId: string; alias: string; title: string }>;
+    };
+    const row = api.rooms.find((room) => room.roomId === "import-room");
+    assert.equal(row?.alias, "agent-bot");
+    assert.equal(row?.title, "Import Room");
+    assert.equal(api.rooms.filter((room) => room.roomId === "import-room").length, 1);
+    assert.equal(/tgl_|Bearer|token=/i.test(JSON.stringify(api)), false);
+
+    // The row now opens as the newly selected participant.
+    const openUrl = new URL(`${platform.baseUrl}/joined-rooms/open`);
+    openUrl.searchParams.set("room_id", "import-room");
+    openUrl.searchParams.set("base_url", roomEntry.baseUrl);
+    const redirect = await fetch(openUrl, { redirect: "manual" });
+    assert.equal(redirect.status, 302);
+    assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${agentToken}$`));
+  } finally {
+    await browser.close();
+    await platform.close();
+    await roomEntry.close();
+  }
+});
