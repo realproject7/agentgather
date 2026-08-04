@@ -20,7 +20,17 @@ const state = {
   showArchived: false,
   // The joined room currently shown from its device-local snapshot (#247), or
   // null. Distinct from activeRoomId, which always names a host-owned room.
-  activeJoined: null
+  activeJoined: null,
+  // Bulk manage view (#277). `selected` holds row keys, not indices or DOM nodes,
+  // so a re-render, a filter change, or a concurrent list refresh can never move
+  // the selection onto a different room than the one the user ticked.
+  manage: {
+    open: false,
+    selected: new Set(),
+    filterReach: "all",
+    filterArchived: "all",
+    busy: false
+  }
 };
 
 // Browser-local, per-room cache namespaces. Stores only already-received,
@@ -63,6 +73,26 @@ const joinedForm = document.getElementById("joined-add");
 const joinedInput = document.getElementById("joined-input");
 const joinedError = document.getElementById("joined-error");
 const platformVersionValue = document.getElementById("platform-version-value");
+
+// Bulk manage view (#277): the full joined-room list in the main panel.
+const manageOpenButton = document.getElementById("manage-open");
+const managePanel = document.getElementById("manage");
+const manageClose = document.getElementById("manage-close");
+const manageList = document.getElementById("manage-list");
+const manageEmpty = document.getElementById("manage-empty");
+const manageShown = document.getElementById("manage-shown");
+const manageSelectAll = document.getElementById("manage-select-all");
+const manageCount = document.getElementById("manage-count");
+const manageArchive = document.getElementById("manage-archive");
+const manageUnarchive = document.getElementById("manage-unarchive");
+const manageDelete = document.getElementById("manage-delete");
+const manageConfirm = document.getElementById("manage-confirm");
+const manageConfirmMsg = document.getElementById("manage-confirm-msg");
+const manageConfirmDelete = document.getElementById("manage-confirm-delete");
+const manageConfirmCancel = document.getElementById("manage-confirm-cancel");
+const manageFilterReach = document.getElementById("manage-filter-reach");
+const manageFilterArchived = document.getElementById("manage-filter-archived");
+const manageError = document.getElementById("manage-error");
 
 // Unified workspace shell (#218a): permanent logo-home + breadcrumb, and the
 // two-region left rail whose lower region swaps between Room Status guidance
@@ -180,6 +210,7 @@ async function init() {
     if (!createOverlay.hidden) closeCreateRoom();
     if (!inviteOverlay.hidden) closeInviteCards();
     if (!aboutOverlay.hidden) closeAbout();
+    if (!manageConfirm.hidden) hideManageConfirm();
   });
   joinedForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -189,6 +220,34 @@ async function init() {
     state.showArchived = !state.showArchived;
     renderJoined(state.joinedRooms);
   });
+
+  // Bulk manage view (#277).
+  manageOpenButton.addEventListener("click", () => openManage());
+  manageClose.addEventListener("click", () => closeManage());
+  manageSelectAll.addEventListener("change", () => {
+    const rows = manageRows();
+    state.manage.selected.clear();
+    // Select-all covers exactly the rows currently SHOWN, never the filtered-out
+    // ones — a bulk action must not reach a room the user cannot see.
+    if (manageSelectAll.checked) for (const entry of rows) state.manage.selected.add(joinedKey(entry));
+    hideManageConfirm();
+    renderManage();
+  });
+  manageFilterReach.addEventListener("change", () => {
+    state.manage.filterReach = manageFilterReach.value;
+    hideManageConfirm();
+    renderManage();
+  });
+  manageFilterArchived.addEventListener("change", () => {
+    state.manage.filterArchived = manageFilterArchived.value;
+    hideManageConfirm();
+    renderManage();
+  });
+  manageArchive.addEventListener("click", () => void runManageArchive(true));
+  manageUnarchive.addEventListener("click", () => void runManageArchive(false));
+  manageDelete.addEventListener("click", () => showManageDeleteConfirm());
+  manageConfirmCancel.addEventListener("click", () => hideManageConfirm());
+  manageConfirmDelete.addEventListener("click", () => void runManageDelete());
   await loadRooms();
   await loadJoinedRooms();
   void loadVersion();
@@ -302,6 +361,8 @@ function renderRail() {
   // tracked at all (host rooms don't suppress it — it's the joined-room hint).
   const archivedCount = state.joinedRooms.filter((entry) => entry.archived).length;
   joinedShowArchived.hidden = archivedCount === 0;
+  // The #277 manage entry point appears only once this device tracks a joined room.
+  manageOpenButton.hidden = state.joinedRooms.length === 0;
   joinedShowArchived.setAttribute("aria-pressed", String(state.showArchived));
   joinedShowArchived.textContent = state.showArchived ? "hide archived" : `show archived (${archivedCount})`;
   joinedEmpty.hidden = state.joinedRooms.length > 0;
@@ -412,6 +473,7 @@ function relativeAge(value) {
 }
 
 async function selectRoom(roomId) {
+  if (state.manage.open) closeManage();
   state.activeRoomId = roomId;
   // Leaving any #247 offline snapshot view: host-owned affordances come back.
   state.activeJoined = null;
@@ -456,6 +518,7 @@ function enterRoomState(room) {
 // clear the breadcrumb, and stop chat polling. Reached from the permanent
 // top-left logo, which returns here from any room.
 function goHome() {
+  if (state.manage.open) closeManage();
   if (state.pollTimer !== null) {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
@@ -1158,6 +1221,9 @@ async function loadJoinedRooms() {
 function renderJoined(entries) {
   state.joinedRooms = entries;
   renderRail();
+  // Keep the #277 manage view in step with the authoritative list, so a row
+  // deleted elsewhere disappears here instead of staying selectable.
+  if (state.manage.open) renderManage();
 }
 
 // Device-local lifecycle controls for a joined-room row (#210). Archive hides the
@@ -1275,6 +1341,273 @@ function setLocalArchived(entry, archived) {
   writeJoinedLocal(rooms);
 }
 
+// ---- Bulk manage view (#277) ----
+// The full joined-room list in the main panel with multi-select archive/delete.
+// Everything here is device-local: no control here closes, deletes, or notifies a
+// host room, and no row or request carries a token, invite URL, or card URL.
+
+// Identity of a row for selection purposes. Length-prefixed on roomId so
+// ("ab","c") and ("a","bc") cannot collide, matching the store's key.
+function joinedKey(entry) {
+  const roomId = entry.roomId || "";
+  return `${roomId.length}:${roomId}|${entry.baseUrl || ""}`;
+}
+
+// "Reachable" means the platform probed this host live. Everything else —
+// unreachable, expired route, or a browser-saved pointer never probed — is
+// grouped as not reachable, which is the distinction the cleanup job needs.
+function isReachable(entry) {
+  return (entry.reachability || "saved") === "live";
+}
+
+// Rows currently shown, after filters. Sorted by recent activity like the rail, so
+// the two lists agree on ordering.
+function manageRows() {
+  const activityMs = (entry) => {
+    const parsed = Date.parse(entry.lastSeen || entry.joinedAt || "");
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  return state.joinedRooms
+    .filter((entry) => {
+      if (state.manage.filterReach === "reachable" && !isReachable(entry)) return false;
+      if (state.manage.filterReach === "unreachable" && isReachable(entry)) return false;
+      if (state.manage.filterArchived === "archived" && entry.archived !== true) return false;
+      if (state.manage.filterArchived === "active" && entry.archived === true) return false;
+      return true;
+    })
+    .sort((a, b) => activityMs(b) - activityMs(a));
+}
+
+// Selected rows, resolved from keys against the CURRENT list. A row that vanished
+// between selection and action simply drops out — the action is always applied to
+// rows that still exist, never to a remembered snapshot of them.
+function manageSelectedEntries() {
+  return state.joinedRooms.filter((entry) => state.manage.selected.has(joinedKey(entry)));
+}
+
+function openManage() {
+  state.manage.open = true;
+  state.manage.selected.clear();
+  hideManageConfirm();
+  managePanel.hidden = false;
+  detail.hidden = true;
+  detailEmpty.hidden = true;
+  renderManage();
+}
+
+function closeManage() {
+  state.manage.open = false;
+  state.manage.selected.clear();
+  hideManageConfirm();
+  managePanel.hidden = true;
+  manageError.hidden = true;
+  // Restore whichever main-panel state was showing before: a selected room, or
+  // the empty prompt.
+  const hasRoom = state.activeRoomId !== null || state.activeJoined !== null;
+  detail.hidden = !hasRoom;
+  detailEmpty.hidden = hasRoom;
+}
+
+// Render every row that passes the filters. No virtualisation: rows are plain
+// static list items with no per-row polling or observers, so the operator's 63
+// rooms (and an order of magnitude more) render in one pass well inside a frame.
+// The whole list is built into a fragment and attached once, so the panel is
+// never partially populated mid-render.
+function renderManage() {
+  if (!state.manage.open) return;
+  const rows = manageRows();
+  const shown = new Set(rows.map((entry) => joinedKey(entry)));
+  // Drop selections that are no longer visible or no longer exist, so the count
+  // and the actions can never refer to a row the user cannot see.
+  for (const key of [...state.manage.selected]) {
+    if (!shown.has(key)) state.manage.selected.delete(key);
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const entry of rows) {
+    const key = joinedKey(entry);
+    const item = document.createElement("li");
+    item.className = "manage-row";
+    item.dataset.key = key;
+    item.dataset.reachability = entry.reachability || "saved";
+    if (entry.archived) item.dataset.archived = "true";
+
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "manage-check";
+    box.checked = state.manage.selected.has(key);
+    box.dataset.key = key;
+    const roomId = entry.roomId || "";
+    const hasTitle = Boolean(entry.title && entry.title !== roomId);
+    const label = hasTitle ? entry.title : roomId || entry.baseUrl;
+    box.setAttribute("aria-label", `Select ${label}`);
+    box.addEventListener("change", () => {
+      if (box.checked) state.manage.selected.add(key);
+      else state.manage.selected.delete(key);
+      // Selecting a row invalidates a pending delete confirmation: the count it
+      // named is no longer the count that would be deleted.
+      hideManageConfirm();
+      updateManageSelectionUi();
+    });
+
+    const main = document.createElement("span");
+    main.className = "manage-main";
+    const name = document.createElement("span");
+    name.className = "manage-name";
+    name.textContent = label;
+    const sub = document.createElement("span");
+    sub.className = "manage-sub";
+    const alias = entry.alias ? `${entry.alias} · ` : "";
+    const idMeta = hasTitle && roomId ? ` · ${roomId}` : "";
+    sub.textContent = `${alias}${hostLabel(entry.baseUrl)}${idMeta}`;
+    main.append(name, sub);
+
+    const aside = document.createElement("span");
+    aside.className = "manage-aside";
+    const badge = document.createElement("span");
+    badge.className = "manage-reach";
+    badge.dataset.reachability = entry.reachability || "saved";
+    badge.textContent = reachabilityLabel(entry.reachability);
+    aside.append(badge);
+    if (entry.archived) {
+      const archivedTag = document.createElement("span");
+      archivedTag.className = "manage-tag";
+      archivedTag.textContent = "archived";
+      aside.append(archivedTag);
+    }
+
+    item.append(box, main, aside);
+    fragment.append(item);
+  }
+  manageList.replaceChildren(fragment);
+  manageEmpty.hidden = rows.length > 0;
+  const total = state.joinedRooms.length;
+  manageShown.textContent = rows.length === total ? `${total} rooms` : `${rows.length} of ${total} rooms`;
+  updateManageSelectionUi();
+}
+
+// Live selected count, select-all tri-state, and action availability.
+function updateManageSelectionUi() {
+  const rows = manageRows();
+  const selected = state.manage.selected.size;
+  manageCount.textContent = `${selected} selected`;
+  // Indeterminate whenever the selection is a strict, non-empty subset of what is
+  // shown — the partial state the ticket asks for.
+  manageSelectAll.checked = rows.length > 0 && selected === rows.length;
+  manageSelectAll.indeterminate = selected > 0 && selected < rows.length;
+  manageSelectAll.disabled = rows.length === 0;
+  const busy = state.manage.busy;
+  manageArchive.disabled = selected === 0 || busy;
+  manageUnarchive.disabled = selected === 0 || busy;
+  manageDelete.disabled = selected === 0 || busy;
+}
+
+function hideManageConfirm() {
+  manageConfirm.hidden = true;
+  manageConfirmMsg.textContent = "";
+}
+
+// Bulk delete is gated behind an explicit confirmation that names the count, so it
+// is never reachable by a single mis-click.
+function showManageDeleteConfirm() {
+  const count = state.manage.selected.size;
+  if (count === 0) return;
+  manageConfirmMsg.textContent =
+    `Delete ${count} ${count === 1 ? "room" : "rooms"} from this device? ` +
+    `Their saved transcripts go too. This doesn't close the host ${count === 1 ? "room" : "rooms"} or notify anyone.`;
+  manageConfirm.hidden = false;
+  manageConfirmDelete.focus();
+}
+
+function showManageError(message) {
+  manageError.hidden = false;
+  manageError.textContent = message;
+}
+
+// Split a selection into its two device-local homes: rows the platform owns
+// (joined-rooms.json, via the loopback API) and rows this browser owns
+// (localStorage). Both are this device only.
+function splitBySource(entries) {
+  return {
+    platform: entries.filter((entry) => entry.source !== "browser"),
+    browser: entries.filter((entry) => entry.source === "browser")
+  };
+}
+
+async function runManageArchive(archived) {
+  if (state.manage.busy) return;
+  const entries = manageSelectedEntries();
+  if (entries.length === 0) return;
+  state.manage.busy = true;
+  manageError.hidden = true;
+  hideManageConfirm();
+  updateManageSelectionUi();
+  try {
+    const { platform, browser } = splitBySource(entries);
+    if (platform.length > 0) {
+      await apiPost("./joined-rooms/archive-bulk", {
+        targets: platform.map((entry) => ({ roomId: entry.roomId, baseUrl: entry.baseUrl })),
+        archived
+      });
+    }
+    if (browser.length > 0) setLocalArchivedMany(browser, archived);
+    state.manage.selected.clear();
+  } catch (error) {
+    showManageError(error instanceof Error ? error.message : "Could not update those rooms on this device.");
+  } finally {
+    state.manage.busy = false;
+    await loadJoinedRooms();
+  }
+}
+
+async function runManageDelete() {
+  if (state.manage.busy) return;
+  const entries = manageSelectedEntries();
+  if (entries.length === 0) return;
+  state.manage.busy = true;
+  manageError.hidden = true;
+  hideManageConfirm();
+  updateManageSelectionUi();
+  try {
+    const { platform, browser } = splitBySource(entries);
+    if (platform.length > 0) {
+      await apiPost("./joined-rooms/delete-bulk", {
+        targets: platform.map((entry) => ({ roomId: entry.roomId, baseUrl: entry.baseUrl }))
+      });
+    }
+    if (browser.length > 0) removeLocalJoinedMany(browser);
+    // Clear each deleted room's device-local message cache, exactly as the
+    // single-row delete does (never host data).
+    for (const entry of entries) if (entry.roomId) clearCache(entry.roomId);
+    state.manage.selected.clear();
+  } catch (error) {
+    showManageError(error instanceof Error ? error.message : "Could not delete those rooms from this device.");
+  } finally {
+    state.manage.busy = false;
+    await loadJoinedRooms();
+  }
+}
+
+// Browser-local bulk archive: ONE read-modify-write over localStorage, matched by
+// both roomId and baseUrl so a sibling room on the same host is never swept in.
+function setLocalArchivedMany(entries, archived) {
+  const keys = new Set(entries.map((entry) => joinedKey(entry)));
+  writeJoinedLocal(
+    readJoinedLocal().map((room) => {
+      if (!keys.has(joinedKey(room))) return room; // bystander: untouched
+      const next = { ...room };
+      if (archived) next.archived = true;
+      else delete next.archived;
+      return next;
+    })
+  );
+}
+
+function removeLocalJoinedMany(entries) {
+  const keys = new Set(entries.map((entry) => joinedKey(entry)));
+  writeJoinedLocal(readJoinedLocal().filter((room) => !keys.has(joinedKey(room))));
+}
+
 // A reachable joined room opens against its host, exactly as before. An
 // unreachable one no longer follows a redirect to a host that cannot answer
 // (#247): it stays here and shows this device's saved transcript instead.
@@ -1292,6 +1625,7 @@ function openJoinedRoom(entry) {
 // rather than fabricated-and-disabled, chat polling is stopped, and nothing here
 // issues a request to the unreachable host.
 async function showJoinedSnapshot(entry) {
+  if (state.manage.open) closeManage();
   if (state.pollTimer !== null) {
     clearInterval(state.pollTimer);
     state.pollTimer = null;

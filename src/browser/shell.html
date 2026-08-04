@@ -80,6 +80,9 @@
             <div class="rail-head">
               <div id="rail-title" class="rail-title">Rooms</div>
               <button id="joined-show-archived" class="joined-archived-toggle" type="button" hidden aria-pressed="false"></button>
+              <!-- Entry point to the #277 bulk manage view. Hidden until this device
+                   actually tracks a joined room, so it never advertises an empty list. -->
+              <button id="manage-open" class="joined-archived-toggle" type="button" hidden>manage</button>
               <button id="new-room" class="new-room" type="button">+&nbsp; new room</button>
             </div>
             <ul id="room-list" class="room-list"></ul>
@@ -176,6 +179,67 @@
               <div id="chat-empty" class="chat-empty" hidden>No messages yet.</div>
               <ol id="shell-timeline" class="shell-timeline" aria-live="polite"></ol>
             </section>
+          </div>
+
+          <!-- Bulk manage view (#277). Lives in the wide main panel, not the rail:
+               the full joined-room list at 63+ rows is unusable in a narrow rail.
+               Device-local throughout — every control here edits THIS device's list
+               and never closes, deletes, or notifies a host room. -->
+          <div id="manage" class="manage" hidden>
+            <div class="manage-head">
+              <h2 id="manage-title">Manage joined rooms</h2>
+              <button id="manage-close" class="manage-ctl" type="button">back</button>
+            </div>
+            <p class="manage-note">
+              Rooms this device remembers. Archive hides a room here and keeps its saved transcript;
+              delete removes the row and its saved transcript from this device. Neither closes the
+              host room or notifies anyone.
+            </p>
+
+            <div class="manage-filters" role="group" aria-label="Filter joined rooms">
+              <label class="manage-filter" for="manage-filter-reach">
+                <span>Reachability</span>
+                <select id="manage-filter-reach">
+                  <option value="all">all</option>
+                  <option value="reachable">reachable</option>
+                  <option value="unreachable">unreachable</option>
+                </select>
+              </label>
+              <label class="manage-filter" for="manage-filter-archived">
+                <span>Archived</span>
+                <select id="manage-filter-archived">
+                  <option value="all">all</option>
+                  <option value="active">not archived</option>
+                  <option value="archived">archived</option>
+                </select>
+              </label>
+              <span id="manage-shown" class="manage-shown" aria-live="polite"></span>
+            </div>
+
+            <div class="manage-bar">
+              <label class="manage-selectall">
+                <input id="manage-select-all" type="checkbox">
+                <span>Select all shown</span>
+              </label>
+              <span id="manage-count" class="manage-count" aria-live="polite">0 selected</span>
+              <span class="manage-actions">
+                <button id="manage-archive" class="manage-ctl" type="button" disabled>Archive</button>
+                <button id="manage-unarchive" class="manage-ctl" type="button" disabled>Unarchive</button>
+                <button id="manage-delete" class="manage-ctl manage-ctl-danger" type="button" disabled>Delete…</button>
+              </span>
+            </div>
+
+            <!-- Bulk delete is never one click: the confirm names the count and its
+                 own button is the only thing that calls the delete endpoint. -->
+            <div id="manage-confirm" class="manage-confirm" role="group" aria-labelledby="manage-confirm-msg" hidden>
+              <span id="manage-confirm-msg" class="manage-confirm-msg"></span>
+              <button id="manage-confirm-delete" class="manage-ctl manage-ctl-danger" type="button">Delete</button>
+              <button id="manage-confirm-cancel" class="manage-ctl" type="button">Keep</button>
+            </div>
+
+            <div id="manage-error" class="rail-error" role="alert" hidden></div>
+            <ul id="manage-list" class="manage-list" aria-label="Joined rooms"></ul>
+            <p id="manage-empty" class="manage-empty" hidden>No rooms match these filters.</p>
           </div>
         </section>
 
