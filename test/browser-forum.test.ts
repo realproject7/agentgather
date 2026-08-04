@@ -74,7 +74,7 @@ async function startFixture(
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
-  return { baseUrl, hostToken, close: () => new Promise((r) => server.close(() => r())) };
+  return { baseUrl, hostToken, close: () => closeServer(server) };
 }
 
 test("forum UI: feed → thread → back, rail nesting, markdown body, wake badge, date divider, comment compose, overflow-0 desktop+mobile", { timeout: 120_000 }, async () => {

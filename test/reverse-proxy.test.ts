@@ -9,6 +9,7 @@ import { createRoom, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { ALLOW_REMOTE_WARNING } from "../src/cli/commands/room/index.js";
 import type { Participant } from "../src/protocol/index.js";
+import { closeServer } from "./support/close-server.js";
 
 // #180: a free user publishes with their own tunnel / reverse proxy in front of
 // `room serve --url <public> --allow-remote`. A real proxy rewrites the Host
@@ -33,10 +34,6 @@ const mkP = (alias: string, kind: Participant["kind"], token: string, host = fal
 
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 // A reverse proxy that forwards to the local room server, rewriting the Host

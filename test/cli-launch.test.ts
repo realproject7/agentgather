@@ -11,6 +11,7 @@ import type { CliContext } from "../src/cli/context.js";
 import { runLaunchCommand } from "../src/cli/commands/launch/index.js";
 import { createPlatformHttpServer } from "../src/platform/index.js";
 import { VERSION } from "../src/cli/help.js";
+import { closeServer } from "./support/close-server.js";
 
 const cliPath = fileURLToPath(new URL("../src/cli/index.js", import.meta.url));
 const TOKEN_LEAK = /tgl_|Bearer|token=|#token=/i;
@@ -36,10 +37,6 @@ async function getFreePort(): Promise<number> {
   const { port } = server.address() as AddressInfo;
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
 // A freshly started dashboard opens the browser once, prints its localhost URL,

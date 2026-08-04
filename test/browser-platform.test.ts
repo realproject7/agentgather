@@ -18,6 +18,7 @@ import {
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { writeToken } from "../src/cli/state.js";
 import type { Server } from "node:http";
+import { closeServer } from "./support/close-server.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-platform-test-"));
@@ -68,7 +69,7 @@ async function listenOn(server: Server, port: number): Promise<{ baseUrl: string
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    close: () => closeServer(server)
   };
 }
 

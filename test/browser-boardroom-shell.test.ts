@@ -58,7 +58,7 @@ async function startBoardroom(): Promise<{ baseUrl: string; hostToken: string; c
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
-  return { baseUrl, hostToken, close: () => new Promise((r) => server.close(() => r())) };
+  return { baseUrl, hostToken, close: () => closeServer(server) };
 }
 
 // Per-test timeouts so a container-specific hang fails this test fast instead
@@ -132,7 +132,7 @@ async function startBoardroomWithDisabledChat(): Promise<{ baseUrl: string; host
   const baseUrl = `http://127.0.0.1:${port}`;
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
-  return { baseUrl, hostToken, close: () => new Promise((r) => server.close(() => r())) };
+  return { baseUrl, hostToken, close: () => closeServer(server) };
 }
 
 test("boardroom shell: a non-#general chat channel is disabled and opens a not-active pane (V2 #167), overflow-0 desktop+mobile", { timeout: 120_000 }, async () => {
