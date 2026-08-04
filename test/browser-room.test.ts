@@ -2258,8 +2258,14 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     const backupHighest = await page.evaluate(() => {
       const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
       const raw = key === undefined ? null : window.localStorage.getItem(key);
-      const parsed = raw ? (JSON.parse(raw) as { messages: Array<{ id: number }> }) : { messages: [] };
-      return parsed.messages.reduce((highest, entry) => Math.max(highest, entry.id), 0);
+      const parsed = raw
+        ? (JSON.parse(raw) as { messages: Array<{ id: number; type?: string }> })
+        : { messages: [] };
+      // System records are not restored (#278), so the cursor is the highest id
+      // that is actually restorable — not simply the highest id stored.
+      return parsed.messages
+        .filter((entry) => entry.type !== "system")
+        .reduce((highest, entry) => Math.max(highest, entry.id), 0);
     });
     assert.equal(backupHighest > 0, true, "the backup holds messages after the first entry");
 
@@ -2267,7 +2273,7 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     sinceIds.length = 0;
     await page.reload();
     await page.waitForSelector("text=arrived while away");
-    assert.equal(sinceIds[0], backupHighest, "second entry resumes from the highest id it already holds");
+    assert.equal(sinceIds[0], backupHighest, "second entry resumes from the highest id it actually restored");
     assert.notEqual(sinceIds[0], 0);
 
     // Same history, same order, no duplicate and no gap at the join.
@@ -2376,6 +2382,14 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     assert.equal(await forged.getAttribute("data-restored"), "true");
     assert.equal(await forged.locator(".message-from").getAttribute("data-kind"), "restored");
     assert.equal(await forged.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
+    // ...nor the viewer's own presentation: this page is authenticated AS the host,
+    // so a forged `from: "host"` would otherwise render as the viewer's own line.
+    assert.equal(((await forged.getAttribute("class")) ?? "").includes("own"), false);
+    // ...and the forged author label never reaches the DOM at all: a restored row
+    // says only that it came from this device's own copy.
+    assert.equal((await forged.locator(".message-from").textContent())?.trim(), "local copy");
+    const restoredHtml = (await page.locator("#timeline").innerHTML()) ?? "";
+    assert.equal(/message-from[^>]*>\s*host\s*</.test(restoredHtml), false, "no restored row is labelled host");
     // Malformed records are dropped rather than coerced into a half-rendered row.
     for (const text of ["malformed id", "malformed from", "malformed empty ts"]) {
       assert.equal(await page.locator(`text=${text}`).count(), 0, `${text} was dropped`);

@@ -534,6 +534,9 @@ async function loadStatus() {
 // applyRoomState). Reuses the same redaction as the dashboard cache — a bearer
 // token, tgl_ token, invite URL, or card URL is never persisted here.
 const BACKUP_PREFIX = "agentgather.backup.";
+// What a restored row says instead of a stored alias (#278). Fixed, because the
+// only authorship this device can vouch for is "this came from my own copy".
+const RESTORED_SENDER_LABEL = "local copy";
 const BACKUP_MAX_MESSAGES = 250;
 const BACKUP_MAX_BYTES = 200_000;
 
@@ -1433,6 +1436,7 @@ function renderMessage(message, options = {}) {
   // show its replied-to context, even for a message rendered earlier (#113).
   state.messagesById.set(message.id, { from: labelFor(message.from), text: message.text });
 
+  const restoredRow = options.restored === true;
   const item = document.createElement("li");
   item.className = `message ${message.type === "system" ? "system" : ""}`;
   // #278: a row restored from this device's backup is marked as such, so nothing
@@ -1440,7 +1444,11 @@ function renderMessage(message, options = {}) {
   // served — including a hand-edited entry claiming to be from the host or system.
   if (options.restored === true) item.dataset.restored = "true";
   if (message.type === "status") item.classList.add("broadcast");
-  if (state.profile && message.from === state.profile.alias) item.classList.add("own");
+  // A restored row never wears another participant's presentation — including the
+  // viewer's own (#278, @re2). `own` is claimed from the stored `from`, so a
+  // hand-edited record naming the viewer would otherwise render as something they
+  // sent themselves.
+  if (!restoredRow && state.profile && message.from === state.profile.alias) item.classList.add("own");
   item.dataset.messageId = String(message.id);
 
   const time = document.createElement("time");
@@ -1478,21 +1486,19 @@ function renderMessage(message, options = {}) {
 
   const from = document.createElement("div");
   from.className = "message-from";
-  // #278: a restored row shows its stored sender as plain text and is NEVER looked
-  // up in the live roster. The roster is what confers identity here — display name,
-  // human/agent kind, avatar treatment — so resolving an attacker-controlled `from`
-  // through it is exactly how a hand-edited record would acquire the host's
-  // identity. Restored rows get a neutral kind and no roster-derived label.
-  const restoredRow = options.restored === true;
-  from.textContent = restoredRow
-    ? message.from
-    : state.participantLabels.get(message.from) || message.from;
+  // #278: a restored row carries a FIXED local provenance label and never its
+  // stored sender. The alias in the backup is attacker-controlled — anything with
+  // script access to this origin can edit that store — so displaying it at all lets
+  // a hand-edited record read as "the host said this", which no neutral styling
+  // undoes. The stored alias therefore does not reach the DOM; what the row asserts
+  // is only what this device can actually vouch for: that it holds this text.
+  from.textContent = restoredRow ? RESTORED_SENDER_LABEL : state.participantLabels.get(message.from) || message.from;
   const senderKind = restoredRow ? "restored" : state.participantKinds.get(message.from) || "human";
   from.dataset.kind = senderKind;
 
   const avatar = document.createElement("div");
   avatar.className = `message-avatar ${restoredRow ? "restored" : senderKind === "agent" ? "agent" : "human"}`;
-  avatar.textContent = initialsFor(restoredRow ? message.from : state.participantLabels.get(message.from) || message.from);
+  avatar.textContent = restoredRow ? "·" : initialsFor(state.participantLabels.get(message.from) || message.from);
 
   const text = document.createElement("div");
   text.className = "message-text";
