@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { request, type Server } from "node:http";
+import { createServer, request, type Server } from "node:http";
 import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -374,6 +374,19 @@ test("the joined-rooms bridge rejects a non-loopback Origin and persists nothing
 
 test("the joined-rooms bridge persists only sanitized metadata from a loopback Origin (#178)", async () => {
   const root = await makeRoot();
+  // #257: reading /joined-rooms runs `probeReachability` against every stored
+  // baseUrl. Pointed at the product default port that was a real GET to whatever
+  // process owns 127.0.0.1:8787 — a request to a listener this suite never
+  // started. Bind one the test owns and hold it for the duration; the `#token=`
+  // fragment is kept exactly as it was, because it is the redaction fixture.
+  const probed = createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ok");
+  });
+  await new Promise<void>((resolve) => {
+    probed.listen(0, "127.0.0.1", resolve);
+  });
+  const probedOrigin = `http://127.0.0.1:${(probed.address() as AddressInfo).port}`;
   const fixture = await startServer(root, "owner-1");
   try {
     // A hostile body: a token field + a #token= in the URL. Neither may survive.
@@ -381,7 +394,7 @@ test("the joined-rooms bridge persists only sanitized metadata from a loopback O
       roomId: "demo",
       title: "Demo",
       alias: "me",
-      baseUrl: "http://127.0.0.1:8787/#token=tgl_secret_leak",
+      baseUrl: `${probedOrigin}/#token=tgl_secret_leak`,
       token: "tgl_should_be_dropped"
     });
     const res = await postJoinedRoom(fixture.baseUrl, "http://127.0.0.1:5555", body);
@@ -391,10 +404,12 @@ test("the joined-rooms bridge persists only sanitized metadata from a loopback O
     };
     assert.equal(list.rooms.length, 1);
     // baseUrl reduced to origin (fragment dropped); no token field anywhere.
-    assert.equal(list.rooms[0]?.baseUrl, "http://127.0.0.1:8787");
+    assert.equal(list.rooms[0]?.baseUrl, probedOrigin);
     assert.equal(/tgl_|"token"|Bearer/i.test(JSON.stringify(list.rooms)), false);
   } finally {
     await fixture.close();
+    probed.closeAllConnections();
+    await new Promise<void>((resolve) => probed.close(() => resolve()));
   }
 });
 
