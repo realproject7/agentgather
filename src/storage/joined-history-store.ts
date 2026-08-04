@@ -84,6 +84,15 @@ function joinedHistoryLockPath(home: string, key: { roomId: string; baseUrl: str
   return `${joinedHistoryPath(home, key)}.lock`;
 }
 
+// Exactly the payload writeSecureFile will persist, measured in bytes.
+function serializeSnapshot(snapshot: JoinedHistorySnapshot): string {
+  return `${JSON.stringify(snapshot, null, 2)}\n`;
+}
+
+function serializedBytes(snapshot: JoinedHistorySnapshot): number {
+  return Buffer.byteLength(serializeSnapshot(snapshot), "utf8");
+}
+
 // Strip anything credential-shaped out of persisted text. Mirrors the room and
 // dashboard cache guards (#211) — a bearer token, tgl_ token, `token=` parameter,
 // invite/card URL, or bridge capability never reaches disk.
@@ -123,6 +132,13 @@ export async function readJoinedHistory(
 // fetches to fill this — it hands over only what its surface had already loaded.
 // Messages de-duplicate by id and forum posts by post id, so a reconnect or a
 // re-open cannot double up the transcript.
+// `isStillTracked` is re-evaluated INSIDE the writer lock, immediately before the
+// write (#247, @re1). Delete changes the joined-room row first and only then removes
+// the snapshot under this same lock, so both orderings are safe: a guard that runs
+// after the row is gone refuses to write, and a write that already happened is
+// removed by the delete waiting on the lock. Without that in-lock re-check, a bridge
+// post validated a moment earlier could land a fresh snapshot after deletion
+// returned. Returns null when the guard refuses.
 export async function recordJoinedHistory(
   home: string,
   entry: {
@@ -131,11 +147,13 @@ export async function recordJoinedHistory(
     messages?: SnapshotMessage[];
     forumPosts?: SnapshotForumPost[];
     savedAt: string;
-  }
-): Promise<JoinedHistorySnapshot> {
+  },
+  isStillTracked?: () => Promise<boolean>
+): Promise<JoinedHistorySnapshot | null> {
   const key = { roomId: entry.roomId, baseUrl: entry.baseUrl };
   await ensureSecureDir(joinedHistoryDir(home));
   return withWriterLock(joinedHistoryLockPath(home, key), async () => {
+    if (isStillTracked !== undefined && !(await isStillTracked())) return null;
     const current = (await readJoinedHistory(home, key)) ?? {
       roomId: entry.roomId,
       baseUrl: entry.baseUrl,
@@ -154,35 +172,48 @@ export async function recordJoinedHistory(
     };
     next.cursor = next.messages.reduce((highest, message) => Math.max(highest, message.id), 0);
     bound(next);
-    await writeSecureFile(joinedHistoryPath(home, key), `${JSON.stringify(next, null, 2)}\n`);
+    await writeSecureFile(joinedHistoryPath(home, key), serializeSnapshot(next));
     return next;
   });
 }
 
-// Remove a snapshot (archive or delete of the joined-room row, #210). Returns true
-// when a snapshot was actually removed.
+// Remove a snapshot when its joined-room row is DELETED (#210). Archive keeps the
+// transcript: archive is a reversible hide, and once a host is gone this transcript
+// cannot be rebuilt from anywhere, so a reversible action must not destroy it.
+//
+// Taken under the SAME writer lock as recordJoinedHistory, so it can never
+// interleave with a bridge write mid-flight: either the write completes and is then
+// removed here, or this removal completes and the write's in-lock guard refuses.
+// Returns true when a snapshot was actually removed.
 export async function deleteJoinedHistory(
   home: string,
   key: { roomId: string; baseUrl: string }
 ): Promise<boolean> {
-  const file = joinedHistoryPath(home, key);
-  try {
-    await rm(file, { force: false });
-    return true;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-    throw error;
-  }
+  await ensureSecureDir(joinedHistoryDir(home));
+  return withWriterLock(joinedHistoryLockPath(home, key), async () => {
+    try {
+      await rm(joinedHistoryPath(home, key), { force: false });
+      return true;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+      throw error;
+    }
+  });
 }
 
+// EVERY persisted string goes through redactSnapshotText — not just the bodies
+// (#247, @re2/@re1). An alias, timestamp, type, channel or status is attacker-
+// influenced too: a participant can be named after a card URL, and the dashboard
+// renders these fields. Redaction is idempotent, so keying on a redacted id stays
+// stable across merges.
 function mergeMessages(current: SnapshotMessage[], incoming: SnapshotMessage[]): SnapshotMessage[] {
   const byId = new Map<number, SnapshotMessage>();
   for (const message of [...current, ...incoming]) {
     byId.set(message.id, {
       id: message.id,
-      from: String(message.from ?? ""),
-      ts: String(message.ts ?? ""),
-      type: String(message.type ?? "chat"),
+      from: redactSnapshotText(message.from),
+      ts: redactSnapshotText(message.ts),
+      type: redactSnapshotText(message.type ?? "chat"),
       text: redactSnapshotText(message.text)
     });
   }
@@ -195,20 +226,23 @@ function mergeForumPosts(current: SnapshotForumPost[], incoming: SnapshotForumPo
   const byId = new Map<string, SnapshotForumPost>();
   for (const post of current) byId.set(post.id, post);
   for (const post of incoming) {
-    const existing = byId.get(post.id);
+    // Key on the REDACTED id: stored posts already carry redacted ids, so keying on
+    // the raw one would file a re-load as a second post instead of merging it.
+    const id = redactSnapshotText(post.id);
+    const existing = byId.get(id);
     const comments = post.comments.length > 0 ? post.comments : (existing?.comments ?? []);
-    byId.set(post.id, {
-      id: post.id,
-      channel: String(post.channel ?? ""),
+    byId.set(id, {
+      id,
+      channel: redactSnapshotText(post.channel),
       title: redactSnapshotText(post.title),
-      author: String(post.author ?? ""),
-      ts: String(post.ts ?? ""),
-      status: String(post.status ?? ""),
+      author: redactSnapshotText(post.author),
+      ts: redactSnapshotText(post.ts),
+      status: redactSnapshotText(post.status),
       body: redactSnapshotText(post.body),
       comments: comments.slice(-SNAPSHOT_MAX_COMMENTS_PER_POST).map((comment) => ({
-        id: String(comment.id ?? ""),
-        author: String(comment.author ?? ""),
-        ts: String(comment.ts ?? ""),
+        id: redactSnapshotText(comment.id),
+        author: redactSnapshotText(comment.author),
+        ts: redactSnapshotText(comment.ts),
         body: redactSnapshotText(comment.body)
       }))
     });
@@ -227,8 +261,11 @@ function bound(snapshot: JoinedHistorySnapshot): void {
   if (snapshot.forumPosts.length > SNAPSHOT_MAX_FORUM_POSTS) {
     snapshot.forumPosts = snapshot.forumPosts.slice(snapshot.forumPosts.length - SNAPSHOT_MAX_FORUM_POSTS);
   }
+  // Measure what is actually written — the pretty-printed payload, in BYTES (#247,
+  // @re2). Counting compact-JSON characters would have let the real file run several
+  // times past the named cap for indentation and multi-byte content.
   while (
-    JSON.stringify(snapshot).length > SNAPSHOT_MAX_BYTES &&
+    serializedBytes(snapshot) > SNAPSHOT_MAX_BYTES &&
     (snapshot.messages.length > 1 || snapshot.forumPosts.length > 0)
   ) {
     if (snapshot.forumPosts.length > 0) snapshot.forumPosts = snapshot.forumPosts.slice(1);

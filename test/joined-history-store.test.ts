@@ -13,6 +13,7 @@ import {
   joinedHistoryDir,
   joinedHistoryPath,
   readJoinedHistory,
+  readJoinedRooms,
   recordJoinedHistory,
   recordJoinedRoom,
   setJoinedRoomArchived,
@@ -174,7 +175,7 @@ test("a re-opened forum thread replaces its feed row and keeps its comments (#24
   assert.equal((await readJoinedHistory(home, KEY))?.forumPosts[0]?.comments.length, 1);
 });
 
-test("archiving or deleting a joined room removes its saved transcript (#247/#210)", async () => {
+test("archive keeps the saved transcript and un-archive restores it; delete clears it (#247/#210)", async () => {
   const home = await makeHome();
   const now = "2026-08-04T00:00:00.000Z";
   const row = { roomId: KEY.roomId, title: "Snapshot Room", alias: "project7", baseUrl: KEY.baseUrl, joinedAt: now, lastSeen: now };
@@ -182,11 +183,15 @@ test("archiving or deleting a joined room removes its saved transcript (#247/#21
   await recordJoinedHistory(home, { ...KEY, messages: [message(1, "saved line")], savedAt: now });
   assert.notEqual(await readJoinedHistory(home, KEY), null);
 
+  // Archive is a reversible hide: the transcript must survive it, and un-archiving
+  // must restore a readable row (PO ruling on #247; #210 defines archive as
+  // recoverable, and a lost host transcript cannot be rebuilt from anywhere).
   assert.equal(await setJoinedRoomArchived(home, { ...KEY, archived: true }), true);
-  assert.equal(await readJoinedHistory(home, KEY), null, "archive drops the snapshot");
+  assert.equal((await readJoinedHistory(home, KEY))?.messages[0]?.text, "saved line", "archive keeps the snapshot");
+  assert.equal(await setJoinedRoomArchived(home, { ...KEY, archived: false }), true);
+  assert.equal((await readJoinedHistory(home, KEY))?.messages[0]?.text, "saved line", "un-archive restores it");
 
-  // And a delete on a fresh snapshot removes it too.
-  await recordJoinedHistory(home, { ...KEY, messages: [message(1, "saved again")], savedAt: now });
+  // Delete is the explicit destructive action and does clear it.
   assert.equal(await deleteJoinedRoom(home, KEY), true);
   assert.equal(await readJoinedHistory(home, KEY), null, "delete drops the snapshot");
 });
@@ -205,4 +210,140 @@ test("a missing or corrupt snapshot reads as absent rather than throwing (#247)"
     JSON.stringify({ roomId: "other", baseUrl: KEY.baseUrl, cursor: 1, savedAt: "", messages: [], forumPosts: [] })
   );
   assert.equal(await readJoinedHistory(home, KEY), null);
+});
+
+// #247 (@re1) — cleanup and the bridge write must not interleave. Archive/delete
+// changes the row first and removes the snapshot under the SAME writer lock the
+// write takes, and the write re-checks the row inside that lock. The invariant
+// these tests hold: a snapshot never outlives the row it belongs to.
+test("a bridge write refused by its in-lock guard stores nothing (#247)", async () => {
+  const home = await makeHome();
+  const stored = await recordJoinedHistory(
+    home,
+    { ...KEY, messages: [message(1, "should not land")], savedAt: "2026-08-04T00:00:00.000Z" },
+    async () => false
+  );
+  assert.equal(stored, null);
+  assert.equal(await readJoinedHistory(home, KEY), null);
+});
+
+
+// #247 (@re1) — the delete/write race, forced rather than hoped for. The bridge
+// write is held INSIDE the snapshot writer lock while the delete completes its row
+// removal, which is exactly the window where a pre-accepted post could otherwise
+// land after deletion returned. With the in-lock re-check the write must refuse;
+// without it, this test fails with a snapshot for a row that no longer exists.
+test("a bridge write accepted before deletion cannot land after it (#247)", async () => {
+  const home = await makeHome();
+  const now = "2026-08-04T00:00:00.000Z";
+  await recordJoinedRoom(home, {
+    roomId: KEY.roomId,
+    title: "Snapshot Room",
+    alias: "project7",
+    baseUrl: KEY.baseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await recordJoinedHistory(home, { ...KEY, messages: [message(1, "earlier line")], savedAt: now });
+
+  let announceInLock = (): void => {};
+  const inLock = new Promise<void>((resolve) => {
+    announceInLock = resolve;
+  });
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // The receiver's real predicate: still tracked and not archived, re-read from disk.
+  const guard = async (): Promise<boolean> => {
+    announceInLock();
+    await held;
+    const rooms = await readJoinedRooms(home);
+    const row = rooms.find((entry) => entry.roomId === KEY.roomId && entry.baseUrl === KEY.baseUrl);
+    return row !== undefined && row.archived !== true;
+  };
+
+  const write = recordJoinedHistory(home, { ...KEY, messages: [message(2, "racing line")], savedAt: now }, guard);
+  await inLock; // the write now holds the snapshot lock
+  const deletion = deleteJoinedRoom(home, KEY);
+  // Wait until the row itself is gone — the delete's snapshot removal is still
+  // queued behind the lock this write is holding.
+  for (let attempt = 0; attempt < 200 && (await readJoinedRooms(home)).length > 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal((await readJoinedRooms(home)).length, 0, "the row was removed while the write held the lock");
+  release();
+
+  assert.equal(await write, null, "the in-lock re-check refused the write");
+  assert.equal(await deletion, true);
+  assert.equal(await readJoinedHistory(home, KEY), null, "no snapshot outlived the deleted row");
+});
+
+// #247 (@re2/@re1) — redaction covers EVERY persisted string, not just bodies. A
+// participant aliased after a card URL, or a credential-shaped timestamp/type/
+// status, must not reach disk: these fields are rendered in the dashboard.
+test("every persisted field is redacted, not only message and post bodies (#247)", async () => {
+  const home = await makeHome();
+  await recordJoinedHistory(home, {
+    ...KEY,
+    messages: [
+      {
+        id: 1,
+        from: "https://evil.example/card/abc123?token=tgl_leaked_secret_value",
+        ts: "Bearer sk-live-abcdef",
+        type: "tgl_type_secret_value",
+        text: "ordinary body"
+      }
+    ],
+    forumPosts: [
+      {
+        id: "tgl_post_id_secret_value",
+        channel: "https://evil.example/card/xyz",
+        title: "ordinary title",
+        author: "https://evil.example/card/abc123",
+        ts: "Bearer sk-live-fedcba",
+        status: "tgl_status_secret_value",
+        body: "ordinary post body",
+        comments: [
+          { id: "tgl_comment_id_secret", author: "Bearer sk-live-comment", ts: "?token=tgl_comment_ts", body: "ordinary comment" }
+        ]
+      }
+    ],
+    savedAt: "2026-08-04T00:00:00.000Z"
+  });
+
+  // Exact expected values, not merely "the raw token is missing".
+  const snapshot = await readJoinedHistory(home, KEY);
+  assert.equal(snapshot?.messages[0]?.from, "[redacted-url]");
+  assert.equal(snapshot?.messages[0]?.ts, "[redacted-credential]");
+  assert.equal(snapshot?.messages[0]?.type, "[redacted-token]");
+  const post = snapshot?.forumPosts[0];
+  assert.equal(post?.id, "[redacted-token]");
+  assert.equal(post?.channel, "[redacted-url]");
+  assert.equal(post?.author, "[redacted-url]");
+  assert.equal(post?.ts, "[redacted-credential]");
+  assert.equal(post?.status, "[redacted-token]");
+  assert.equal(post?.comments[0]?.id, "[redacted-token]");
+  assert.equal(post?.comments[0]?.author, "[redacted-credential]");
+  assert.equal(post?.comments[0]?.ts, "[redacted-token]");
+  // Ordinary content is untouched, and the raw file carries nothing sensitive.
+  assert.equal(snapshot?.messages[0]?.text, "ordinary body");
+  const raw = await readFile(joinedHistoryPath(home, KEY), "utf8");
+  assert.equal(/tgl_|Bearer |token=|evil\.example/i.test(raw), false);
+});
+
+// #247 (@re2) — the byte cap must describe the file that is actually written:
+// pretty-printed, UTF-8, including multi-byte content.
+test("the byte cap measures the pretty-printed file, including multi-byte text (#247)", async () => {
+  const home = await makeHome();
+  await recordJoinedHistory(home, {
+    ...KEY,
+    // CJK content is 3 bytes per character — a character-counted cap would let the
+    // real file run several times past its stated ceiling.
+    messages: Array.from({ length: 400 }, (_, index) => message(index + 1, "가".repeat(1_000))),
+    savedAt: "2026-08-04T00:00:00.000Z"
+  });
+  const size = (await stat(joinedHistoryPath(home, KEY))).size;
+  assert.equal(size <= 200_000, true, `snapshot file stayed within its byte cap (${size} bytes)`);
 });

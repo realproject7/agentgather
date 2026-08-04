@@ -120,15 +120,15 @@ async function upsertJoinedRoomLocked(
 // joined-rooms.json store — it never touches host-owned room homes, host logs, or
 // any `rooms/<id>/` data. Returns true if a matching record was updated.
 //
-// Archiving also drops this device's offline history snapshot for the row (#247):
-// the user is putting the room away, so the saved transcript goes with it rather
-// than lingering on disk for a row the dashboard no longer shows.
+// Archiving KEEPS this device's offline history snapshot (#247): archive is a
+// reversible hide/restore, and once the host is gone that transcript cannot be
+// rebuilt from anywhere — so un-archiving restores a readable row. Only an explicit
+// delete clears it.
 export async function setJoinedRoomArchived(
   home: string,
   target: { roomId: string; baseUrl: string; archived: boolean }
 ): Promise<boolean> {
   await ensureSecureDir(home);
-  if (target.archived) await deleteJoinedHistory(home, { roomId: target.roomId, baseUrl: target.baseUrl });
   return withWriterLock(joinedRoomsLockPath(home), async () => {
     const rooms = await readJoinedRooms(home);
     const index = rooms.findIndex((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
@@ -150,12 +150,19 @@ export async function deleteJoinedRoom(
   target: { roomId: string; baseUrl: string }
 ): Promise<boolean> {
   await ensureSecureDir(home);
-  await deleteJoinedHistory(home, { roomId: target.roomId, baseUrl: target.baseUrl });
-  return withWriterLock(joinedRoomsLockPath(home), async () => {
+  // Row FIRST, snapshot second (#247, @re1). A bridge write re-checks the row while
+  // holding the snapshot lock, so once the row is gone no accepted-but-unwritten
+  // post can still land; and the snapshot removal below waits for any write already
+  // in flight rather than racing it.
+  const removed = await withWriterLock(joinedRoomsLockPath(home), async () => {
     const rooms = await readJoinedRooms(home);
     const next = rooms.filter((room) => !(room.roomId === target.roomId && room.baseUrl === target.baseUrl));
     if (next.length === rooms.length) return false;
     await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms: next }, null, 2)}\n`);
     return true;
   });
+  // Unconditional: a snapshot must never outlive its row, even if the row was
+  // already gone when this call arrived.
+  await deleteJoinedHistory(home, { roomId: target.roomId, baseUrl: target.baseUrl });
+  return removed;
 }

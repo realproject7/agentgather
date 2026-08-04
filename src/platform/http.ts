@@ -440,9 +440,15 @@ async function receiveJoinedHistoryRequest(
   }
   // The row must still be tracked on this device — an archived/deleted row stops
   // accepting history rather than resurrecting a snapshot the user just removed.
-  const rooms = await readJoinedRooms(options.root);
-  const joined = rooms.find((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
-  if (joined === undefined || joined.archived === true) {
+  // This is the cheap early exit; the authoritative check is the same predicate
+  // re-run INSIDE the snapshot writer lock below, which is what makes it safe
+  // against an archive/delete landing between here and the write.
+  const isStillTracked = async (): Promise<boolean> => {
+    const rooms = await readJoinedRooms(options.root);
+    const row = rooms.find((room) => room.roomId === target.roomId && room.baseUrl === target.baseUrl);
+    return row !== undefined && row.archived !== true;
+  };
+  if (!(await isStillTracked())) {
     sendJson(res, 404, { ok: false, error: "not_tracked", message: "no active joined-room record for this bridge" });
     return;
   }
@@ -452,13 +458,21 @@ async function receiveJoinedHistoryRequest(
     sendJson(res, 200, { ok: true, stored: false });
     return;
   }
-  await recordJoinedHistory(options.root, {
-    roomId: target.roomId,
-    baseUrl: target.baseUrl,
-    messages,
-    forumPosts,
-    savedAt: new Date().toISOString()
-  });
+  const stored = await recordJoinedHistory(
+    options.root,
+    {
+      roomId: target.roomId,
+      baseUrl: target.baseUrl,
+      messages,
+      forumPosts,
+      savedAt: new Date().toISOString()
+    },
+    isStillTracked
+  );
+  if (stored === null) {
+    sendJson(res, 404, { ok: false, error: "not_tracked", message: "no active joined-room record for this bridge" });
+    return;
+  }
   sendJson(res, 200, { ok: true, stored: true });
 }
 
@@ -489,6 +503,17 @@ const SNAPSHOT_BODY_MAX_BYTES = 256 * 1024;
 // ids must be real numbers/strings, the batch is capped, and every string is
 // re-redacted. Anything that does not fit the shape is skipped, never coerced into
 // a half-record.
+// EVERY persisted string is redacted here, not just the bodies (#247, @re2/@re1).
+// An alias, timestamp, type, channel or status is attacker-influenced too — a
+// participant can be named after a card URL — and the dashboard renders all of
+// them, so `shortString` (trim + truncate) alone would put a credential on disk
+// and on screen. `redactedField` is the only way a string enters a snapshot from
+// this surface.
+function redactedField(value: unknown, fallback = ""): string {
+  const trimmed = shortString(value);
+  return trimmed === undefined ? fallback : redactSnapshotText(trimmed);
+}
+
 function snapshotMessagesFrom(value: unknown): SnapshotMessage[] {
   if (!Array.isArray(value)) return [];
   const messages: SnapshotMessage[] = [];
@@ -497,9 +522,9 @@ function snapshotMessagesFrom(value: unknown): SnapshotMessage[] {
     if (typeof entry?.id !== "number" || !Number.isFinite(entry.id)) continue;
     messages.push({
       id: entry.id,
-      from: shortString(entry.from) ?? "",
-      ts: shortString(entry.ts) ?? "",
-      type: shortString(entry.type) ?? "chat",
+      from: redactedField(entry.from),
+      ts: redactedField(entry.ts),
+      type: redactedField(entry.type, "chat"),
       text: redactSnapshotText(entry.text)
     });
   }
@@ -520,23 +545,22 @@ function snapshotForumPostsFrom(value: unknown): SnapshotForumPost[] {
       body?: unknown;
       comments?: unknown;
     };
-    const id = shortString(entry?.id);
-    if (id === undefined) continue;
+    if (shortString(entry?.id) === undefined) continue;
     const comments = Array.isArray(entry.comments) ? entry.comments.slice(0, SNAPSHOT_MAX_COMMENTS_PER_POST) : [];
     posts.push({
-      id,
-      channel: shortString(entry.channel) ?? "",
+      id: redactedField(entry.id),
+      channel: redactedField(entry.channel),
       title: redactSnapshotText(entry.title),
-      author: shortString(entry.author) ?? "",
-      ts: shortString(entry.ts) ?? "",
-      status: shortString(entry.status) ?? "",
+      author: redactedField(entry.author),
+      ts: redactedField(entry.ts),
+      status: redactedField(entry.status),
       body: redactSnapshotText(entry.body),
       comments: comments.map((rawComment) => {
         const comment = rawComment as { id?: unknown; author?: unknown; ts?: unknown; body?: unknown };
         return {
-          id: shortString(comment?.id) ?? "",
-          author: shortString(comment?.author) ?? "",
-          ts: shortString(comment?.ts) ?? "",
+          id: redactedField(comment?.id),
+          author: redactedField(comment?.author),
+          ts: redactedField(comment?.ts),
           body: redactSnapshotText(comment?.body)
         };
       })
