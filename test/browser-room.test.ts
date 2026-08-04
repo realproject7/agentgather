@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
 import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-test-"));
@@ -312,7 +313,7 @@ test("browser auto-claims a missing host human display name from the alias", asy
     assert.equal(participants.find((entry) => entry.alias === "ag-lead")?.display_name, "ag-lead");
   } finally {
     await browser.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServer(server);
   }
 });
 

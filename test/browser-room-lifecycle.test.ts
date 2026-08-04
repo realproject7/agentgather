@@ -8,6 +8,7 @@ import { chromium, type Page } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
 import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 
 // #241 room-entry lifecycle: token-fragment entry must be idempotent (post-entry
 // AND while the joining interstitial is shown), and a terminal (closed) room must
@@ -61,7 +62,7 @@ async function startFixture(): Promise<Fixture> {
     baseUrl,
     hostToken,
     joinerToken,
-    close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())))
+    close: () => closeServer(server)
   };
 }
 
@@ -340,6 +341,6 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
     assert.equal(/tgl_|Bearer|token=/i.test(stored), false);
   } finally {
     await browser.close();
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await closeServer(server);
   }
 });

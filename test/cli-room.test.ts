@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
-import { request } from "node:http";
 import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +9,6 @@ import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { currentPath, tokensPath } from "../src/cli/state.js";
 import { readMessages, readParticipants, roomPaths } from "../src/storage/index.js";
-import { createRoomHttpServer } from "../src/server/index.js";
 import { startRoomServerFixture } from "./support/room-fixture.js";
 
 class Capture extends Writable {
@@ -317,11 +315,24 @@ test("room serve requires explicit secure remote opt-in", async () => {
     ["serve", "--port", String(port), "--url", "https://room.example.com", "--allow-remote"],
     context
   );
-  await waitForServer(`http://127.0.0.1:${port}/status`, started.token, "room.example.com");
-  const current = JSON.parse(await readFile(currentPath(context.home), "utf8")) as { baseUrl: string };
-  assert.equal(current.baseUrl, "https://room.example.com");
-  process.emit("SIGTERM");
-  await servePromise;
+  // #258: the served room is shut down in a `finally`. Previously the SIGTERM sat
+  // after the assertions, so an assertion that fired first left the server bound —
+  // and a listening handle keeps the whole test process alive, which is how one
+  // failing assertion here hung an entire local suite run with no timeout to save
+  // it. Shutting down unconditionally turns that into an ordinary reported failure.
+  try {
+    await waitForServeReady(stdout);
+    const current = JSON.parse(await readFile(currentPath(context.home), "utf8")) as { baseUrl: string };
+    assert.equal(current.baseUrl, "https://room.example.com");
+  } finally {
+    // Readiness again before signalling: `serve` registers its SIGTERM handler
+    // only after it prints, so an emit sent earlier is dropped and nothing ever
+    // closes the server. If the command failed to bind it has already returned,
+    // so the await below settles either way and the process still exits.
+    await waitForServeReady(stdout).catch(() => undefined);
+    process.emit("SIGTERM");
+    await servePromise;
+  }
   assert.equal(stdout.text(), "Serving remote-room at https://room.example.com\n");
 });
 
@@ -333,18 +344,12 @@ test("room brief set uses the live HTTP server when available so waiters are not
   await runRoomCommand(["invite", "reviewer", "--show-token", "--json"], context);
   const invite = stdout.json<{ token: string }>();
 
-  const server = createRoomHttpServer({
-    root: context.home,
-    roomId: "server-brief",
-    baseUrl: "http://127.0.0.1:0",
-    waitHoldMs: 1_000
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  // #258: the shared fixture, not a second hand-rolled server — it drops live
+  // connections before closing. The /wait long-poll below keeps a keep-alive socket
+  // open at teardown, which is precisely what hung the whole local suite here.
+  const fixture = await startRoomServerFixture(context.home, "server-brief", 1_000);
   try {
-    const address = server.address() as AddressInfo;
-    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const baseUrl = fixture.baseUrl;
     await runRoomCommand(["join", "server-brief", "--alias", "operator", "--token", started.token, "--url", baseUrl], context);
 
     const waitPromise = fetch(`${baseUrl}/wait?participant=reviewer&since_id=0`, {
@@ -362,12 +367,7 @@ test("room brief set uses the live HTTP server when available so waiters are not
     assert.equal(waited.heartbeat, false);
     assert.equal(waited.messages.some((message) => message.text === "Room brief updated to v2"), true);
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
+    await fixture.close();
   }
 });
 
@@ -390,39 +390,21 @@ async function getFreePort(): Promise<number> {
   return address.port;
 }
 
-async function waitForServer(url: string, token: string, host: string): Promise<void> {
+// #258: `room serve` binds the port BEFORE it writes current.json, prints its
+// "Serving ..." line, and registers the SIGTERM handler (src/cli/commands/room/
+// index.ts:936-954). Polling /status therefore returns while all three are still
+// pending: reading current.json then sees the previous baseUrl, and a SIGTERM
+// emitted then lands before any handler exists, so the server is never closed and
+// the test process can never exit. The printed line is the command's own readiness
+// signal — emitted after the write, immediately before the handler is installed —
+// so waiting on it removes both races. Same 1s budget and 10ms poll as the port
+// probe below; nothing is retried or relaxed.
+async function waitForServeReady(stdout: { text: () => string }): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < 1_000) {
-    try {
-      if ((await statusWithHost(url, token, host)) === 200) return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    if (stdout.text().includes("Serving ")) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("server did not start");
+  throw new Error("room serve did not report readiness");
 }
 
-async function statusWithHost(urlValue: string, token: string, host: string): Promise<number> {
-  const url = new URL(urlValue);
-  return new Promise((resolve, reject) => {
-    const req = request(
-      {
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Host: host
-        }
-      },
-      (res) => {
-        res.resume();
-        res.on("error", reject);
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      }
-    );
-    req.on("error", reject);
-    req.end();
-  });
-}

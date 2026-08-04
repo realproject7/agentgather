@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import { createBoardroom, createForumPost, createRoom, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
+import { closeServer } from "./support/close-server.js";
 
 // Real port so the page origin matches the server baseUrl origin.
 function getFreePort(): Promise<number> {
@@ -217,6 +218,6 @@ test("legacy single-channel room renders as today — no channel rail", { timeou
     );
   } finally {
     await browser.close();
-    await new Promise<void>((r) => server.close(() => r()));
+    await closeServer(server);
   }
 });

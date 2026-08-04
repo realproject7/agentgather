@@ -8,6 +8,7 @@ import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   createBrokerHttpServer,
   type ForwardedResponse,
@@ -111,8 +112,8 @@ async function setup(options: { claimTimeoutMs?: number } = {}): Promise<Fixture
     broker,
     records,
     close: async () => {
-      await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-      await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+      await closeServer(brokerServer);
+      await closeServer(hostServer);
     }
   };
 }
@@ -274,7 +275,7 @@ test("a forwarded request fails fast once the host disconnects past the grace wi
     // Resolved well under the 5s claim timeout: it fast-failed, not hung.
     assert.equal(Date.now() - started < 1_000, true);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServer(server);
   }
 });
 
@@ -298,7 +299,7 @@ test("a bare route probe reports host disconnection truthfully", async () => {
     assert.equal(missing.status, 404);
     assert.equal(((await missing.json()) as { error: string }).error, "route_not_found");
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServer(server);
   }
 });
 
@@ -329,7 +330,7 @@ test("an over-limit relay request body is rejected before it is queued", async (
     assert.equal(response.status, 413);
     assert.equal(((await response.json()) as { error: string }).error, "request_too_large");
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
+    await closeServer(brokerServer);
   }
 });
 
@@ -366,6 +367,6 @@ test("an over-limit relay response body is rejected with response_too_large", as
     assert.equal(response.status, 502);
     assert.equal(((await response.json()) as { error: string }).error, "response_too_large");
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
+    await closeServer(brokerServer);
   }
 });

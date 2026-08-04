@@ -12,6 +12,7 @@ import { readBoardroom } from "../src/storage/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 import { readToken } from "../src/cli/state.js";
 import { parseChannelName, type Boardroom } from "../src/protocol/index.js";
+import { closeServer } from "./support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -106,7 +107,7 @@ test("room channel-rename updates the display name via the store, id unchanged, 
     const body = (await response.json()) as { ok: true; boardroom: Boardroom };
     assert.equal(body.boardroom.channels.find((c) => c.id === "general")?.name, "Ops Room");
   } finally {
-    await new Promise<void>((r) => server.close(() => r()));
+    await closeServer(server);
   }
 });
 

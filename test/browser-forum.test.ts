@@ -26,6 +26,7 @@ import {
 } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
+import { closeServer } from "./support/close-server.js";
 
 const mkP = (alias: string, kind: Participant["kind"], token: string, extra: Partial<Participant> = {}): Participant => ({
   alias,
@@ -209,7 +210,7 @@ test("forum UI shows an empty state for a forum with no posts", { timeout: 120_0
     await page.waitForSelector("text=No posts yet");
   } finally {
     await browser.close();
-    await new Promise<void>((r) => server.close(() => r()));
+    await closeServer(server);
   }
 });
 
@@ -371,7 +372,7 @@ test("forum bridges its loaded feed and opened thread to the dashboard snapshot 
     assert.equal(/tgl_|Bearer|token=|snapshot=/i.test(JSON.stringify(snapshot)), false);
   } finally {
     await browser?.close();
-    await new Promise<void>((r) => dashboard.close(() => r()));
+    await closeServer(dashboard);
     await fixture.close();
   }
 });

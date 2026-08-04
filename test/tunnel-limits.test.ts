@@ -9,6 +9,7 @@ import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   BROKER_LIMITS,
   BrokerGuards,
@@ -134,8 +135,8 @@ test("a request body over the limit is rejected before forwarding", async () => 
     assert.equal(response.status, 413);
     assert.equal(((await response.json()) as { error: string }).error, "request_too_large");
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+    await closeServer(brokerServer);
+    await closeServer(hostServer);
   }
 });
 
@@ -163,8 +164,8 @@ test("an over-limit response with a known content-length is rejected with a stab
     assert.equal(payload.error, "response_too_large");
     assert.equal(JSON.stringify(payload).includes("x".repeat(50)), false);
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => target.close(() => resolve()));
+    await closeServer(brokerServer);
+    await closeServer(target);
   }
 });
 
@@ -206,7 +207,7 @@ test("an over-limit streamed response with no content-length is logged as respon
     );
     assert.equal(JSON.stringify(records).includes("x".repeat(50)), false);
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => target.close(() => resolve()));
+    await closeServer(brokerServer);
+    await closeServer(target);
   }
 });

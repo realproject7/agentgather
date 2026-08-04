@@ -15,6 +15,7 @@ import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runWatchCommand } from "../src/cli/commands/watch/index.js";
 import { readMessages } from "../src/storage/index.js";
 import { startRoomServerFixture } from "./support/room-fixture.js";
+import { closeServer } from "./support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -74,7 +75,7 @@ test("watch reports a route/server mismatch on /wait 404 without leaking the tok
       return true;
     });
   } finally {
-    await new Promise<void>((resolve) => notFound.close(() => resolve()));
+    await closeServer(notFound);
   }
 });
 

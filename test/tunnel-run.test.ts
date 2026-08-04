@@ -9,6 +9,7 @@ import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { runTunnelCommand } from "../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { closeServer } from "./support/close-server.js";
 import {
   createBrokerHttpServer,
   type ForwardedRequest,
@@ -113,8 +114,8 @@ async function setup(options: { waitHoldMs?: number; brokerOptions?: Constructor
     client,
     broker,
     close: async () => {
-      await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-      await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+      await closeServer(brokerServer);
+      await closeServer(hostServer);
     }
   };
 }
@@ -253,7 +254,7 @@ test("tunnel run installs a signal shutdown that closes the route and prints sta
     assert.equal(output.includes(hostToken), false);
     assert.equal(output.includes("Bearer"), false);
   } finally {
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
+    await closeServer(brokerServer);
   }
 });
 

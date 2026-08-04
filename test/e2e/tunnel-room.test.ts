@@ -11,6 +11,7 @@ import { runRoomCommand } from "../../src/cli/commands/room/index.js";
 import { runTunnelCommand } from "../../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
 import { createBrokerHttpServer, readPublicBaseUrl, TunnelBroker } from "../../src/tunnel/index.js";
+import { closeServer } from "../support/close-server.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -134,7 +135,7 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     assert.equal(closed.keep_waiting, false);
   } finally {
     await browser.close();
-    await new Promise<void>((resolve) => brokerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => hostServer.close(() => resolve()));
+    await closeServer(brokerServer);
+    await closeServer(hostServer);
   }
 });
