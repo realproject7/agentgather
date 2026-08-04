@@ -1762,3 +1762,73 @@ button:disabled {
     display: none;
   }
 }
+
+/* #249 host loop-guard auto-continue control. Sits in the existing host rail —
+   no modal, no nested card, no new visual language. Tokens only, and spacing on
+   the 4px base grid per DESIGN-GUIDE.md. */
+.rail-autocontinue {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.rail-autocontinue[hidden] {
+  display: none;
+}
+
+.ac-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.ac-delay {
+  padding-left: 20px;
+}
+
+.ac-line input[type="number"] {
+  width: 64px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}
+
+.ac-line input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.ac-line input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ac-state {
+  margin-top: 4px;
+}
+
+/* Touch targets reach the 44px minimum on narrow screens without making the
+   dense desktop rail top-heavy. */
+@media (max-width: 820px) {
+  .ac-line {
+    min-height: 44px;
+  }
+
+  .ac-line input[type="number"] {
+    min-height: 44px;
+  }
+
+  .ac-line input[type="checkbox"] {
+    width: 24px;
+    height: 24px;
+  }
+}

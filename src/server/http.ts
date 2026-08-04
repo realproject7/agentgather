@@ -21,12 +21,17 @@ import {
   startActiveSession,
   updateBrief,
   updateAttendancePolicy,
+  updateLoopGuardPreference,
   upsertParticipant,
+  isValidAutoContinueDelay,
   ActiveSessionExistsError,
+  AUTO_CONTINUE_DELAY_DEFAULT_S,
+  AUTO_CONTINUE_DELAY_MAX_S,
+  AUTO_CONTINUE_DELAY_MIN_S,
   MAX_BRIEF_LENGTH,
   RoomLogFullError
 } from "../storage/index.js";
-import type { AttendancePolicy, Boardroom, Channel, Participant, RoomBrief } from "../protocol/index.js";
+import type { AttendancePolicy, Boardroom, Channel, Participant, RoomBrief, RoomState } from "../protocol/index.js";
 import {
   assertSafeSlug,
   DEFAULT_CHANNEL_ID,
@@ -110,13 +115,17 @@ function applySecurityHeaders(res: ServerResponse): void {
 
 export function createRoomHttpServer(options: RoomHttpServerOptions): Server {
   const resolved = resolveOptions(options);
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     applySecurityHeaders(res);
     const url = new URL(req.url ?? "/", resolved.baseUrl);
     void handleRequest({ req, res, url, options: resolved }).catch((error: unknown) => {
       sendError(res, error);
     });
   });
+  // #249: shutting the server down cancels any pending auto-continue for this
+  // room. Pending state is in-memory only, so nothing is replayed on restart.
+  server.on("close", () => cancelPendingAutoContinue(resolved.roomId));
+  return server;
 }
 
 async function handleRequest(context: RequestContext): Promise<void> {
@@ -157,6 +166,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
   if (context.req.method === "GET" && pathname === "/brief") return getBrief(context);
   if (context.req.method === "POST" && pathname === "/brief") return postBrief(context);
   if (context.req.method === "POST" && pathname === "/attendance") return postAttendance(context);
+  if (context.req.method === "POST" && pathname === "/loop-guard") return postLoopGuard(context);
   if (context.req.method === "GET" && pathname === "/profile") return getProfile(context);
   if (context.req.method === "POST" && pathname === "/profile") return postProfile(context);
   if (context.req.method === "GET" && pathname === "/card") return getCard(context);
@@ -257,6 +267,39 @@ async function postAttendance(context: RequestContext): Promise<void> {
   await appendSystem(context, `Attendance policy set to ${policy}`);
   context.options.waitHub.notify(context.options.roomId);
   sendJson(context.res, 200, { ok: true, attendance_policy: state.attendance_policy });
+}
+
+// #249: host-only loop-guard preference. The server is the authority — type and
+// bounds are validated here regardless of what the browser sent, and a non-host
+// is rejected by requireHost with 403 before any read of the body is used.
+async function postLoopGuard(context: RequestContext): Promise<void> {
+  const auth = await requireParticipant(context);
+  enforceWriteRateLimit(context, auth.participant.alias, "loop-guard");
+  requireHost(auth.participant);
+  const body = await readJsonBody<{ enabled?: unknown; delay_s?: unknown }>(context);
+  if (typeof body.enabled !== "boolean") {
+    throw new HttpError(400, "invalid_auto_continue", "enabled must be a boolean");
+  }
+  if (body.delay_s !== undefined && !isValidAutoContinueDelay(body.delay_s)) {
+    throw new HttpError(
+      400,
+      "invalid_auto_continue_delay",
+      `delay_s must be an integer between ${AUTO_CONTINUE_DELAY_MIN_S} and ${AUTO_CONTINUE_DELAY_MAX_S}`
+    );
+  }
+  const state = await updateLoopGuardPreference({
+    root: context.options.root,
+    roomId: context.options.roomId,
+    enabled: body.enabled,
+    ...(body.delay_s === undefined ? {} : { delaySeconds: body.delay_s }),
+    updatedBy: auth.participant.alias
+  });
+  // Turning the preference off must not leave a scheduled continuation behind.
+  if (!body.enabled) cancelPendingAutoContinue(context.options.roomId);
+  sendJson(context.res, 200, {
+    ok: true,
+    loop_guard: loopGuardProjection(context.options.roomId, state, context.options.loopGuardLimit, Date.now())
+  });
 }
 
 async function getProfile(context: RequestContext): Promise<void> {
@@ -515,7 +558,7 @@ async function postMessage(context: RequestContext): Promise<void> {
   await touchParticipant(context, auth.participant, auth.participant.attention);
   await requireRoomOpen(context);
   enforceRateLimit(`${context.options.roomId}:${auth.participant.alias}`, context.options.rateLimitPerMinute);
-  enforceLoopGuard(context.options.roomId, auth.participant, context.options.loopGuardLimit);
+  await enforceLoopGuard(context, auth.participant);
   const result = await appendMessageResult({
     root: context.options.root,
     roomId: context.options.roomId,
@@ -612,6 +655,10 @@ async function postClose(context: RequestContext): Promise<void> {
   const auth = await requireParticipant(context);
   enforceWriteRateLimit(context, auth.participant.alias, "close");
   requireHost(auth.participant);
+  // #249: cancel BEFORE the awaited close. `closeRoom` yields, and a timer that
+  // fires during that window would otherwise append an approval to a room that
+  // is being closed.
+  cancelPendingAutoContinue(context.options.roomId);
   const state = await closeRoom(context.options.root, context.options.roomId);
   await appendSystem(context, "room closed");
   context.options.waitHub.notify(context.options.roomId);
@@ -723,6 +770,9 @@ async function getStatus(context: RequestContext): Promise<void> {
     boardroom: publicBoardroom(boardroom),
     // T11: present while a session is active; absent (idle) after end/room close.
     ...(state.active_session === undefined ? {} : { active_session: state.active_session }),
+    // #249: read-only loop-guard configuration + runtime. Alias-only; no token,
+    // invite/card URL, message body, filesystem path, or timer handle.
+    loop_guard: loopGuardProjection(context.options.roomId, state, context.options.loopGuardLimit, now),
     participants: participants.map((participant) => publicParticipant(participant, state.attendance_policy, now))
   });
 }
@@ -882,6 +932,8 @@ async function closeExpiredRoomIfNeeded(context: RequestContext): Promise<Awaite
   const paths = roomPaths(context.options.root, context.options.roomId);
   const state = await readRoomState(paths);
   if (state.status === "open" && state.expires_at !== undefined && Date.now() >= Date.parse(state.expires_at)) {
+    // #249: cancel BEFORE the awaited close, for the same reason as postClose.
+    cancelPendingAutoContinue(context.options.roomId);
     const closed = await closeRoom(context.options.root, context.options.roomId);
     await appendSystem(context, "room closed by ttl");
     context.options.waitHub.notify(context.options.roomId);
@@ -960,17 +1012,152 @@ export function clearRateBuckets(): void {
 }
 export { enforceRateLimit as __enforceRateLimit };
 
-function enforceLoopGuard(roomId: string, participant: Participant, limit: number): void {
+function clearRoomLoopCounts(roomId: string): void {
+  for (const key of loopCounts.keys()) {
+    if (key.startsWith(`${roomId}:`)) loopCounts.delete(key);
+  }
+}
+
+// #249: in-memory only, one entry per room, never persisted. A restart therefore
+// resets the guard and replays no pending continuation; only the host preference
+// survives, which is exactly the contract.
+interface PendingAutoContinue {
+  /** The alias whose rejected post opened this cycle — the only alias mentioned. */
+  alias: string;
+  timer: ReturnType<typeof setTimeout>;
+  expiresAt: number;
+}
+const pendingAutoContinue = new Map<string, PendingAutoContinue>();
+/** Process-local audit counter; deliberately not persisted. */
+const autoContinueCounts = new Map<string, number>();
+
+// Idempotent: safe to call for a room with nothing pending. Every cancellation
+// path (human post, host disabling the preference, room close/expiry, server
+// shutdown) funnels through here so a timer can never outlive its reason.
+function cancelPendingAutoContinue(roomId: string): void {
+  const pending = pendingAutoContinue.get(roomId);
+  if (pending === undefined) return;
+  clearTimeout(pending.timer);
+  pendingAutoContinue.delete(roomId);
+}
+
+function loopGuardProjection(
+  roomId: string,
+  state: RoomState,
+  limit: number,
+  now: number
+): Record<string, unknown> {
+  const pending = pendingAutoContinue.get(roomId);
+  return {
+    limit,
+    auto_continue_enabled: state.auto_continue_enabled === true,
+    auto_continue_delay_s: state.auto_continue_delay_s ?? AUTO_CONTINUE_DELAY_DEFAULT_S,
+    auto_continue_count: autoContinueCounts.get(roomId) ?? 0,
+    pending: pending !== undefined,
+    // Alias only — never a token, message body, path, or timer handle.
+    ...(pending === undefined
+      ? {}
+      : {
+          pending_alias: pending.alias,
+          pending_seconds_remaining: Math.max(0, Math.ceil((pending.expiresAt - now) / 1000))
+        })
+  };
+}
+
+// The guard itself. Agents are counted per room:alias; a human post clears the
+// room's counters (existing behavior) and additionally cancels a pending cycle.
+async function enforceLoopGuard(context: RequestContext, participant: Participant): Promise<void> {
+  const roomId = context.options.roomId;
+  const limit = context.options.loopGuardLimit;
   if (participant.kind === "human") {
-    for (const key of loopCounts.keys()) {
-      if (key.startsWith(`${roomId}:`)) loopCounts.delete(key);
-    }
+    clearRoomLoopCounts(roomId);
+    cancelPendingAutoContinue(roomId);
     return;
+  }
+  // While a continuation is pending the room is closed to further agent posts,
+  // so concurrent agents cannot race the timer or open a second cycle.
+  if (pendingAutoContinue.has(roomId)) {
+    throw new HttpError(429, "loop_guard", "loop guard paused: an automatic continue is pending");
   }
   const key = `${roomId}:${participant.alias}`;
   const next = (loopCounts.get(key) ?? 0) + 1;
   loopCounts.set(key, next);
-  if (next > limit) throw new HttpError(429, "loop_guard", "loop guard stopped repeated agent messages");
+  if (next <= limit) return;
+
+  const state = await readRoomState(roomPaths(context.options.root, roomId));
+  if (state.auto_continue_enabled !== true) {
+    // Unchanged default behavior for every room without the opt-in.
+    throw new HttpError(429, "loop_guard", "loop guard stopped repeated agent messages");
+  }
+  schedulePendingAutoContinue(context, participant.alias, state.auto_continue_delay_s ?? AUTO_CONTINUE_DELAY_DEFAULT_S);
+  throw new HttpError(429, "loop_guard", "loop guard paused: an automatic continue is pending");
+}
+
+function schedulePendingAutoContinue(context: RequestContext, alias: string, delaySeconds: number): void {
+  const roomId = context.options.roomId;
+  // Single-timer invariant: an existing cycle is never replaced or duplicated.
+  if (pendingAutoContinue.has(roomId)) return;
+  const delayMs = delaySeconds * 1000;
+  const options = context.options;
+  const timer = setTimeout(() => {
+    void completeAutoContinue(options, alias);
+  }, delayMs);
+  // Never hold the process open on this timer; shutdown cancels it explicitly.
+  timer.unref?.();
+  pendingAutoContinue.set(roomId, { alias, timer, expiresAt: Date.now() + delayMs });
+}
+
+// Expiry. Re-arms the guard and records an auditable, system-authored approval.
+// It writes no message as any participant, replays no rejected payload, and
+// starts no process, runtime, or model — the receiving agent decides what to do
+// under its own wake policy.
+async function completeAutoContinue(options: Required<RoomHttpServerOptions>, alias: string): Promise<void> {
+  const roomId = options.roomId;
+  if (!pendingAutoContinue.has(roomId)) return;
+  // A close or TTL expiry can be in flight when this fires. Read the room's real
+  // status first and let closure win: a closed or expired room never receives an
+  // approval, and the pending entry is dropped either way.
+  let state: RoomState;
+  try {
+    state = await readRoomState(roomPaths(options.root, roomId));
+  } catch {
+    cancelPendingAutoContinue(roomId);
+    return;
+  }
+  // Re-check after the await: a human post, a disable, or a close may have
+  // cancelled this cycle while the state read was in flight.
+  if (!pendingAutoContinue.has(roomId)) return;
+  // TTL expiry is PASSIVE: if no request arrives after a room expires, nothing
+  // ever runs a cancellation path, and the room's persisted status is still
+  // "open". Status alone is therefore not enough — the deadline must be checked
+  // here too, immediately before the append.
+  const expired =
+    state.expires_at !== undefined && Date.now() >= Date.parse(state.expires_at);
+  if (state.status !== "open" || expired) {
+    cancelPendingAutoContinue(roomId);
+    return;
+  }
+  pendingAutoContinue.delete(roomId);
+  clearRoomLoopCounts(roomId);
+  autoContinueCounts.set(roomId, (autoContinueCounts.get(roomId) ?? 0) + 1);
+  try {
+    await appendServerMessage({
+      root: options.root,
+      roomId,
+      from: "system",
+      text: `@${alias} auto-continue approved after the loop guard pause. The guard is re-armed; continue if your task is unfinished.`
+    });
+    options.waitHub.notify(roomId);
+  } catch {
+    // A storage failure must not leave the room wedged: the guard is already
+    // re-armed above, so posting resumes even if the audit line cannot be
+    // written. Nothing about the error is surfaced to participants.
+  }
+}
+
+/** Test/shutdown seam: drop every pending timer for a room. Idempotent. */
+export function __cancelPendingAutoContinue(roomId: string): void {
+  cancelPendingAutoContinue(roomId);
 }
 
 function enforceExposure(context: RequestContext): void {

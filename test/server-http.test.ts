@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  closeRoom,
   createRoom,
   readMessages,
   writeParticipants
@@ -23,7 +24,7 @@ async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-server-test-"));
 }
 
-async function startFixture(): Promise<{
+async function startFixture(options: { waitHoldMs?: number; expiresAt?: Date } = {}): Promise<{
   root: string;
   roomId: string;
   baseUrl: string;
@@ -39,7 +40,8 @@ async function startFixture(): Promise<{
     root,
     roomId,
     hostAlias: "host",
-    briefBody: "Review the HTTP core."
+    briefBody: "Review the HTTP core.",
+    ...(options.expiresAt === undefined ? {} : { expiresAt: options.expiresAt })
   });
   await writeParticipants(root, roomId, [
     participant("host", "human", true, hostToken),
@@ -50,7 +52,10 @@ async function startFixture(): Promise<{
     root,
     roomId,
     baseUrl: "http://127.0.0.1:0",
-    rateLimitPerMinute: 1_000
+    rateLimitPerMinute: 1_000,
+    // #249's expiry test holds a /wait across the real 30s delay, which needs a
+    // hold window longer than the 25s default.
+    ...(options.waitHoldMs === undefined ? {} : { waitHoldMs: options.waitHoldMs })
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -647,3 +652,309 @@ async function jsonFetch(
   const response = await fetch(`${fixture.baseUrl}${pathName}`, init);
   return { status: response.status, body: await response.json() };
 }
+
+// #249: host-opt-in automatic continue after a loop-guard pause. Default OFF —
+// a room with no saved preference must behave exactly as it did before.
+
+async function driveGuardToPause(fixture: { baseUrl: string }, token: string): Promise<number> {
+  let status = 0;
+  for (let index = 0; index < 32; index += 1) {
+    const response = await jsonFetch(fixture, "POST", "/messages", token, { text: `agent ${index}` });
+    status = response.status;
+    if (status === 429) break;
+  }
+  return status;
+}
+
+async function loopGuardOf(fixture: { baseUrl: string }, token: string): Promise<Record<string, unknown>> {
+  const status = await jsonFetch(fixture, "GET", "/status", token);
+  return status.body.loop_guard as Record<string, unknown>;
+}
+
+test("the loop-guard preference is host-only and validated server-side (#249)", async () => {
+  const fixture = await startFixture();
+  try {
+    // A non-host cannot write the preference, whatever it sends.
+    const forbidden = await jsonFetch(fixture, "POST", "/loop-guard", fixture.agentToken, { enabled: true });
+    assert.equal(forbidden.status, 403);
+    assert.equal(forbidden.body.error, "host_required");
+
+    // Type and bounds are enforced by the server, not the browser.
+    for (const bad of [{ enabled: "yes" }, { enabled: 1 }, {}]) {
+      const response = await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, bad);
+      assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(bad)}`);
+      assert.equal(response.body.error, "invalid_auto_continue");
+    }
+    for (const delay of [29, 301, 30.5, "60", null]) {
+      const response = await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, {
+        enabled: true,
+        delay_s: delay
+      });
+      assert.equal(response.status, 400, `expected 400 for delay ${String(delay)}`);
+      assert.equal(response.body.error, "invalid_auto_continue_delay");
+    }
+
+    // The bounds themselves are accepted.
+    for (const delay of [30, 300]) {
+      const ok = await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: delay });
+      assert.equal(ok.status, 200);
+      assert.equal((ok.body.loop_guard as { auto_continue_delay_s: number }).auto_continue_delay_s, delay);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("status exposes a token-free loop-guard projection that defaults to disabled (#249)", async () => {
+  const fixture = await startFixture();
+  try {
+    const response = await jsonFetch(fixture, "GET", "/status", fixture.agentToken);
+    const guard = response.body.loop_guard as Record<string, unknown>;
+    assert.equal(guard.auto_continue_enabled, false, "a room with no saved preference reads as disabled");
+    assert.equal(guard.auto_continue_delay_s, 30);
+    assert.equal(guard.auto_continue_count, 0);
+    assert.equal(guard.pending, false);
+    assert.equal(guard.limit, 30);
+    // Nothing pending, so no alias or countdown is published at all.
+    assert.equal("pending_alias" in guard, false);
+    assert.equal("pending_seconds_remaining" in guard, false);
+    // No credential-shaped or internal value anywhere in the projection.
+    const serialized = JSON.stringify(guard);
+    assert.doesNotMatch(serialized, /host-|agent-|Bearer|token|#token=|\/card\?|Timeout|_idle/i);
+    assert.equal(serialized.includes(fixture.root), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("with auto-continue off the guard stops repeated agent posts exactly as before (#249)", async () => {
+  const fixture = await startFixture();
+  try {
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+    const guard = await loopGuardOf(fixture, fixture.hostToken);
+    // No opt-in means no pending cycle and no continuation is ever scheduled.
+    assert.equal(guard.pending, false);
+    assert.equal(guard.auto_continue_count, 0);
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(log.filter((message) => message.text.startsWith("agent ")).length, 30);
+    assert.equal(log.some((message) => message.text.includes("auto-continue")), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an enabled guard hit opens exactly one pending cycle and blocks further agent posts (#249)", async () => {
+  const fixture = await startFixture();
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 300 });
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+
+    const guard = await loopGuardOf(fixture, fixture.hostToken);
+    assert.equal(guard.pending, true);
+    assert.equal(guard.pending_alias, "agent", "only the alias whose post was rejected is retained");
+    assert.ok((guard.pending_seconds_remaining as number) > 0);
+
+    // A second agent post while pending is rejected and must NOT restart or
+    // duplicate the cycle — the countdown keeps running down, never resets.
+    const first = guard.pending_seconds_remaining as number;
+    const blocked = await jsonFetch(fixture, "POST", "/messages", fixture.agentToken, { text: "racing the timer" });
+    assert.equal(blocked.status, 429);
+    const after = await loopGuardOf(fixture, fixture.hostToken);
+    assert.equal(after.pending, true);
+    assert.equal(after.pending_alias, "agent");
+    assert.ok((after.pending_seconds_remaining as number) <= first, "the pending cycle was restarted");
+
+    // Nothing was written for the rejected posts.
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(log.some((message) => message.text === "racing the timer"), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a human post cancels a pending continuation and resets the guard (#249)", async () => {
+  const fixture = await startFixture();
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 300 });
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+    assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true);
+
+    const human = await jsonFetch(fixture, "POST", "/messages", fixture.hostToken, { text: "reset" });
+    assert.equal(human.status, 201);
+    const guard = await loopGuardOf(fixture, fixture.hostToken);
+    assert.equal(guard.pending, false, "a human post cancels the pending continuation");
+    assert.equal(guard.auto_continue_count, 0, "cancelling is not a continuation");
+    // The existing human-reset semantics still hold.
+    const agent = await jsonFetch(fixture, "POST", "/messages", fixture.agentToken, { text: "after reset" });
+    assert.equal(agent.status, 201);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("disabling the preference or closing the room cancels a pending continuation (#249)", async () => {
+  for (const cancel of ["disable", "close"] as const) {
+    const fixture = await startFixture();
+    try {
+      await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 300 });
+      assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+      assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true, `${cancel}: precondition`);
+
+      if (cancel === "disable") {
+        const off = await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: false });
+        assert.equal(off.status, 200);
+        assert.equal((off.body.loop_guard as { pending: boolean }).pending, false);
+        assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, false);
+      } else {
+        const closed = await jsonFetch(fixture, "POST", "/close", fixture.hostToken);
+        assert.equal(closed.status, 200);
+      }
+
+      // Whichever path cancelled it, no continuation is ever appended.
+      const log = await readMessages(fixture.root, fixture.roomId);
+      assert.equal(log.some((message) => message.text.includes("auto-continue approved")), false, cancel);
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
+test("the host preference survives a restart but a pending continuation never replays (#249)", async () => {
+  const fixture = await startFixture();
+  await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 300 });
+  assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+  assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true);
+  await fixture.close();
+
+  // A fresh server over the same room directory: the persisted preference is
+  // still there, but the in-memory pending cycle and its timer are gone.
+  const restarted = createRoomHttpServer({ root: fixture.root, roomId: fixture.roomId, baseUrl: "http://127.0.0.1:0" });
+  await new Promise<void>((resolve) => {
+    restarted.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = restarted.address() as AddressInfo;
+    const guard = await loopGuardOf({ baseUrl: `http://127.0.0.1:${address.port}` }, fixture.hostToken);
+    assert.equal(guard.auto_continue_enabled, true, "the host preference is persisted");
+    assert.equal(guard.auto_continue_delay_s, 300);
+    assert.equal(guard.pending, false, "no pending cycle is replayed after a restart");
+    assert.equal(guard.auto_continue_count, 0, "the process-local count starts fresh");
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(log.some((message) => message.text.includes("auto-continue approved")), false);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      restarted.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+// The real expiry, driven by the real timer. The accepted delay range starts at
+// 30s and the server is the authority on it, so this test waits out the genuine
+// minimum rather than reaching into the timer or adding a test-only override to
+// production code. It is the one slow test in this ticket, deliberately.
+test("on expiry the guard re-arms with one system-authored approval mentioning only the blocked alias (#249)", { timeout: 90_000 }, async () => {
+  const fixture = await startFixture({ waitHoldMs: 50_000 });
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 30 });
+    const before = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+
+    // The blocked agent is waiting in its normal /wait loop when the timer fires.
+    const waitPromise = fetch(
+      `${fixture.baseUrl}/wait?participant=agent&since_id=${before.length + 30}`,
+      { headers: { Authorization: `Bearer ${fixture.agentToken}` } }
+    ).then((response) => response.json() as Promise<{ messages: Array<{ from: string; text: string; type: string }>; mentioned: boolean }>);
+
+    const waited = await waitPromise;
+
+    // Exactly one approval, authored by `system` — never as the agent or a human.
+    const approvals = waited.messages.filter((message) => message.text.includes("auto-continue approved"));
+    assert.equal(approvals.length, 1);
+    const approval = approvals[0];
+    assert.ok(approval);
+    assert.equal(approval.from, "system");
+    assert.equal(approval.type, "system");
+    // It mentions only the alias whose post was rejected.
+    assert.match(approval.text, /@agent\b/);
+    assert.doesNotMatch(approval.text, /@host\b/);
+    // The blocked participant is woken through its ordinary /wait response.
+    assert.equal(waited.mentioned, true);
+
+    // The rejected payload is never resubmitted.
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(log.filter((message) => message.text.includes("auto-continue approved")).length, 1);
+    assert.equal(log.filter((message) => message.from === "agent" && message.text === "agent 30").length, 0);
+
+    // The guard is re-armed: the agent can post again without a human /continue.
+    const resumed = await jsonFetch(fixture, "POST", "/messages", fixture.agentToken, { text: "resuming work" });
+    assert.equal(resumed.status, 201);
+
+    const guard = await loopGuardOf(fixture, fixture.hostToken);
+    assert.equal(guard.pending, false);
+    assert.equal(guard.auto_continue_count, 1, "the process-local audit count records exactly one continuation");
+  } finally {
+    await fixture.close();
+  }
+});
+
+// #249 (RE1): a pending continuation must never append an approval to a room
+// that is no longer open. Cancellation now runs BEFORE the awaited `closeRoom`
+// in both close paths, and `completeAutoContinue` re-reads the room's real
+// status as the backstop for any close it did not observe.
+//
+// This closes the room through the STORAGE api, deliberately bypassing the HTTP
+// handler's cancellation, so the armed timer survives and only the status guard
+// can stop it. That makes the regression deterministic: a wall-clock test cannot
+// reliably land inside the few-millisecond `await closeRoom` window, and an
+// earlier version of this test passed against the unfixed code for exactly that
+// reason.
+test("a pending continuation that survives into a closed room appends no approval (#249)", { timeout: 90_000 }, async () => {
+  const fixture = await startFixture();
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 30 });
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+    assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true);
+
+    // Close underneath the server: the timer stays armed.
+    await closeRoom(fixture.root, fixture.roomId);
+
+    // Wait past the deadline. Nothing may be appended to the closed room.
+    await new Promise((resolve) => setTimeout(resolve, 33_000));
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(
+      log.some((message) => message.text.includes("auto-continue approved")),
+      false,
+      "an approval was appended to a closed room"
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+// #249 (operator, msg 1037): TTL expiry is PASSIVE. With no request after the
+// room expires, no cancellation path runs at all — reordering the cancel cannot
+// help. Only re-reading status AND the deadline inside `completeAutoContinue`,
+// immediately before the append, prevents a continuation firing into an expired
+// room. This test makes no request at all between the pause and the deadline.
+test("a pending cycle that crosses room expiry with no intervening request appends nothing (#249)", { timeout: 90_000 }, async () => {
+  // Expires while the 30s continuation is still pending.
+  const fixture = await startFixture({ expiresAt: new Date(Date.now() + 5_000) });
+  try {
+    await jsonFetch(fixture, "POST", "/loop-guard", fixture.hostToken, { enabled: true, delay_s: 30 });
+    assert.equal(await driveGuardToPause(fixture, fixture.agentToken), 429);
+    assert.equal((await loopGuardOf(fixture, fixture.hostToken)).pending, true);
+
+    // Deliberately no requests from here: nothing triggers the passive TTL close,
+    // so the room's persisted status is still "open" when the timer fires.
+    await new Promise((resolve) => setTimeout(resolve, 33_000));
+
+    const log = await readMessages(fixture.root, fixture.roomId);
+    assert.equal(
+      log.some((message) => message.text.includes("auto-continue approved")),
+      false,
+      "a continuation fired into an expired room"
+    );
+  } finally {
+    await fixture.close();
+  }
+});
