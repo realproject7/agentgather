@@ -1,38 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
-import { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
-import { createRoomHttpServer } from "../src/server/index.js";
 import { readBrief } from "../src/storage/index.js";
-
-// #254: serves an already-created room from the CLI's own AGENTGATHER_HOME on a
-// kernel-assigned port, so CLI commands under test can never reach a foreign
-// listener on the product default port.
-async function startCliRoomFixture(
-  root: string,
-  roomId: string
-): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-  const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0" });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
-  };
-}
+import { startRoomServerFixture } from "./support/room-fixture.js";
 
 // #114: hosts can author a multiline Markdown brief from a file so real newlines
 // land in brief.md, instead of shell-escaped literal `\n` that renders visibly.
@@ -80,7 +55,7 @@ test("room brief set --brief-file updates the brief with real newlines", async (
   // derives as the product default 127.0.0.1:8787 — a real request to whatever
   // process owns that port. Bind a fixture for this room and point the room at
   // it so the request can only reach a listener this test owns.
-  const fixture = await startCliRoomFixture(context.home, "set-room");
+  const fixture = await startRoomServerFixture(context.home, "set-room");
   try {
     await runRoomCommand(
       ["join", "set-room", "--alias", "host", "--token", started.token, "--url", fixture.baseUrl],

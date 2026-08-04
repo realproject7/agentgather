@@ -17,6 +17,7 @@ import {
   ActiveSessionExistsError
 } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
+import { startRoomServerFixture } from "./support/room-fixture.js";
 import { WaitHub } from "../src/server/wait.js";
 import type { CliContext } from "../src/cli/context.js";
 import { runRoomCommand } from "../src/cli/commands/room/index.js";
@@ -288,7 +289,7 @@ test("room session start|end CLI persists the session, appends system messages, 
   // start` derives as the product default 127.0.0.1:8787. Bind a fixture for
   // this room and point the room at it, so the request can only ever reach a
   // listener this test owns — never a `room serve` the developer is running.
-  const cliFixture = await startCliRoomFixture(context.home, "cli-session");
+  const cliFixture = await startRoomServerFixture(context.home, "cli-session");
   try {
     await runRoomCommand(
       ["join", "cli-session", "--alias", "operator", "--token", bootstrap.token, "--url", cliFixture.baseUrl],
@@ -320,27 +321,3 @@ test("room session start|end CLI persists the session, appends system messages, 
     await cliFixture.close();
   }
 });
-
-// #254: serves an already-created room from the CLI's own AGENTGATHER_HOME on a
-// kernel-assigned port, so CLI commands under test can never reach a foreign
-// listener on the product default port.
-async function startCliRoomFixture(
-  root: string,
-  roomId: string
-): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-  const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0" });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
-  };
-}

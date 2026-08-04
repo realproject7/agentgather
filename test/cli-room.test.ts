@@ -11,6 +11,7 @@ import { runRoomCommand } from "../src/cli/commands/room/index.js";
 import { currentPath, tokensPath } from "../src/cli/state.js";
 import { readMessages, readParticipants, roomPaths } from "../src/storage/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
+import { startRoomServerFixture } from "./support/room-fixture.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -62,10 +63,11 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
   // would authenticate against, and try to write to, a room it never created.
   // Bind a fixture for THIS room on an ephemeral port and point the room at it,
   // so every request this test makes goes to a listener the test owns.
-  const fixture = await startRoomFixture(context.home, "cli-room", 5);
+  const fixture = await startRoomServerFixture(context.home, "cli-room", 5);
+  const fixtureBaseUrl = fixture.baseUrl;
   try {
     await runRoomCommand(
-      ["join", "cli-room", "--alias", "operator", "--token", started.token, "--url", fixture.baseUrl],
+      ["join", "cli-room", "--alias", "operator", "--token", started.token, "--url", fixtureBaseUrl],
       context
     );
 
@@ -110,7 +112,7 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
     assert.equal(invite.kind, "agent");
     assert.match(invite.token, /^tgl_/);
     assert.equal(invite.card_command.includes("/card?participant=reviewer&token="), true);
-    assert.equal(invite.browser_url, `${fixture.baseUrl}/#token=${invite.token}`);
+    assert.equal(invite.browser_url, `${fixtureBaseUrl}/#token=${invite.token}`);
 
     const participants = await readParticipants(roomPaths(context.home, "cli-room"));
     const reviewer = participants.find((participant) => participant.alias === "reviewer");
@@ -135,8 +137,8 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
     assert.match(card, /\/wait\?participant=reviewer&since_id=0/);
     assert.match(card, /\/messages\?since_id=0/);
     // Same trailing-slash guard as before, against the base URL actually in use.
-    assert.equal(card.includes(`${fixture.baseUrl}//card`), false);
-    assert.equal(card.includes(`${fixture.baseUrl}//wait`), false);
+    assert.equal(card.includes(`${fixtureBaseUrl}//card`), false);
+    assert.equal(card.includes(`${fixtureBaseUrl}//wait`), false);
     assert.match(card, /## Attendance Recovery/);
     assert.match(card, /return to foreground attendance immediately/);
     assert.match(card, /bash \/path\/to\/script\.sh/);
@@ -149,13 +151,13 @@ test("room lifecycle CLI creates rooms, updates briefs, invites participants, an
 
     stdout.chunks = [];
     await runRoomCommand(["dashboard", "--json"], context);
-    assert.deepEqual(stdout.json<{ ok: true; url: string }>(), { ok: true, url: fixture.baseUrl });
+    assert.deepEqual(stdout.json<{ ok: true; url: string }>(), { ok: true, url: fixtureBaseUrl });
 
     stdout.chunks = [];
     await runRoomCommand(["close", "--json"], context);
     assert.deepEqual(stdout.json<{ ok: true; room_status: string }>(), { ok: true, room_status: "closed" });
 
-    const response = await fetch(`${fixture.baseUrl}/wait?participant=reviewer&since_id=0`, {
+    const response = await fetch(`${fixtureBaseUrl}/wait?participant=reviewer&since_id=0`, {
       headers: {
         Authorization: `Bearer ${invite.token}`
       }
@@ -371,31 +373,6 @@ test("room brief set uses the live HTTP server when available so waiters are not
 
 async function assertMode(file: string, expected: number): Promise<void> {
   assert.equal((await stat(file)).mode & 0o777, expected);
-}
-
-// #254: a room server this test owns, on a kernel-assigned port. Any CLI command
-// pointed at its base URL can only ever reach this process — never a `room serve`
-// the developer happens to be running on the product default port.
-async function startRoomFixture(
-  root: string,
-  roomId: string,
-  waitHoldMs: number
-): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-  const server = createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0", waitHoldMs });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      })
-  };
 }
 
 async function getFreePort(): Promise<number> {
