@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { deleteJoinedHistory } from "./joined-history-store.js";
 import { withWriterLock } from "./lock.js";
-import { ensureSecureDir, writeSecureFile } from "./secure-fs.js";
+import { ensureSecureDir, isNotFoundError, writeSecureFile } from "./secure-fs.js";
 
 // Device-local record of a room this user has joined as a participant (#178).
 // METADATA ONLY — a participant bearer token is NEVER persisted here (the token
@@ -38,7 +38,7 @@ export async function readJoinedRooms(home: string): Promise<JoinedRoom[]> {
     const store = JSON.parse(await readFile(joinedRoomsPath(home), "utf8")) as JoinedRoomsStore;
     return Array.isArray(store.rooms) ? store.rooms : [];
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    if (isNotFoundError(error)) return [];
     throw error;
   }
 }

@@ -12,7 +12,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { assertSafeSlug, type ParticipantKind } from "../protocol/index.js";
-import { ensureSecureDir, withWriterLock, writeSecureFile } from "../storage/index.js";
+import { ensureSecureDir, isNotFoundError, withWriterLock, writeSecureFile } from "../storage/index.js";
 import {
   PLATFORM_ROOM_STATUSES,
   PLATFORM_STATUS_REASONS,
@@ -327,8 +327,4 @@ async function fileExists(file: string): Promise<boolean> {
     if (isNotFoundError(error)) return false;
     throw error;
   }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

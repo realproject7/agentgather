@@ -18,6 +18,7 @@ import { URL } from "node:url";
 import { VERSION } from "../cli/help.js";
 import { writeToken } from "../cli/state.js";
 import {
+  isNotFoundError,
   readJoinedRooms,
   recordJoinedRoom,
   refreshJoinedRoomMetadata,
@@ -190,7 +191,7 @@ async function sendRoomMessages(
     // Deliberately ENOENT-only, the same test the storage layer uses for a
     // missing file: a SyntaxError from corrupt JSON carries no errno at all,
     // and EACCES/EISDIR are faults rather than an offline host.
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    if (!isNotFoundError(error)) throw error;
     // The room is registered but its host log is not present locally (e.g. a
     // remote host): report an empty, offline timeline rather than failing.
     sendJson(res, 200, { ok: true, messages: [], next_since_id: sinceId, host_log_available: false });

@@ -1,5 +1,5 @@
 import { chmod, link, open, readFile, rename, rm, stat } from "node:fs/promises";
-import { SECURE_FILE_MODE } from "./secure-fs.js";
+import { isNotFoundError, SECURE_FILE_MODE } from "./secure-fs.js";
 
 // Per-process counter that keeps concurrent takeover scratch names unique.
 let takeoverCounter = 0;
@@ -231,9 +231,6 @@ function isFileExistsError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
 
 function isNoSuchProcessError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ESRCH";

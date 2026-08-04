@@ -24,7 +24,7 @@ import { assertSafeSlug, parsePositiveInteger } from "../protocol/validation.js"
 import { withWriterLock } from "./lock.js";
 import { roomPaths, type RoomPaths } from "./paths.js";
 import { readCursor, readMessages, readRoomState } from "./room-store.js";
-import { writeSecureFile } from "./secure-fs.js";
+import { isNotFoundError, writeSecureFile } from "./secure-fs.js";
 
 // Read the boardroom for a room. Returns the persisted boardroom when present,
 // otherwise a runtime projection of the legacy bare room (single #general chat
@@ -216,8 +216,4 @@ async function readJson<T>(file: string): Promise<T> {
 
 async function writeJson(file: string, value: unknown): Promise<void> {
   await writeSecureFile(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

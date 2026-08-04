@@ -4,6 +4,19 @@ import path from "node:path";
 export const SECURE_DIR_MODE = 0o700;
 export const SECURE_FILE_MODE = 0o600;
 
+// #261: the one ENOENT test for the whole codebase. It was written out in
+// sixteen places — three of them here in src/storage — so every new caller had
+// to choose between copying it again or adding another single-use helper. It
+// lives with the filesystem access it describes.
+//
+// Deliberately ENOENT and nothing else: callers use it to distinguish "this path
+// is simply absent", which is routine, from every other errno (EACCES, EISDIR,
+// …) and from a SyntaxError, which carries no errno at all. Widening it would
+// silently turn real faults into missing-file defaults at every call site.
+export function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
 // Per-process counter that keeps concurrent temp-file names unique within this
 // process; the pid keeps them unique across processes sharing the directory.
 let tempCounter = 0;
@@ -65,7 +78,7 @@ async function chmodIfPresent(target: string, mode: number): Promise<void> {
   try {
     await chmod(target, mode);
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+    if (!isNotFoundError(error)) {
       throw error;
     }
   }

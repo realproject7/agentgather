@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { ClientMessageInput } from "../../../protocol/index.js";
 import { flagBoolean, flagString, parseArgs } from "../../args.js";
 import type { CliContext } from "../../context.js";
+import { isNotFoundError } from "../../../storage/index.js";
 import { sendMessage } from "../message/transport.js";
 
 export const MAX_HANDOFF_SUMMARY_LENGTH = 12_000;
@@ -35,7 +36,7 @@ async function readSummary(source: string): Promise<string> {
   try {
     return await readFile(source, "utf8");
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    if (isNotFoundError(error)) {
       return source;
     }
     throw error;

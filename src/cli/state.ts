@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { ensureSecureDir, withWriterLock, writeSecureFile } from "../storage/index.js";
+import { ensureSecureDir, isNotFoundError, withWriterLock, writeSecureFile } from "../storage/index.js";
 
 export interface CurrentRoom {
   roomId: string;
@@ -62,7 +62,7 @@ async function readTokenStore(home: string, roomId: string): Promise<RoomTokenSt
   try {
     return JSON.parse(await readFile(tokensPath(home, roomId), "utf8")) as RoomTokenStore;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+    if (isNotFoundError(error)) {
       return { tokens: {} };
     }
     throw error;

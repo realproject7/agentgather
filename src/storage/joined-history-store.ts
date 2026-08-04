@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { withWriterLock } from "./lock.js";
-import { ensureSecureDir, writeSecureFile } from "./secure-fs.js";
+import { ensureSecureDir, isNotFoundError, writeSecureFile } from "./secure-fs.js";
 
 // Dashboard-owned, device-local snapshot of the history this participant has
 // ALREADY received in a joined room (#247). It exists so that a room whose host
@@ -121,7 +121,7 @@ export async function readJoinedHistory(
       forumPosts: Array.isArray(parsed.forumPosts) ? parsed.forumPosts : []
     };
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    if (isNotFoundError(error)) return null;
     // A truncated or hand-edited snapshot is treated as absent rather than fatal:
     // the offline view then shows its honest empty state instead of failing open.
     return null;
@@ -195,7 +195,7 @@ export async function deleteJoinedHistory(
       await rm(joinedHistoryPath(home, key), { force: false });
       return true;
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+      if (isNotFoundError(error)) return false;
       throw error;
     }
   });
