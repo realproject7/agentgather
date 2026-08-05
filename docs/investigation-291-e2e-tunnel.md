@@ -109,8 +109,11 @@ run 31026583592   attempt=1   conclusion=failure   ℹ tests 578 · pass 577 · 
 ✖ filters narrow the list, and select-all covers only the rows shown (#277)   30961.735976 ms
   page.waitForFunction: TimeoutError
 
-   decomposition:  30961.7 − 30000 = 961.7 ms   vs that test's normal ~1128 ms
-   → one wait consumed its entire ceiling: the missing-event signature
+   decomposition:  30961.7 − 30000 = 961.7 ms
+   #277 measured baseline: 950.4 / 774.9 / 1014.7 ms
+                  (runs 31021976130 / 31021158895 / 31019658720)
+   → 961.7 ms falls INSIDE that range: normal work at normal speed, plus one
+     wait consuming its entire ceiling — the missing-event signature
 
 ✔ e2e tunnel: browser human and curl agent reach the room through the broker   977.374647 ms
    → inside the 958–1077 ms band recorded above, in the same run
@@ -121,7 +124,9 @@ run.** That is Finding 5's central claim reproduced on a fresh specimen that nob
 the fresh specimen belongs to the #289 family, not to this one, which is the distinction the whole
 document exists to draw. The failing file (`test/browser-manage-joined.test.ts`) is not attached to
 #289's recorder and the run produced **0 artifacts**, so it too was unclassifiable at the moment it
-occurred. That consequence belongs to **#302**. (Specimen surfaced by @re2 (local) in review.)
+occurred. That consequence belongs to **#303** — *"Cover all 30-second browser waits with safe
+failure diagnostics"*, which supersedes the earlier #302. (Specimen surfaced by @re2 (local) in
+review.)
 
 ## Conclusion
 
@@ -143,7 +148,12 @@ authorises measured reproduction/rule-out and a mechanism-backed fix; a 34-run n
 no established mechanism closes that scope honestly, and the diagnostics adoption is a separate
 evidence-infrastructure change rather than part of this one. If this test fails again, that adoption
 is the first thing to do — it is a one-line-per-test change against an existing, already-reviewed
-recorder, and it needs its own ticket.
+recorder.
+
+**That ticket now exists: #303**, *"Cover all 30-second browser waits with safe failure
+diagnostics"*, which supersedes #302 and enumerates by wait rather than by past failure. This file
+is one of the ten browser/e2e files carrying no recorder, so #303 covers it and no separate ticket
+is needed.
 
 ## Security
 
