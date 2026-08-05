@@ -204,10 +204,14 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
-    diagnostics?.beginAction("composer send round-trip");
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.fill("#message-text", "@reviewer duplicate guard");
+    // #289 (@re1): the window opens immediately before the SUBMIT, not before
+    // the readiness wait — entry polling would otherwise land inside it, and a
+    // send handler that never bound would still show `requestsIssued > 0`. The
+    // window must contain the diagnosed action and nothing else.
+    diagnostics?.beginAction("composer double submit (text=@reviewer duplicate guard)");
     await page.evaluate(() => {
       const form = document.querySelector("#composer");
       if (form === null) throw new Error("composer missing");
