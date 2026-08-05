@@ -2181,6 +2181,11 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     const extentBand = (await page.locator("#chat-offline").textContent()) ?? "";
     assert.match(extentBand, /up to message #1/);
     assert.equal(/up to message #2/.test(extentBand), false, "the band never names an id it did not show");
+    // The time is a fact about RECEIPT, not about the transcript being current as of
+    // then (@head): the room may have moved on unseen, and a filtered newest record
+    // means the last thing received is not always the last thing shown.
+    assert.match(extentBand, /last received by this device/);
+    assert.equal(/last updated/.test(extentBand), false, "receipt time is not presented as an update time");
 
     await page.click('.joined-row:has(.joined-name:text-is("Tamper Room"))');
     await page.waitForSelector("text=approved, release the funds");

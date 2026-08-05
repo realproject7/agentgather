@@ -1803,11 +1803,17 @@ function renderJoinedSnapshot(entry, snapshot) {
       `The host at ${hostLabel(entry.baseUrl)} is offline and nothing from this room is saved on this device yet. ` +
       "Nothing can be sent or loaded until the host is reachable again.";
   } else {
+    // `savedAt` is when this device last WROTE a snapshot batch — a fact about
+    // receipt, not about the transcript. Calling it "last updated" invited the
+    // reading that the visible history is current as of then, which it is not: the
+    // room may have moved on unseen, and filtered records mean the newest thing
+    // received is not always the newest thing shown (@head).
     const savedAt = snapshot?.savedAt ? formatTime(snapshot.savedAt) : "an earlier session";
     const upTo = highestRenderedId > 0 ? ` up to message #${highestRenderedId}` : "";
     detailLine.textContent =
       `The host at ${hostLabel(entry.baseUrl)} is offline. This is the transcript saved on this device${upTo}, ` +
-      `last updated ${savedAt}. Anything sent after that is not here, and nothing can be sent until the host resumes.`;
+      `last received by this device ${savedAt}. Anything sent after that is not here, and nothing can be ` +
+      "sent until the host resumes.";
   }
   chatOffline.append(detailLine, buildSnapshotRetry(entry));
 }
