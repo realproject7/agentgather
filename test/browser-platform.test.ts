@@ -2076,6 +2076,14 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     joinedAt: now,
     lastSeen: now
   });
+  await recordJoinedRoom(root, {
+    roomId: "system-only-room",
+    title: "System Only",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
   try {
     // Write the forged records straight into the device-local store, which is what
@@ -2117,6 +2125,31 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
       false,
       "no snapshot row is labelled with a stored alias"
     );
+
+    // A snapshot holding ONLY records that cannot be restored renders zero rows, so
+    // the band must say "nothing saved yet" rather than promise a transcript over an
+    // empty timeline (@re1). Counting the stored array instead of the rendered rows
+    // would reintroduce exactly the false promise #247's honesty rule prevents.
+    const systemOnly = await fetch(`${platform.baseUrl}/joined-rooms/history`, {
+      method: "POST",
+      headers: { origin: roomBaseUrl, "content-type": "text/plain" },
+      body: JSON.stringify({
+        roomId: "system-only-room",
+        baseUrl: roomBaseUrl,
+        messages: [{ id: 1, from: "system", ts: now, type: "system", text: "only a system line" }]
+      })
+    });
+    assert.equal(systemOnly.status, 200);
+    await page.reload();
+    await page.click('.joined-row:has(.joined-name:text-is("System Only"))');
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+    assert.equal(await page.locator("#shell-timeline .shell-message").count(), 0, "nothing renderable was stored");
+    const honestBand = (await page.locator("#chat-offline").textContent()) ?? "";
+    assert.match(honestBand, /nothing from this room is saved on this device yet/);
+    assert.equal(/transcript saved on this device/.test(honestBand), false, "no transcript is promised over an empty view");
+
+    await page.click('.joined-row:has(.joined-name:text-is("Tamper Room"))');
+    await page.waitForSelector("text=approved, release the funds");
 
     // The export is a downstream surface with no marking of its own: it scrapes the
     // rendered rows, so it inherits the attribution only because the rows carry it.

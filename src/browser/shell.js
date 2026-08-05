@@ -1767,11 +1767,22 @@ function renderJoinedSnapshot(entry, snapshot) {
   // `system`/`status` records are not restored at all — the room's own voice is not
   // something a device-local store may speak in (#278's rule, shared via
   // restored-provenance.js so the two renderers cannot drift apart).
+  // The band below must describe what was actually RENDERED, not what the store
+  // happens to contain (@re1). Excluding system/status means a snapshot holding
+  // only those renders zero rows, and counting the raw array would then promise
+  // "the transcript saved on this device" over an empty timeline — the precise
+  // false promise #247's honesty rule exists to prevent, reintroduced by my own
+  // filter. Count what survives it.
+  let renderedRows = 0;
   for (const message of messages) {
     if (!isRestorableStoredType(message.type)) continue;
     renderMessage(message, { restored: true });
+    renderedRows += 1;
   }
-  for (const post of forumPosts) renderSnapshotForumPost(post);
+  for (const post of forumPosts) {
+    renderSnapshotForumPost(post);
+    renderedRows += 1;
+  }
 
   historySource.dataset.source = "snapshot";
   historySourceLabel.textContent = "Local snapshot · host offline";
@@ -1779,7 +1790,7 @@ function renderJoinedSnapshot(entry, snapshot) {
   chatOffline.hidden = false;
   chatOffline.replaceChildren();
   const detailLine = document.createElement("span");
-  if (messages.length === 0 && forumPosts.length === 0) {
+  if (renderedRows === 0) {
     detailLine.textContent =
       `The host at ${hostLabel(entry.baseUrl)} is offline and nothing from this room is saved on this device yet. ` +
       "Nothing can be sent or loaded until the host is reachable again.";
