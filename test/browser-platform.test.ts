@@ -2077,6 +2077,14 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     lastSeen: now
   });
   await recordJoinedRoom(root, {
+    roomId: "mixed-room",
+    title: "Mixed Room",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await recordJoinedRoom(root, {
     roomId: "system-only-room",
     title: "System Only",
     alias: "project7",
@@ -2147,6 +2155,32 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     const honestBand = (await page.locator("#chat-offline").textContent()) ?? "";
     assert.match(honestBand, /nothing from this room is saved on this device yet/);
     assert.equal(/transcript saved on this device/.test(honestBand), false, "no transcript is promised over an empty view");
+
+    // The band's OTHER claim — its extent — must also describe what rendered. A
+    // snapshot whose newest record is filtered would otherwise show one row and
+    // name the id above it (@re2). Announcements are routinely the last line, so
+    // this needs no tampering to reach.
+    const mixed = await fetch(`${platform.baseUrl}/joined-rooms/history`, {
+      method: "POST",
+      headers: { origin: roomBaseUrl, "content-type": "text/plain" },
+      body: JSON.stringify({
+        roomId: "mixed-room",
+        baseUrl: roomBaseUrl,
+        messages: [
+          { id: 1, from: "project7", ts: now, type: "chat", text: "the only visible line" },
+          { id: 2, from: "system", ts: now, type: "system", text: "the host has closed this room" }
+        ]
+      })
+    });
+    assert.equal(mixed.status, 200);
+    await page.reload();
+    await page.click('.joined-row:has(.joined-name:text-is("Mixed Room"))');
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+    await page.waitForSelector("text=the only visible line");
+    assert.equal(await page.locator("#shell-timeline .shell-message").count(), 1, "only the renderable row shows");
+    const extentBand = (await page.locator("#chat-offline").textContent()) ?? "";
+    assert.match(extentBand, /up to message #1/);
+    assert.equal(/up to message #2/.test(extentBand), false, "the band never names an id it did not show");
 
     await page.click('.joined-row:has(.joined-name:text-is("Tamper Room"))');
     await page.waitForSelector("text=approved, release the funds");

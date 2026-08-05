@@ -1774,10 +1774,18 @@ function renderJoinedSnapshot(entry, snapshot) {
   // false promise #247's honesty rule exists to prevent, reintroduced by my own
   // filter. Count what survives it.
   let renderedRows = 0;
+  // ...and the extent named below is bounded by the highest id actually SHOWN, not
+  // by the store's cursor (@re2). `snapshot.cursor` counts records the filter drops,
+  // so a snapshot whose newest record is a `system` line — a closed-room notice is
+  // routinely the last thing said — would render one row and claim to run to the
+  // one above it. Same defect as the empty state, one clause over: the band has two
+  // claims and only one of them had been converted.
+  let highestRenderedId = 0;
   for (const message of messages) {
     if (!isRestorableStoredType(message.type)) continue;
     renderMessage(message, { restored: true });
     renderedRows += 1;
+    if (Number.isInteger(message.id) && message.id > highestRenderedId) highestRenderedId = message.id;
   }
   for (const post of forumPosts) {
     renderSnapshotForumPost(post);
@@ -1796,7 +1804,7 @@ function renderJoinedSnapshot(entry, snapshot) {
       "Nothing can be sent or loaded until the host is reachable again.";
   } else {
     const savedAt = snapshot?.savedAt ? formatTime(snapshot.savedAt) : "an earlier session";
-    const upTo = snapshot?.cursor ? ` up to message #${snapshot.cursor}` : "";
+    const upTo = highestRenderedId > 0 ? ` up to message #${highestRenderedId}` : "";
     detailLine.textContent =
       `The host at ${hostLabel(entry.baseUrl)} is offline. This is the transcript saved on this device${upTo}, ` +
       `last updated ${savedAt}. Anything sent after that is not here, and nothing can be sent until the host resumes.`;
