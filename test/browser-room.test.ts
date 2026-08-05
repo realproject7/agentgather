@@ -9,6 +9,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-test-"));
@@ -189,8 +190,12 @@ test("browser room joins with fragment token, sends, receives, and renders safel
 test("browser composer dedupes rapid submit and reuses the idempotency key on retry", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    // #289: failure-only capture — the other CI failure was this test's
+    // `waitForSelector` running its full 30s ceiling.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -202,6 +207,11 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.fill("#message-text", "@reviewer duplicate guard");
+    // #289 (@re1): the window opens immediately before the SUBMIT, not before
+    // the readiness wait — entry polling would otherwise land inside it, and a
+    // send handler that never bound would still show `requestsIssued > 0`. The
+    // window must contain the diagnosed action and nothing else.
+    diagnostics?.beginAction("composer double submit (text=@reviewer duplicate guard)");
     await page.evaluate(() => {
       const form = document.querySelector("#composer");
       if (form === null) throw new Error("composer missing");
@@ -247,6 +257,12 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     const ids = await page.evaluate(() => (window as Window & { __agentGatherClientMsgIds?: string[] }).__agentGatherClientMsgIds);
     assert.equal(ids?.length, 2);
     assert.equal(ids?.[0], ids?.[1]);
+  } catch (error) {
+    // Write the artifact, then rethrow untouched: this must never convert a
+    // failure into a pass, and the assertion the runner reports stays the
+    // original one.
+    if (diagnostics !== null) await diagnostics.write("browser-composer-dedupe", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
