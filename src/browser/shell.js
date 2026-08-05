@@ -1990,26 +1990,39 @@ async function showJoinedSnapshot(entry) {
   // different facts and this view must not flatten them: a snapshot is the only
   // copy of a room whose host is gone, so a damaged one is the failure the user
   // can still act on — and only while they still can.
-  let snapshotState = "absent";
+  //
+  // The INITIALIZER is "unknown", not "absent" (@re2's refinement on @re1's P1).
+  // Starting at "absent" starts at a claim about the user's data, so every failure
+  // path had to remember to correct it — and the rejected-fetch path did not,
+  // rendering "nothing saved" for a room whose snapshot was never read at all.
+  // Starting at "unknown" makes every such path correct by omission instead: a
+  // future branch added here cannot reintroduce the false negative by forgetting.
+  let snapshotState = "unknown";
   try {
     const payload = await apiFetch(
       `./joined-rooms/history?room_id=${encodeURIComponent(entry.roomId || "")}&base_url=${encodeURIComponent(entry.baseUrl)}`
     );
     snapshot = payload.snapshot ?? null;
-    // Only the reader's own enum is trusted; anything else falls back to the
-    // conservative reading rather than being echoed or displayed.
-    snapshotState = payload.state === "unreadable" || payload.state === "ok" ? payload.state : "absent";
+    // Only the reader's own enum is trusted. An unrecognised value stays
+    // "unknown" — the conservative reading of an unknown state is unknown, not
+    // absent, which would be an assertion about data nothing here has seen.
+    snapshotState =
+      payload.state === "unreadable" || payload.state === "ok" || payload.state === "absent"
+        ? payload.state
+        : "unknown";
   } catch {
-    // Treated exactly like "nothing saved yet" — this view never guesses.
+    // Deliberately assigns NOTHING. "I could not ask the local store" is not
+    // "you have no local copy": the store was never read, so no claim about its
+    // contents can be made from here. Nothing about the failure — status,
+    // message, or path — is captured either, the same rule the parse error gets.
     snapshot = null;
-    snapshotState = "absent";
   }
   renderJoinedSnapshot(entry, snapshot, snapshotState);
 }
 
 // The saved transcript plus an honest band naming what it is and where it stops.
 // It never claims newer or unseen history exists — only what the cursor covers.
-function renderJoinedSnapshot(entry, snapshot, snapshotState = "absent") {
+function renderJoinedSnapshot(entry, snapshot, snapshotState = "unknown") {
   const messages = snapshot?.messages ?? [];
   const forumPosts = snapshot?.forumPosts ?? [];
   timeline.replaceChildren();
@@ -2052,6 +2065,19 @@ function renderJoinedSnapshot(entry, snapshot, snapshotState = "absent") {
   // the band itself is what makes "which room is this text about" answerable.
   delete chatOffline.dataset.room;
   const detailLine = document.createElement("span");
+  if (snapshotState === "unknown") {
+    // The FOURTH state: this device could not determine what it has. Deliberately
+    // neither "nothing saved" (a false negative about data that may be intact) nor
+    // "unreadable" (a false alarm about a file nothing has read). It claims
+    // nothing about the snapshot and points at the only useful action.
+    detailLine.textContent =
+      `The host at ${hostLabel(entry.baseUrl)} is offline, and this device could not check its saved copy ` +
+      "of this room just now. The transcript may still be here — try again.";
+    historySourceLabel.textContent = "Local snapshot unavailable · host offline";
+    chatOffline.append(detailLine, buildSnapshotRetry(entry));
+    chatOffline.dataset.room = entry.roomId || "";
+    return;
+  }
   if (snapshotState === "unreadable") {
     // A THIRD state, distinct from both "nothing saved" sentences below (#293).
     // It names the condition and what follows from it, and deliberately says

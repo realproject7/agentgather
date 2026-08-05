@@ -209,3 +209,88 @@ test("a damaged snapshot leaves the room list and the other room's snapshot work
     await fixture.close();
   }
 });
+
+// The fourth state (@re1's P1, @re2's root fix). A failed or unrecognised read is
+// "I could not check", which is not a claim about the user's data. These tests
+// exist because a suite covering only absent/valid/damaged passes straight through
+// the defect — which is how it survived a green run AND an approval.
+test("a rejected history fetch renders 'could not check', never 'nothing saved' (#293)", async () => {
+  const fixture = await startFixture();
+  try {
+    const { page } = fixture;
+    // A transient the user hits in practice: the platform server 500s or drops.
+    await page.route("**/joined-rooms/history**", (route) => route.abort("failed"));
+
+    const band = await openRoom(page, "healthy-room");
+    assert.match(band, /could not check its saved copy/i);
+    assert.match(band, /transcript may still be here — try again/i);
+    // The two claims it must NOT make: absence, and damage.
+    assert.equal(
+      /nothing from this room is saved on this device yet/i.test(band),
+      false,
+      "a failed read must never claim the user has no local copy"
+    );
+    assert.equal(
+      /exists but cannot be read/i.test(band),
+      false,
+      "a failed read must not raise a false alarm about damage either"
+    );
+    assert.equal(
+      await page.locator("#history-source-label").textContent(),
+      "Local snapshot unavailable · host offline"
+    );
+    // Positive control: this room's snapshot IS intact — the fixture seeded it —
+    // so "nothing saved" would have been provably false, not merely unproven.
+    const onDisk = await readFile(
+      joinedHistoryPath(fixture.root, { roomId: "healthy-room", baseUrl: fixture.deadUrl }),
+      "utf8"
+    );
+    assert.ok(onDisk.includes("healthy saved line"), "the snapshot must really be intact on disk");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an unrecognised response state stays unknown rather than becoming absent (#293)", async () => {
+  const fixture = await startFixture();
+  try {
+    const { page } = fixture;
+    // A future server, a proxy, or a partial rollout could answer with a state
+    // this client does not know. The conservative reading of unknown is unknown.
+    await page.route("**/joined-rooms/history**", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, snapshot: null, state: "some-future-state" })
+      })
+    );
+    const band = await openRoom(page, "healthy-room");
+    assert.match(band, /could not check its saved copy/i);
+    assert.equal(/nothing from this room is saved on this device yet/i.test(band), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("nothing about the failure itself reaches the screen (#293)", async () => {
+  const fixture = await startFixture();
+  try {
+    const { page } = fixture;
+    const failureMarker = "TRIPWIRE-FAILURE-DETAIL-8b2e";
+    await page.route("**/joined-rooms/history**", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: failureMarker, message: `${failureMarker} at ${fixture.root}` })
+      })
+    );
+    await openRoom(page, "healthy-room");
+    const rendered = await page.content();
+    // Same rule the parse error gets: report the condition, never the detail.
+    assert.equal(rendered.includes(failureMarker), false, "no failure detail may be shown");
+    assert.equal(rendered.includes(fixture.root), false, "no filesystem path may be shown");
+    assert.equal(/\b500\b|HTTP \d{3}/.test(rendered), false, "no status code may be shown");
+  } finally {
+    await fixture.close();
+  }
+});
