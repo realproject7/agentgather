@@ -238,16 +238,36 @@ async function init() {
 // `/joined-rooms/open`, which holds the token SERVER-side.
 //
 // The route is therefore offered on exactly the condition that makes it true, and
-// on no other. `dashboardTarget()` returns a validated same-device loopback
-// address or null — the identical value `#dashboard-home` uses — so nothing is
-// guessed, nothing is probed, and no credential is read, written or linked. With
-// no remembered dashboard this function touches nothing at all and the pane reads
-// exactly as it did before this existed.
+// on no other. With no remembered dashboard this function touches nothing at all
+// and the pane reads exactly as it did before this existed.
+//
+// The href is reduced to the ORIGIN, and that reduction is load-bearing rather
+// than tidiness. `validLoopbackDashboardUrl` checks protocol and hostname and then
+// returns `url.toString()`, so path, query and — the one that matters —
+// **fragment** survive validation. `agentgather.dashboard` is read out of
+// `localStorage`, which is editable by anything with script access to this origin,
+// so a stored value carrying `#token=…` would clear the validator and land a
+// credential in rendered markup: exactly the exposure #288 removed from the rail,
+// reintroduced by the feature whose own invariant forbids it. The origin keeps the
+// validated host and drops every carrier, matching what `sanitizeBaseUrl`
+// (`platform/http.ts:875`) already does on the other side of this codebase.
+//
+// Found by the other QuadWork instance's @re2 on the parallel #290 branch, fixed
+// there by its @dev; the reasoning is ported here, not the branch.
 function offerDashboardRoute() {
   if (authDashboardRoute === null || authDashboardLink === null) return;
   const dashboard = dashboardTarget();
   if (dashboard === null) return;
-  authDashboardLink.href = dashboard;
+  let origin;
+  try {
+    origin = new URL(dashboard).origin;
+  } catch {
+    // An address that will not parse is not a route. Offering nothing is the
+    // honest outcome; rendering a broken href would be an affordance that fails
+    // on click, which is the thing this ticket exists to remove.
+    return;
+  }
+  authDashboardLink.href = origin;
   authDashboardRoute.hidden = false;
 }
 

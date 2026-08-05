@@ -3267,8 +3267,8 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
     );
     assert.equal(
       await known.locator("#auth-dashboard-link").getAttribute("href"),
-      dashboardUrl,
-      "the route must point at the same address #dashboard-home uses"
+      new URL(dashboardUrl).origin,
+      "the route must point at the validated dashboard origin"
     );
 
     // The pane's only action, so on a narrow screen it must be a thumb-sized
@@ -3313,6 +3313,78 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
       (await known.evaluate(() => JSON.stringify(window.localStorage))).includes(fixture.hostToken),
       false,
       "the token must never be persisted by this path"
+    );
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #290 — the defect the parallel-branch collision surfaced, found by the other
+// QuadWork instance's @re2 and fixed there by its @dev.
+//
+// `validLoopbackDashboardUrl` checks protocol and hostname, then returns
+// `url.toString()` — so path, query and FRAGMENT survive validation. The stored
+// `agentgather.dashboard` value comes out of `localStorage`, which anything with
+// script access to this origin can write, so a remembered value carrying
+// `#token=…` clears the validator and would land a live credential in rendered
+// markup: the exposure #288 removed from the rail, reintroduced by the feature
+// whose own invariant forbids it.
+//
+// The assertion is an EQUALITY against the expected origin, deliberately. A
+// "does not contain the token" check here also passes when the element is
+// missing, when the pane never rendered, and when the href is empty — three ways
+// to be green while proving nothing.
+test("a remembered dashboard carrying a credential is reduced to its origin before it reaches markup (#290)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const dashboardOrigin = `http://127.0.0.1:${await getFreePort()}`;
+    // Every carrier the validator lets through, on one value: path, query and
+    // fragment. The fragment is this project's own invite-token carrier.
+    const poisoned = `${dashboardOrigin}/dash/inner?token=${fixture.hostToken}&x=1#token=${fixture.hostToken}`;
+
+    await page.goto(fixture.baseUrl);
+    await page.waitForSelector('.room-shell[data-state="auth-error"]');
+    // Written the way an attacker or a stale write would leave it — straight into
+    // the store the room reads without a token.
+    await page.evaluate((value) => window.localStorage.setItem("agentgather.dashboard", value), poisoned);
+    await page.reload();
+    await page.waitForSelector('.room-shell[data-state="auth-error"]');
+
+    assert.equal(
+      await page.locator("#auth-dashboard-route").isVisible(),
+      true,
+      "a validated loopback address must still offer a route once reduced"
+    );
+    assert.equal(
+      await page.locator("#auth-dashboard-link").getAttribute("href"),
+      dashboardOrigin,
+      "the href must equal the origin exactly — no path, no query, no fragment"
+    );
+
+    // Belt and braces on the two surfaces the invariant names, over the rendered
+    // pane rather than the source.
+    const paneHtml = await page.locator("#auth-error").innerHTML();
+    assert.equal(paneHtml.includes(fixture.hostToken), false, "the token reached the rendered markup");
+    assert.doesNotMatch(paneHtml, /#token=|[?&]token=/i, "a token carrier reached the rendered markup");
+
+    // An address that cannot be parsed is not a route: no element, not a broken
+    // href that fails on click.
+    await page.evaluate(() => window.localStorage.setItem("agentgather.dashboard", "http://127.0.0.1:not-a-port/%%"));
+    await page.reload();
+    await page.waitForSelector('.room-shell[data-state="auth-error"]');
+    assert.equal(
+      await page.locator("#auth-dashboard-route").isVisible(),
+      false,
+      "an unparsable stored address must offer no route at all"
+    );
+    assert.equal(
+      (await page.locator("#auth-error p").first().innerText()).trim(),
+      AUTH_ERROR_COPY,
+      "and the pane falls back to the copy that is then the true advice"
     );
   } finally {
     await browser?.close();
