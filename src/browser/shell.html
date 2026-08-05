@@ -107,6 +107,22 @@
             </section>
           </div>
 
+          <!-- Draggable divider between the two rail regions (#275). A real
+               `role="separator"` with `tabindex="0"`, so it is reachable by keyboard
+               and arrow keys move it — a handle that only responds to a mouse does
+               not satisfy this ticket. `aria-valuenow/min/max` are kept in step with
+               the live pixel split by the resize logic. -->
+          <div
+            id="rail-divider"
+            class="rail-divider"
+            role="separator"
+            tabindex="0"
+            aria-orientation="horizontal"
+            aria-label="Resize the rooms list"
+          >
+            <span class="rail-divider-grip" aria-hidden="true"></span>
+          </div>
+
           <!-- Lower region (~2/3, own scroll): contextual. State A shows Room Status
                guidance; State B shows the selected room's channel/forum navigation. -->
           <div class="rail-lower">

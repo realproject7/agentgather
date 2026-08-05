@@ -42,6 +42,9 @@ const EXPORT_PREFIX = "agentgather.exported.";
 // "Rooms I'm in" (#178): browser-recorded joined rooms. Metadata only — a token is
 // never written here (parseInviteToMeta strips it), matching the cache invariant.
 const JOINED_KEY = "agentgather.joinedRooms";
+// Per-device rail split (#275). A single number of pixels for the upper region —
+// never a room id, alias, or token. It is device-local and never synced.
+const RAIL_SPLIT_KEY = "agentgather.railSplit";
 
 const shell = document.querySelector(".platform-shell");
 const ownerLabel = document.getElementById("owner-label");
@@ -75,6 +78,12 @@ const joinedForm = document.getElementById("joined-add");
 const joinedInput = document.getElementById("joined-input");
 const joinedError = document.getElementById("joined-error");
 const platformVersionValue = document.getElementById("platform-version-value");
+
+// Resizable rail split (#275).
+const roomRail = document.querySelector(".room-rail");
+const railRooms = document.querySelector(".rail-rooms");
+const railDivider = document.getElementById("rail-divider");
+const railLower = document.querySelector(".rail-lower");
 
 // Bulk manage view (#277): the full joined-room list in the main panel.
 const manageOpenButton = document.getElementById("manage-open");
@@ -252,10 +261,184 @@ async function init() {
   manageConfirmDelete.addEventListener("click", () => void runManageDelete());
   await loadRooms();
   await loadJoinedRooms();
+  // AFTER the first await, deliberately. `init()` is invoked while the module
+  // body is still evaluating, so its synchronous prologue runs before the
+  // constants further down this file are initialized — calling this from there
+  // threw a temporal-dead-zone ReferenceError, which `init().catch()` swallowed
+  // into the rail's error banner and left the whole shell stuck at "loading".
+  // It only reproduced when a split was actually stored, since that is the only
+  // path that reads them.
+  bindRailDivider();
   void loadVersion();
   shell.dataset.state = "ready";
   setInterval(() => void loadRooms(), 5000);
   setInterval(() => void loadJoinedRooms(), 5000);
+}
+
+// ---- Resizable rail split (#275) ----
+// The rail's two regions are separated by a real `role="separator"` the user can
+// drag or move with arrow keys. The chosen split is a single number of pixels for
+// the upper region, persisted per device.
+
+// Minimums, in px, on the 4px grid. RAIL_MIN_TOP matches `.rail-rooms`'s CSS
+// min-height so the clamp and the stylesheet floor cannot drift apart.
+const RAIL_MIN_TOP = 120;
+const RAIL_MIN_BOTTOM = 120;
+// One arrow press. Shift multiplies it, for crossing the rail quickly.
+const RAIL_STEP = 16;
+const RAIL_STEP_LARGE = 64;
+
+// Largest upper region this rail can currently show while the lower region keeps
+// its minimum. Depends on the live rail height, so it is recomputed rather than
+// stored — a value that was valid in a tall window is not valid in a short one.
+//
+// The rail holds more than these three elements: the version footer is a sibling
+// too. Subtracting only the divider left the lower region squeezed below its
+// minimum, so every child that is NOT one of the two resizable regions is
+// measured and removed from the budget. Written generically rather than against
+// today's footer, so another rail sibling cannot silently reintroduce this.
+function railMaxTop() {
+  if (roomRail === null || railRooms === null || railDivider === null) return 0;
+  let reserved = 0;
+  for (const child of roomRail.children) {
+    if (child === railRooms || child === railLower) continue;
+    reserved += child.getBoundingClientRect().height;
+  }
+  return Math.floor(roomRail.clientHeight - reserved - RAIL_MIN_BOTTOM);
+}
+
+// Clamp any candidate split into what this rail can actually show. Returns null
+// when the rail is too short to honour both minimums at once — in that case the
+// split is not applied at all and the original percentage layout stays, which is
+// always usable.
+function clampRailTop(value) {
+  const max = railMaxTop();
+  if (!Number.isFinite(value) || max < RAIL_MIN_TOP) return null;
+  return Math.round(Math.min(Math.max(value, RAIL_MIN_TOP), max));
+}
+
+// Read the persisted split. This is UNTRUSTED INPUT on the way back in: anything
+// can be in localStorage — a string, a negative number, NaN, Infinity, a value
+// from a much taller window, or hand-edited junk. Everything that is not a finite
+// number is discarded, and what survives is still clamped by the caller, so no
+// stored value can collapse a region to zero or push one off-screen.
+function readRailSplit() {
+  try {
+    const raw = window.localStorage.getItem(RAIL_SPLIT_KEY);
+    if (raw === null) return null;
+    // Shape first, then value. `Number()` alone is too permissive to validate
+    // with: it turns "" and "   " into 0 and "0x80" into 128, so an empty or
+    // hand-edited entry would become a real split instead of being rejected.
+    // Only a plain decimal number is accepted; everything else is discarded and
+    // the default layout is kept.
+    if (!/^-?\d+(\.\d+)?$/.test(raw.trim())) return null;
+    const parsed = Number(raw.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Persist only the clamped number. Storage may be unavailable or full; the split
+// simply will not survive the reload in that case, which is recoverable on its
+// own.
+function writeRailSplit(top) {
+  try {
+    window.localStorage.setItem(RAIL_SPLIT_KEY, String(top));
+  } catch {
+    // Non-fatal: the current session keeps the split it is already showing.
+  }
+}
+
+// Apply a split to the layout and keep the separator's ARIA values in step with
+// it. Returns the applied value, or null if the rail cannot honour the minimums.
+function applyRailSplit(value) {
+  const top = clampRailTop(value);
+  if (top === null) return null;
+  roomRail.dataset.split = "on";
+  roomRail.style.setProperty("--rail-top", `${top}px`);
+  railDivider.setAttribute("aria-valuenow", String(top));
+  railDivider.setAttribute("aria-valuemin", String(RAIL_MIN_TOP));
+  railDivider.setAttribute("aria-valuemax", String(railMaxTop()));
+  return top;
+}
+
+// The split currently in effect, in px — the applied value if there is one, or
+// the measured height of the upper region before any resize.
+function currentRailTop() {
+  const applied = Number(railDivider.getAttribute("aria-valuenow"));
+  if (Number.isFinite(applied) && roomRail.dataset.split === "on") return applied;
+  return railRooms.getBoundingClientRect().height;
+}
+
+function moveRailSplit(delta) {
+  const applied = applyRailSplit(currentRailTop() + delta);
+  if (applied !== null) writeRailSplit(applied);
+}
+
+function bindRailDivider() {
+  // Restore the stored split — but the rail has NO height yet at bind time: the
+  // shell is still in its loading view and `.platform-body` is not laid out, so
+  // clamping against a zero-height rail would discard a perfectly good stored
+  // value and silently drop the user's split on every load.
+  //
+  // So the restore waits for the rail to actually have a height, and applies at
+  // the first measurable moment. A stored value that no longer fits is clamped
+  // rather than rejected, so a split saved in a taller window still yields a
+  // usable layout.
+  const stored = readRailSplit();
+  if (stored !== null && applyRailSplit(stored) === null) {
+    const observer = new ResizeObserver(() => {
+      if (applyRailSplit(stored) !== null) observer.disconnect();
+    });
+    observer.observe(roomRail);
+  }
+
+  railDivider.addEventListener("pointerdown", (event) => {
+    // Primary button / touch only, and capture the pointer so a fast drag that
+    // leaves the divider keeps resizing instead of stopping mid-gesture.
+    if (event.button !== 0) return;
+    event.preventDefault();
+    railDivider.dataset.dragging = "true";
+    railDivider.setPointerCapture(event.pointerId);
+    const railTop = roomRail.getBoundingClientRect().top;
+    const onMove = (moveEvent) => {
+      // The pointer names the boundary directly: the upper region is whatever
+      // lies between the rail's top and the cursor.
+      applyRailSplit(moveEvent.clientY - railTop);
+    };
+    const onUp = () => {
+      delete railDivider.dataset.dragging;
+      railDivider.removeEventListener("pointermove", onMove);
+      railDivider.removeEventListener("pointerup", onUp);
+      railDivider.removeEventListener("pointercancel", onUp);
+      const settled = clampRailTop(currentRailTop());
+      if (settled !== null) writeRailSplit(settled);
+    };
+    railDivider.addEventListener("pointermove", onMove);
+    railDivider.addEventListener("pointerup", onUp);
+    railDivider.addEventListener("pointercancel", onUp);
+  });
+
+  railDivider.addEventListener("keydown", (event) => {
+    const step = event.shiftKey ? RAIL_STEP_LARGE : RAIL_STEP;
+    if (event.key === "ArrowUp") moveRailSplit(-step);
+    else if (event.key === "ArrowDown") moveRailSplit(step);
+    else if (event.key === "Home") moveRailSplit(-Number.MAX_SAFE_INTEGER);
+    else if (event.key === "End") moveRailSplit(Number.MAX_SAFE_INTEGER);
+    else return;
+    // Only after a key this handler actually acted on: arrow keys must not
+    // swallow scrolling anywhere else.
+    event.preventDefault();
+  });
+
+  // A window resize can invalidate the current split — the rail may no longer be
+  // tall enough for it. Re-clamp against the new height without persisting, so
+  // resizing a window never overwrites the user's chosen split.
+  window.addEventListener("resize", () => {
+    if (roomRail.dataset.split !== "on") return;
+    applyRailSplit(currentRailTop());
+  });
 }
 
 async function loadVersion() {
