@@ -28,7 +28,7 @@ central limitation of this investigation and the reason it cannot end in a cause
 |---|---|---|
 | test-level | none | `test(…)` at `:38` takes no options object |
 | `node --test` | 180 s under `pnpm test` | `--test-timeout=180000`, `package.json` |
-| `node --test` | none that can fire here, unflagged | measured: a 4 s test passes with no flag on v24.14.1 |
+| `node --test` | Infinity, unflagged | Node's documented default; measured on v24.14.1 — unflagged 4 s and 35 s tests both pass |
 | Playwright `waitForSelector` | 30 s | library default; the four calls at `:115/:118/:130/:133` pass no timeout option |
 
 The two `node --test` rows matter because the observation came from an ad-hoc
