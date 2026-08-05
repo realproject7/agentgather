@@ -3494,9 +3494,11 @@ async function offlineNotice(
     // ...and only now does the host go away.
     await page.route("**/messages*", (route) => route.abort("connectionrefused"));
     await page.waitForSelector("#backup-notice:not([hidden])", { timeout: 20_000 });
-    const notice = (await page.locator("#backup-notice").textContent()) ?? "";
-    const earlierLoaded = await page.evaluate(() => document.querySelectorAll(".message").length);
-    return { notice, earlierLoaded };
+    // Only the notice is returned. An `earlierLoaded` count was computed here as a
+    // cross-check on the fetched-row number; the exact-text assertion pins that
+    // number better, and a value computed and never read is a check that only
+    // exists — which is this ticket's own thesis (@re2, @re1).
+    return { notice: (await page.locator("#backup-notice").textContent()) ?? "" };
   } finally {
     await browser.close();
   }
