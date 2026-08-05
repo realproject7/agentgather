@@ -2700,32 +2700,59 @@ test("the room view offers a labelled route home and discloses no other room (#2
     assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboard);
 
     // The disclosure proof @head required. This origin must never learn about any
-    // room but its own: not in the DOM, not in localStorage. A host that could read
-    // the participant's full inventory would learn every other room they are in.
+    // room but its own. A host that could read the participant's full inventory
+    // would learn every other room they are in — the reason an acceptance criterion
+    // was declined, so it is asserted rather than argued.
+    //
+    // Every surface a host's page script can read is swept, and the check is by
+    // ORIGIN rather than by pattern: matching only loopback addresses would miss a
+    // tunnelled or remote room entirely, which is exactly the room whose disclosure
+    // would matter most (@re1).
     await postMessage(fixture, fixture.reviewerToken, "a line in this room");
     await page.waitForSelector("text=a line in this room");
     const disclosed = await page.evaluate(() => {
-      const stored = Object.keys(window.localStorage).map((k) => `${k}=${window.localStorage.getItem(k) ?? ""}`);
+      const dump = (store: Storage): string =>
+        Object.keys(store)
+          .map((key) => `${key}=${store.getItem(key) ?? ""}`)
+          .join("\n");
       const joined = JSON.parse(window.localStorage.getItem("agentgather.joinedRooms") ?? '{"rooms":[]}') as {
         rooms: Array<{ baseUrl?: string }>;
       };
       return {
-        storedBlob: stored.join("\n"),
-        joinedBaseUrls: (joined.rooms ?? []).map((room) => room.baseUrl ?? ""),
-        domBlob: document.body?.innerHTML ?? ""
+        localBlob: dump(window.localStorage),
+        sessionBlob: dump(window.sessionStorage),
+        domBlob: document.documentElement?.outerHTML ?? "",
+        joinedBaseUrls: (joined.rooms ?? []).map((room) => room.baseUrl ?? "")
       };
     });
+
     // Every remembered room row belongs to THIS origin — nothing from another host.
     for (const baseUrl of disclosed.joinedBaseUrls) {
       assert.equal(baseUrl.startsWith(fixture.baseUrl), true, `foreign room disclosed to this origin: ${baseUrl}`);
     }
-    // The only loopback address this origin holds is the dashboard's own, which the
-    // dashboard supplied for the route home — never another room's base URL.
-    const loopbackRefs = (disclosed.storedBlob.match(/http:\/\/127\.0\.0\.1:\d+/g) ?? []).filter(
-      (url) => !dashboard.startsWith(url) && !fixture.baseUrl.startsWith(url)
-    );
-    assert.deepEqual(loopbackRefs, [], "an address that is neither this room nor the dashboard was persisted");
-    assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(disclosed.storedBlob), false);
+
+    // No absolute URL anywhere on this origin may point at a third party. The only
+    // two this device legitimately holds here are the room itself and the dashboard
+    // that supplied the route home.
+    const allowed = new Set([new URL(fixture.baseUrl).origin, new URL(dashboard).origin]);
+    for (const [surface, blob] of [
+      ["localStorage", disclosed.localBlob],
+      ["sessionStorage", disclosed.sessionBlob],
+      ["DOM", disclosed.domBlob]
+    ] as const) {
+      const foreign = [...new Set(blob.match(/https?:\/\/[^\s"'<>\\)]+/g) ?? [])].filter((raw) => {
+        try {
+          return !allowed.has(new URL(raw).origin);
+        } catch {
+          return false;
+        }
+      });
+      assert.deepEqual(foreign, [], `${surface} discloses an origin that is neither this room nor the dashboard`);
+    }
+
+    // The dashboard's own stores must not have been mirrored here either.
+    assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(disclosed.localBlob), false);
+    assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(disclosed.sessionBlob), false);
   } finally {
     await browser?.close();
     await fixture.close();
