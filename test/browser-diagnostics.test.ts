@@ -231,3 +231,61 @@ test("a loaded page whose action issues nothing still reads as never-requested (
     if (artifact) await rm(artifact, { force: true });
   }
 });
+
+test("when the first awaited step times out, the artifact still names it (#289)", async () => {
+  // @re1's round-3 P1: a marker placed only before the LAST action is never
+  // recorded if an earlier await is the one that fails — and the earlier await
+  // is the historical CI timeout. The artifact would then fall back to a
+  // whole-session summary with `awaiting: null`: unlabelled for precisely the
+  // failure being investigated.
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-diagnostics-first-await-test-"));
+  const roomId = "first-await-room";
+  await createRoom({ root, roomId, hostAlias: "host", briefBody: "First await fixture." });
+  await writeParticipants(root, roomId, [
+    { ...participant("host", "human", true, "tgl_first_await_host"), display_name: "Host" }
+  ]);
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const server = createRoomHttpServer({ root, roomId, baseUrl, rateLimitPerMinute: 1_000 });
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+  const browser = await chromium.launch();
+  let artifact = "";
+  try {
+    const page = await browser.newPage();
+    const diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.goto(`${baseUrl}/#token=tgl_first_await_host`);
+    await page.waitForSelector("text=First await fixture.");
+
+    // The readiness-style wait fails, and the later submit marker is never
+    // reached — exactly the CI shape.
+    diagnostics.beginAction("entry readiness (a selector that never appears)");
+    const failure = await page
+      .waitForSelector("text=this text never renders", { timeout: 1_000 })
+      .then(() => null)
+      .catch((error: unknown) => error);
+    assert.ok(failure !== null, "positive control: the first await must genuinely have failed");
+    artifact = await diagnostics.write("first-await-timeout", failure);
+
+    const report = JSON.parse(await readFile(artifact, "utf8")) as {
+      awaiting: string | null;
+      branches: { requestsIssued: number };
+      overall: { requestsIssued: number };
+    };
+    assert.equal(
+      report.awaiting,
+      "entry readiness (a selector that never appears)",
+      "the failing await must be named, not left null"
+    );
+    // And still scoped: the page's load traffic is outside this window.
+    assert.ok(report.overall.requestsIssued > 0, "the page must genuinely have loaded first");
+    assert.ok(
+      report.branches.requestsIssued < report.overall.requestsIssued,
+      "the window must exclude the baseline it opened after"
+    );
+  } finally {
+    await browser.close();
+    await closeServer(server);
+    if (artifact) await rm(artifact, { force: true });
+  }
+});

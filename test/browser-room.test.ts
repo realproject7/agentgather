@@ -204,6 +204,14 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
+    // Two windows (@re1, PR #295 round 3). The readiness wait is itself the
+    // historical 30s CI timeout, and if IT is what fails then a marker placed
+    // only before the submit never runs — the artifact falls back to a
+    // whole-session summary with `awaiting: null`, unlabelled for exactly the
+    // failure this instrument exists to classify. The window opens here, and a
+    // second one opens at the submit once readiness succeeds; `write()` takes the
+    // last marker, so whichever await fails is the one the artifact describes.
+    diagnostics?.beginAction("entry readiness (text=Ship the browser room safely.)");
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.fill("#message-text", "@reviewer duplicate guard");
