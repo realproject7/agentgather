@@ -734,11 +734,11 @@ function seedEntryFromBackup() {
     // exactly as it did before this existed.
     timeline.replaceChildren();
     state.seen.clear();
-    state.cursor = 0;
+    resetCursor();
     state.backupCursor = 0;
     return;
   }
-  state.cursor = highest;
+  seedCursorTo(highest);
   state.backupCursor = highest;
   // The restore is provisional until the room confirms it holds that head (#278).
   state.seedUnverified = true;
@@ -819,6 +819,33 @@ function bridgeHistoryToDashboard(messages) {
   });
 }
 
+// ---- the live cursor's one rule (#283) ----
+//
+// `state.cursor` is what the next poll asks from. It had FIVE writers under three
+// disciplines — reset, seed, bare assign, clamp — which is not an inconsistency but
+// an absent rule, and #283 would have added a sixth caller to it. The rule is: the
+// live cursor only ever moves FORWARD, except on an explicit reset. Each writer now
+// names which of the three things it is doing, so the next reader does not have to
+// infer it from the assignment.
+
+// Entry has nothing, or what we held turned out not to belong to this room: ask
+// from the beginning again.
+function resetCursor() {
+  state.cursor = 0;
+}
+
+// Entry restored a local copy: start from the highest id it actually holds.
+function seedCursorTo(id) {
+  state.cursor = id;
+}
+
+// A live message or poll batch arrived: move up to it, never back. This is what
+// makes a rewind — and an `undefined` from a response that carries no forward
+// cursor — unreachable by construction rather than by the wire contract alone.
+function advanceCursorTo(id) {
+  if (Number.isInteger(id) && id > state.cursor) state.cursor = id;
+}
+
 // #278 — a restored cursor must never sit ahead of the room. If the first poll
 // after a restore returns nothing, "nothing new" and "this backup belongs to a room
 // that no longer exists" look identical: a room recreated under the same name
@@ -851,7 +878,7 @@ function discardRestoredHistory() {
   timeline.replaceChildren();
   state.seen.clear();
   state.messagesById.clear();
-  state.cursor = 0;
+  resetCursor();
   state.backupCursor = 0;
   state.lastMessageTs = null;
   try {
@@ -902,7 +929,7 @@ async function pollMessages() {
     recordBackupBatch(fresh);
     bridgeHistoryToDashboard(fresh);
     updateLastMessage();
-    state.cursor = payload.next_since_id;
+    advanceCursorTo(payload.next_since_id);
     if (state.seedUnverified) {
       state.seedUnverified = false;
       // Only an empty first poll is ambiguous; anything returned proves the room's
@@ -1285,7 +1312,7 @@ async function submitMessage() {
   if (payload.message && !state.seen.has(payload.message.id)) {
     state.seen.add(payload.message.id);
     renderMessage(payload.message);
-    state.cursor = Math.max(state.cursor, payload.message.id);
+    advanceCursorTo(payload.message.id);
     emptyState.hidden = true;
     // Mirror the poll path so the rail "last message" KV reflects our own send
     // immediately (the poll skips this id since it is already in state.seen). (#121)

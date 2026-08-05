@@ -2799,3 +2799,70 @@ test("the room view offers a labelled route home and discloses no other room (#2
     await fixture.close();
   }
 });
+
+// #283 — the live cursor's rule, asserted on the artifact the data flow depends on:
+// the URL the NEXT poll actually issues. "The messages appeared" passes under a
+// rewind, under an `undefined` cursor, and under correct behaviour alike, so it
+// cannot test this. A hostile/buggy response carrying a LOWER forward cursor must
+// not move the client backwards — that rewind is what makes the next poll
+// re-download everything after it, the cost #278 removed.
+test("a poll response cannot rewind the live cursor (#283)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const sinceIds: string[] = [];
+    let rewriteNext = false;
+    await page.route(/\/messages(\?|$)/, async (route) => {
+      const url = new URL(route.request().url());
+      if (route.request().method() !== "GET") return route.continue();
+      sinceIds.push(url.searchParams.get("since_id") ?? "(none)");
+      const response = await route.fetch();
+      const payload = (await response.json()) as { next_since_id?: number };
+      if (rewriteNext) {
+        rewriteNext = false;
+        // The defect under test: a response claiming the cursor belongs further back.
+        payload.next_since_id = 1;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+    });
+
+    for (const text of ["first", "second", "third"]) {
+      await postMessage(fixture, fixture.reviewerToken, text);
+    }
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=third");
+
+    const beforeCount = sinceIds.length;
+    rewriteNext = true;
+    // Wait for the rewritten poll and the one after it.
+    await page.waitForFunction(
+      (n) => n < document.querySelectorAll("#timeline .message").length + 100,
+      beforeCount,
+      { timeout: 1000 }
+    ).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 7000));
+
+    const afterRewrite = sinceIds.slice(beforeCount);
+    assert.ok(afterRewrite.length >= 2, `expected polls after the rewrite, saw ${afterRewrite.length}`);
+    // The exact assertion: no poll after the rewrite asks from the rewound value.
+    assert.equal(
+      afterRewrite.includes("1"),
+      false,
+      `a poll rewound to since_id=1 — sequence after rewrite: ${afterRewrite.join(",")}`
+    );
+    // ...and it keeps asking from the highest id it actually holds.
+    assert.equal(afterRewrite.at(-1), "3", `expected the cursor to stay at 3, saw ${afterRewrite.at(-1)}`);
+    // The timeline is unchanged and un-duplicated by the hostile response.
+    const texts = await page.locator("#timeline .message .message-text").allInnerTexts();
+    assert.deepEqual(texts.filter((t) => ["first", "second", "third"].includes(t.trim())), [
+      "first",
+      "second",
+      "third"
+    ]);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
