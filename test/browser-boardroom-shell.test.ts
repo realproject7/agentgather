@@ -78,8 +78,76 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
     assert.match(await page.locator("#channel-rail").innerText(), /chat/);
     assert.match(await page.locator("#channel-rail").innerText(), /forum/);
 
-    // the rail carries no token text (metadata-only); token rides the href only.
+    // #276 — the rail is a persistent nav, so it must say WHICH room it belongs to,
+    // not only list channels. Without this a participant reading the sidebar has no
+    // indication of the room currently open.
+    assert.equal((await page.locator("#channel-rail .rail-head .room").textContent())?.trim(), "ag-project");
+    // ...and the channel area reflects that room: its channels, with the open one
+    // marked. The active mark is what makes "current" a claim rather than a list.
+    assert.equal(await page.locator("#channel-rail .channel-link.on").count(), 1);
+
+    // #276 — the rail must be token-free in its MARKUP, not merely in its visible
+    // text. The pre-existing check below reads `innerText`, which excludes
+    // attributes, so a credential sitting in an `href` passed it unseen — which is
+    // how the rail came to be described as token-free while every channel link
+    // carried the session token in its fragment.
+    const railHtml = (await page.locator("#channel-rail").innerHTML()) ?? "";
+    assert.equal(railHtml.includes(fixture.hostToken), false, "no token anywhere in the rail markup");
+    assert.equal(/tgl_|Bearer|token=|invite=|card=/i.test(railHtml), false, "no credential-shaped value in the rail");
+    const hrefs = await page.locator("#channel-rail a").evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLAnchorElement).getAttribute("href") ?? "")
+    );
+    assert.ok(hrefs.length > 0, "the rail rendered no links to check");
+    for (const href of hrefs) {
+      assert.equal(/token=|tgl_/i.test(href), false, `channel href carries a credential: ${href}`);
+    }
+    // ...and the navigation still authenticates without it: the target surface reads
+    // this tab's sessionStorage copy, which is why the URL never needed the token.
+    assert.equal(
+      await page.evaluate(() => window.sessionStorage.getItem("agentgather.token") !== null),
+      true,
+      "the tab-scoped token the rail relies on is present"
+    );
+
     assert.equal((await page.locator("#channel-rail").innerText()).includes(fixture.hostToken), false);
+
+    // #276 — OBSERVED fresh-tab behaviour, not the expected one (@head).
+    //
+    // Modifier-click is deliberately NOT used here: `Meta` is macOS-only and
+    // headless Chromium opens no popup for it, so that check timed out in CI while
+    // passing locally — a test that only runs on one machine proves nothing. This
+    // opens the same URL in a genuinely fresh tab, which is what a participant does
+    // by pasting a copied link and is the case that must hold everywhere.
+    const channelHref = await page.locator("#channel-rail a").first().getAttribute("href");
+    assert.ok(channelHref, "no channel link to open");
+    const freshUrl = new URL(channelHref, page.url()).toString();
+    assert.equal(/token=|tgl_/i.test(freshUrl), false, "a copied channel URL must carry no credential");
+
+    // A separate context, which shares no storage at all. That is strictly stronger
+    // than a new tab in the same profile: if the URL lands coherently with nothing
+    // inherited, it lands coherently in the weaker case too.
+    const freshContext = await browser.newContext();
+    const fresh = await freshContext.newPage();
+    await fresh.goto(freshUrl);
+    await fresh.waitForSelector("#room-title, .forum-shell, #auth-error", { timeout: 15000 });
+    const observed = await fresh.evaluate(() => ({
+      token: window.sessionStorage.getItem("agentgather.token"),
+      body: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 120)
+    }));
+    console.log(`[#276 OBSERVED fresh tab] sessionToken=${observed.token === null ? "ABSENT" : "PRESENT"}`);
+    console.log(`[#276 OBSERVED fresh tab] body=${JSON.stringify(observed.body)}`);
+    // What must hold on every browser: the tab lands in a COHERENT state — either
+    // authenticated, or explicitly asking for an invite — never blank or half
+    // rendered. Asserting the exact absence would pin a browser-version detail.
+    const asksForInvite = await fresh.locator("#auth-error:not([hidden])").isVisible().catch(() => false);
+    const authenticated = observed.token !== null;
+    assert.equal(
+      authenticated || asksForInvite,
+      true,
+      `fresh tab landed in neither state: token=${observed.token === null ? "absent" : "present"} body=${observed.body}`
+    );
+    await fresh.close();
+    await freshContext.close();
 
     // overflow-0 at desktop with the rail present
     assert.equal(

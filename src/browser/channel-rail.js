@@ -6,9 +6,11 @@
 // (forum.html). The two surfaces are reused unchanged — this module only adds
 // the rail + cross-surface navigation.
 //
-// No tokens are read from /boardroom (the payload is metadata-only). The
-// session's own token rides the URL fragment to reach the forum surface — the
-// same mechanism the forum surface already requires.
+// No tokens are read from /boardroom (the payload is metadata-only), and since
+// #276 none are written into the rail's URLs either: a channel link used to carry
+// the session token in its fragment, which kept it out of request logs but left a
+// bearer credential sitting in the rendered markup. Both target surfaces already
+// fall back to this tab's sessionStorage copy, so the credential was redundant.
 //
 // A legacy / single-channel room renders exactly as today: the rail stays
 // hidden, so the chat surface is visually unchanged (zero regression).
@@ -74,7 +76,7 @@ async function initRail(railEl) {
     // A non-#general chat channel is not usable yet → render it disabled and
     // route its selection to the not-active pane instead of the room-wide log.
     if (channel.type === "chat" && channel.id !== DEFAULT_CHANNEL_ID) {
-      list.append(disabledChatItem(channel, frame, token));
+      list.append(disabledChatItem(channel, frame));
       continue;
     }
     // The functional chat channel is #general; it stays active on the room
@@ -83,7 +85,7 @@ async function initRail(railEl) {
       ? channel.type === "forum" && channel.id === activeForum
       : channel.type === "chat" && channel.id === DEFAULT_CHANNEL_ID;
     const isActiveForum = active && channel.type === "forum";
-    const link = channelLink(channel, active, token, isActiveForum);
+    const link = channelLink(channel, active, isActiveForum);
     list.append(link);
     // Nest forum posts as children of the active forum channel (indent + caret).
     if (isActiveForum) {
@@ -144,10 +146,10 @@ function railGroup(label) {
   return group;
 }
 
-function channelLink(channel, active, token, isActiveForum = false) {
+function channelLink(channel, active, isActiveForum = false) {
   const link = document.createElement("a");
   link.className = active ? "channel-link on" : "channel-link";
-  link.href = channelHref(channel, token);
+  link.href = channelHref(channel);
   if (active) link.setAttribute("aria-current", "true");
   if (isActiveForum) link.id = "rail-active-forum";
 
@@ -188,7 +190,7 @@ function spanCls(className, text) {
 // A disabled (non-#general) chat channel: dimmed, a "soon" tag, not-allowed, and
 // not a navigable link. Selecting it opens the not-active pane rather than
 // routing into the room-wide log.
-function disabledChatItem(channel, frame, token) {
+function disabledChatItem(channel, frame) {
   const item = document.createElement("div");
   item.className = "channel-link disabled";
   item.setAttribute("role", "button");
@@ -199,7 +201,7 @@ function disabledChatItem(channel, frame, token) {
   glyph.setAttribute("aria-hidden", "true");
   item.append(glyph, spanCls("name", channel.name || channel.id), spanCls("soon", "soon"));
 
-  const open = () => showNotActivePane(channel, frame, token);
+  const open = () => showNotActivePane(channel, frame);
   item.addEventListener("click", open);
   item.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -212,7 +214,7 @@ function disabledChatItem(channel, frame, token) {
 
 // Replace the reused surface with a clear not-active pane (NOT the room-wide
 // log). The rail stays; the pane carries a "Go to #general" action.
-function showNotActivePane(channel, frame, token) {
+function showNotActivePane(channel, frame) {
   if (!frame) return;
   const surface = frame.querySelector(".room-shell, .forum-shell");
   if (surface) surface.style.display = "none";
@@ -224,14 +226,14 @@ function showNotActivePane(channel, frame, token) {
   }
   let pane = frame.querySelector(".not-active-pane");
   if (!pane) {
-    pane = buildNotActivePane(token);
+    pane = buildNotActivePane();
     frame.append(pane);
   }
   pane.querySelector(".na-name").textContent = channel.name || channel.id;
   pane.hidden = false;
 }
 
-function buildNotActivePane(token) {
+function buildNotActivePane() {
   const pane = document.createElement("section");
   pane.className = "not-active-pane";
 
@@ -264,8 +266,10 @@ function buildNotActivePane(token) {
   go.type = "button";
   go.className = "na-go";
   go.textContent = "Go to #general";
+  // Same rule as the channel links (#276): no credential in the navigation URL.
+  // The room surface reads this tab's `sessionStorage` copy on arrival.
   go.addEventListener("click", () => {
-    location.href = `./${token ? `#token=${encodeURIComponent(token)}` : ""}`;
+    location.href = "./";
   });
 
   body.append(icon, heading, detail, go);
@@ -273,13 +277,20 @@ function buildNotActivePane(token) {
   return pane;
 }
 
-// chat channel → the room surface; forum channel → the forum surface. The
-// session token rides the fragment so the target surface can authenticate, and
-// the dashboard hint + snapshot capability ride along (#247) so switching channels
-// does not silently stop the offline snapshot from being kept up to date.
-function channelHref(channel, token) {
+// chat channel → the room surface; forum channel → the forum surface.
+//
+// The session token is NOT in these URLs (#276). It used to ride the fragment, which
+// kept it out of request logs but still put a bearer credential in the rendered
+// markup — every channel link carried it as an `href` attribute, where any script
+// or extension on the page could read it off the DOM. It was never needed: both
+// target surfaces already prefer the fragment and fall back to this tab's
+// `sessionStorage` copy (`room.js:206`, `forum.js:20`), and a channel switch is
+// same-origin, same-tab navigation, so that copy is already there.
+//
+// The dashboard hint + snapshot capability still ride along (#247) so switching
+// channels does not silently stop the offline snapshot being kept current.
+function channelHref(channel) {
   const parts = [];
-  if (token) parts.push(`token=${encodeURIComponent(token)}`);
   if (ENTRY_SNAPSHOT) parts.push(`snapshot=${encodeURIComponent(ENTRY_SNAPSHOT)}`);
   const fragment = parts.length > 0 ? `#${parts.join("&")}` : "";
   const dashboard = ENTRY_DASHBOARD ? `dashboard=${encodeURIComponent(ENTRY_DASHBOARD)}` : "";

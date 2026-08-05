@@ -2672,3 +2672,130 @@ test("a room opened by its own URL still contributes history to the dashboard (#
     await fixture.close();
   }
 });
+
+// #276 — the room view must offer an explicit, labelled route back to the dashboard
+// however the room was opened, and it must NOT gain the dashboard's inventory of
+// other rooms. Those two are one ticket: the route home is what makes the missing
+// in-room rooms list acceptable, and the origin silo is why that list stays absent.
+test("the room view offers a labelled route home and discloses no other room (#276)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const dashboard = "http://127.0.0.1:8934/";
+
+    // Opened FROM the dashboard: the route home is present and says where it goes.
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboard)}#token=${fixture.hostToken}`);
+    await page.waitForSelector("#dashboard-home:not([hidden])");
+    const home = page.locator("#dashboard-home");
+    assert.equal(await home.getAttribute("href"), dashboard);
+    assert.match((await home.locator(".home-label").textContent()) ?? "", /dashboard/i);
+    assert.match((await home.getAttribute("aria-label")) ?? "", /dashboard/i);
+
+    // Opened by its own URL — an invite link or bookmark, which carries no
+    // ?dashboard=. The route home must still be there (#279's remembered address).
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("#dashboard-home:not([hidden])");
+    assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboard);
+
+    // The disclosure proof @head required. This origin must never learn about any
+    // room but its own. A host that could read the participant's full inventory
+    // would learn every other room they are in — the reason an acceptance criterion
+    // was declined, so it is asserted rather than argued.
+    //
+    // Checked by ORIGIN rather than by pattern: matching only loopback addresses
+    // would miss a tunnelled or remote room entirely, which is exactly the room
+    // whose disclosure would matter most (@re1).
+    await postMessage(fixture, fixture.reviewerToken, "a line in this room");
+    await page.waitForSelector("text=a line in this room");
+
+    const allowed = new Set([new URL(fixture.baseUrl).origin, new URL(dashboard).origin]);
+    const sweep = async (): Promise<Array<{ surface: string; urls: string[]; foreign: string[] }>> => {
+      const blobs = await page.evaluate(() => {
+        const dump = (store: Storage): string =>
+          Object.keys(store)
+            .map((key) => `${key}=${store.getItem(key) ?? ""}`)
+            .join("\n");
+        return {
+          localStorage: dump(window.localStorage),
+          sessionStorage: dump(window.sessionStorage),
+          DOM: document.documentElement?.outerHTML ?? ""
+        };
+      });
+      return Object.entries(blobs).map(([surface, blob]) => {
+        const urls = [...new Set(blob.match(/https?:\/\/[^\s"'<>\\)]+/g) ?? [])];
+        return {
+          surface,
+          urls,
+          foreign: urls.filter((raw) => {
+            try {
+              return !allowed.has(new URL(raw).origin);
+            } catch {
+              return false;
+            }
+          })
+        };
+      });
+    };
+
+    // An absence assertion passes both when the invariant holds and when the
+    // instrument is not recording (@head). So each surface is proved twice: it is
+    // shown to capture a planted foreign origin, and shown clean once it is removed.
+    for (const surface of ["localStorage", "sessionStorage", "DOM"] as const) {
+      const planted = "https://room.example.com/some-other-room";
+      await page.evaluate(
+        ({ where, url }) => {
+          if (where === "localStorage") window.localStorage.setItem("__probe", url);
+          if (where === "sessionStorage") window.sessionStorage.setItem("__probe", url);
+          if (where === "DOM") {
+            const a = document.createElement("a");
+            a.id = "__probe";
+            a.href = url;
+            document.body.append(a);
+          }
+        },
+        { where: surface, url: planted }
+      );
+      const seeded = (await sweep()).find((entry) => entry.surface === surface);
+      // positive control: the matcher actually reads this surface at all.
+      assert.ok((seeded?.urls.length ?? 0) > 0, `${surface}: the sweep captured no URLs — the instrument is blind`);
+      // negative control: the reject branch runs and names what it rejected.
+      assert.deepEqual(seeded?.foreign, [planted], `${surface}: a planted foreign origin was not rejected`);
+      await page.evaluate((where) => {
+        if (where === "localStorage") window.localStorage.removeItem("__probe");
+        if (where === "sessionStorage") window.sessionStorage.removeItem("__probe");
+        if (where === "DOM") document.getElementById("__probe")?.remove();
+      }, surface);
+    }
+
+    // With the instrument proved on every surface, the real assertion means something.
+    for (const entry of await sweep()) {
+      assert.deepEqual(
+        entry.foreign,
+        [],
+        `${entry.surface} discloses an origin that is neither this room nor the dashboard`
+      );
+    }
+
+    // Every remembered room row belongs to THIS origin — nothing from another host.
+    const joinedBaseUrls = await page.evaluate(() => {
+      const joined = JSON.parse(window.localStorage.getItem("agentgather.joinedRooms") ?? '{"rooms":[]}') as {
+        rooms: Array<{ baseUrl?: string }>;
+      };
+      return (joined.rooms ?? []).map((room) => room.baseUrl ?? "");
+    });
+    for (const baseUrl of joinedBaseUrls) {
+      assert.equal(baseUrl.startsWith(fixture.baseUrl), true, `foreign room disclosed to this origin: ${baseUrl}`);
+    }
+
+    // The dashboard's own stores must not have been mirrored here either.
+    const finalBlobs = await sweep();
+    for (const entry of finalBlobs) {
+      assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(entry.urls.join("\n")), false);
+    }
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});

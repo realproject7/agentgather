@@ -221,7 +221,13 @@ async function init() {
 
 function hydrateDashboardHome() {
   if (!dashboardHome || !brandStatic) return;
-  const dashboard = dashboardUrlFromQuery();
+  // The route home must exist however this room was opened (#276) — an invite
+  // link and a bookmark are the common cases, and neither carries `?dashboard=`.
+  // `dashboardTarget` falls back to the address the dashboard itself supplied on
+  // an earlier open (#279), so a direct open is no longer stranded. A room this
+  // device has never opened from a dashboard still has none to offer, and the
+  // affordance stays hidden rather than guessing one.
+  const dashboard = dashboardTarget();
   if (dashboard === null) return;
   dashboardHome.href = dashboard;
   dashboardHome.hidden = false;
