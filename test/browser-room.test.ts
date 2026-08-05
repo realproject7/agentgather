@@ -356,7 +356,11 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
     const home = page.locator("#dashboard-home");
     await home.waitFor();
     assert.equal(await home.isVisible(), true);
-    assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788/");
+    // #299 — the canonical ORIGIN, not `new URL(raw).toString()`. The old
+    // expectation carried the trailing slash `toString()` adds, which is the same
+    // pass-through that let a path, a query and a `#token=` fragment reach this
+    // href from a stored value.
+    assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788");
     assert.equal(await page.locator("#brand-static").isHidden(), true);
   } finally {
     await browser.close();
@@ -2700,12 +2704,19 @@ test("the room view offers a labelled route home and discloses no other room (#2
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     const dashboard = "http://127.0.0.1:8934/";
+    // #299 — the route home renders the CANONICAL ORIGIN of the remembered
+    // address, not the address as supplied. `?dashboard=` is attacker-influenceable
+    // and is persisted, so the path/query/fragment it may carry must not survive
+    // into an href the participant is invited to click. `#276`'s "the route home
+    // exists and says where it goes" is unchanged; what it points at is now
+    // canonical.
+    const dashboardOrigin = new URL(dashboard).origin;
 
     // Opened FROM the dashboard: the route home is present and says where it goes.
     await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboard)}#token=${fixture.hostToken}`);
     await page.waitForSelector("#dashboard-home:not([hidden])");
     const home = page.locator("#dashboard-home");
-    assert.equal(await home.getAttribute("href"), dashboard);
+    assert.equal(await home.getAttribute("href"), dashboardOrigin);
     assert.match((await home.locator(".home-label").textContent()) ?? "", /dashboard/i);
     assert.match((await home.getAttribute("aria-label")) ?? "", /dashboard/i);
 
@@ -2713,7 +2724,7 @@ test("the room view offers a labelled route home and discloses no other room (#2
     // ?dashboard=. The route home must still be there (#279's remembered address).
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await page.waitForSelector("#dashboard-home:not([hidden])");
-    assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboard);
+    assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboardOrigin);
 
     // The disclosure proof @head required. This origin must never learn about any
     // room but its own. A host that could read the participant's full inventory
@@ -3210,6 +3221,223 @@ test("show earlier is withdrawn with a stated reason while the host is unreachab
       .map((line) => line.trim())
       .filter((line) => /^o\d+$/.test(line));
     assert.deepEqual(texts, ["o1", "o2", "o3", "o4", "o5", "o6"]);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #290 — a channel link carries no credential (#288 working as designed), so a
+// cmd-clicked tab lands on `#auth-error`. "Ask the host for a browser invite URL"
+// is only true for an arrival that has no way in; a device that already remembers
+// its dashboard has one, because the dashboard reopens rooms through
+// `/joined-rooms/open` with the token held server-side.
+//
+// Both branches are asserted, and the no-dashboard branch is asserted BYTE-FOR-BYTE
+// against today's copy — "a route did not appear" would also pass if the pane had
+// been rewritten, and that participant must not be pointed at a dashboard they do
+// not have.
+const AUTH_ERROR_COPY =
+  "This room needs an invite link or Attend Card from the host. Ask the host for a browser invite URL.";
+
+test("an uncredentialed arrival is offered its remembered dashboard, and only then (#290)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+
+    // --- Branch A: nothing remembered. Today's pane, unchanged. ---
+    const bare = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await bare.goto(fixture.baseUrl);
+    await bare.waitForSelector('.room-shell[data-state="auth-error"]');
+    assert.equal(
+      (await bare.locator("#auth-error p").first().innerText()).trim(),
+      AUTH_ERROR_COPY,
+      "the invite copy must stay byte-for-byte where it is the true advice"
+    );
+    assert.equal(
+      await bare.locator("#auth-dashboard-route").isVisible(),
+      false,
+      "a participant with no remembered dashboard was offered one anyway"
+    );
+    assert.equal(
+      await bare.locator("#auth-dashboard-link").isVisible(),
+      false,
+      "the route element must be inert, not merely unstyled, with nothing remembered"
+    );
+    await bare.close();
+
+    // --- Branch B: this device already knows where its dashboard lives. ---
+    // Seeded the way the product seeds it — the dashboard supplying `?dashboard=`
+    // on an earlier open (#279) — rather than by writing localStorage directly, so
+    // the test exercises the real path into `DASHBOARD_KEY`.
+    const dashboardUrl = `http://127.0.0.1:${await getFreePort()}/`;
+    const known = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await known.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboardUrl)}#token=${fixture.hostToken}`);
+    await known.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(
+      await known.evaluate(() => window.localStorage.getItem("agentgather.dashboard")),
+      new URL(dashboardUrl).origin,
+      "precondition: the dashboard ORIGIN is what gets remembered for this origin"
+    );
+
+    // The uncredentialed arrival: same origin, no fragment, no session token —
+    // exactly what a cmd-clicked channel link produces.
+    await known.evaluate(() => window.sessionStorage.clear());
+    await known.goto(fixture.baseUrl);
+    await known.waitForSelector('.room-shell[data-state="auth-error"]');
+
+    assert.equal(
+      await known.locator("#auth-dashboard-route").isVisible(),
+      true,
+      "a device with a remembered dashboard was still told to ask the host"
+    );
+    assert.equal(
+      await known.locator("#auth-dashboard-link").getAttribute("href"),
+      new URL(dashboardUrl).origin,
+      "the route must point at the validated dashboard origin"
+    );
+
+    // The pane's only action, so on a narrow screen it must be a thumb-sized
+    // target by design rather than by wrapping — the label happens to run onto
+    // two lines at 390, which would carry the height on its own until someone
+    // shortened the copy. Measured as rendered, at both widths the project checks.
+    for (const width of [1280, 390]) {
+      await known.setViewportSize({ width, height: 820 });
+      await known.waitForTimeout(150);
+      assert.equal(
+        await known.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        true,
+        `the auth pane overflows horizontally at ${width}`
+      );
+      if (width === 390) {
+        const box = await known.locator("#auth-dashboard-link").boundingBox();
+        assert.ok(
+          box !== null && box.height >= 44,
+          `the route tap target is ${box?.height ?? "unmeasurable"}px at 390, below the 44px minimum`
+        );
+      }
+    }
+    await known.setViewportSize({ width: 1280, height: 820 });
+    // The advice that was already there stays there — the route is offered
+    // alongside it, per the ticket, not in place of it.
+    assert.equal(
+      (await known.locator("#auth-error p").first().innerText()).trim(),
+      AUTH_ERROR_COPY
+    );
+
+    // The whole point of #288: no credential may reach the URL, the markup, or
+    // anything persisted. Asserted over the rendered pane and the live href, not
+    // over the source.
+    const paneHtml = await known.locator("#auth-error").innerHTML();
+    const href = (await known.locator("#auth-dashboard-link").getAttribute("href")) ?? "";
+    for (const [label, subject] of [["pane markup", paneHtml], ["route href", href]] as const) {
+      assert.doesNotMatch(subject, /host-browser-|tgl_|Bearer|#token=|[?&]token=/i, `${label} carries a credential`);
+      assert.equal(subject.includes(fixture.hostToken), false, `${label} carries the participant token`);
+    }
+    assert.equal(known.url().includes(fixture.hostToken), false, "the arrival URL carries a credential");
+    assert.equal(
+      (await known.evaluate(() => JSON.stringify(window.localStorage))).includes(fixture.hostToken),
+      false,
+      "the token must never be persisted by this path"
+    );
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #290 — the defect the parallel-branch collision surfaced, found by the other
+// QuadWork instance's @re2 and fixed there by its @dev.
+//
+// `validLoopbackDashboardUrl` checks protocol and hostname, then returns
+// `url.toString()` — so path, query and FRAGMENT survive validation. The stored
+// `agentgather.dashboard` value comes out of `localStorage`, which anything with
+// script access to this origin can write, so a remembered value carrying
+// `#token=…` clears the validator and would land a live credential in rendered
+// markup: the exposure #288 removed from the rail, reintroduced by the feature
+// whose own invariant forbids it.
+//
+// The assertion is an EQUALITY against the expected origin, deliberately. A
+// "does not contain the token" check here also passes when the element is
+// missing, when the pane never rendered, and when the href is empty — three ways
+// to be green while proving nothing.
+test("a remembered dashboard carrying a credential is reduced to its origin before it reaches markup (#290)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const dashboardOrigin = `http://127.0.0.1:${await getFreePort()}`;
+    // Every carrier the validator lets through, on one value: path, query and
+    // fragment. The fragment is this project's own invite-token carrier.
+    const poisoned = `${dashboardOrigin}/dash/inner?token=${fixture.hostToken}&x=1#token=${fixture.hostToken}`;
+
+    await page.goto(fixture.baseUrl);
+    await page.waitForSelector('.room-shell[data-state="auth-error"]');
+    // Written the way an attacker or a stale write would leave it — straight into
+    // the store the room reads without a token.
+    await page.evaluate((value) => window.localStorage.setItem("agentgather.dashboard", value), poisoned);
+    await page.reload();
+    await page.waitForSelector('.room-shell[data-state="auth-error"]');
+
+    assert.equal(
+      await page.locator("#auth-dashboard-route").isVisible(),
+      true,
+      "a validated loopback address must still offer a route once reduced"
+    );
+    assert.equal(
+      await page.locator("#auth-dashboard-link").getAttribute("href"),
+      dashboardOrigin,
+      "the href must equal the origin exactly — no path, no query, no fragment"
+    );
+
+    // Belt and braces on the two surfaces the invariant names, over the rendered
+    // pane rather than the source.
+    const paneHtml = await page.locator("#auth-error").innerHTML();
+    assert.equal(paneHtml.includes(fixture.hostToken), false, "the token reached the rendered markup");
+    assert.doesNotMatch(paneHtml, /#token=|[?&]token=/i, "a token carrier reached the rendered markup");
+
+    // #299 — the SAME stored value, on the NORMAL room view. `#dashboard-home`
+    // (#279) is the older consumer, it shipped in v0.2.1–v0.2.3, and it renders on
+    // every room page rather than only this pane — the wider half of one defect.
+    // It had no coverage at all, which is why it survived three releases.
+    // Seeded through an init script so the room gets ONE clean load with the value
+    // already in place. Setting it and then navigating to `#token=…` would differ
+    // from the current URL only by FRAGMENT — a same-document navigation that never
+    // re-runs `init()`, so `hydrateDashboardHome` would not run and this would
+    // assert against a topbar that was hydrated before the value existed.
+    const entered = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await entered.addInitScript((value) => {
+      window.localStorage.setItem("agentgather.dashboard", value as string);
+    }, poisoned);
+    await entered.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await entered.waitForSelector("#dashboard-home:not([hidden])");
+    assert.equal(
+      await entered.locator("#dashboard-home").getAttribute("href"),
+      dashboardOrigin,
+      "the topbar route home must equal the origin exactly — path, query and fragment dropped"
+    );
+    const topbarHtml = await entered.locator(".topbar").innerHTML();
+    assert.equal(topbarHtml.includes(fixture.hostToken), false, "the token reached the topbar markup");
+    assert.doesNotMatch(topbarHtml, /#token=|[?&]token=/i, "a token carrier reached the topbar markup");
+    await entered.close();
+
+    // An address that cannot be parsed is not a route: no element, not a broken
+    // href that fails on click.
+    await page.evaluate(() => window.localStorage.setItem("agentgather.dashboard", "http://127.0.0.1:not-a-port/%%"));
+    await page.reload();
+    await page.waitForSelector('.room-shell[data-state="auth-error"]');
+    assert.equal(
+      await page.locator("#auth-dashboard-route").isVisible(),
+      false,
+      "an unparsable stored address must offer no route at all"
+    );
+    assert.equal(
+      (await page.locator("#auth-error p").first().innerText()).trim(),
+      AUTH_ERROR_COPY,
+      "and the pane falls back to the copy that is then the true advice"
+    );
   } finally {
     await browser?.close();
     await fixture.close();

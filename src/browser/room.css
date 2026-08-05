@@ -328,6 +328,42 @@ h1::before {
   line-height: 1.5;
 }
 
+/* #290 — the way out, under the advice that does not apply to this arrival. It
+   reads as a route rather than a call to action: the accent belongs to the link,
+   not to the whole line, because the sentence before it is still the honest
+   description of why the room is closed to this tab. */
+.auth-error .auth-route {
+  margin-top: 12px;
+}
+
+.auth-error .auth-route[hidden] {
+  display: none;
+}
+
+.auth-error .auth-route a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth-error .auth-route a:hover,
+.auth-error .auth-route a:focus-visible {
+  color: var(--accent-strong);
+}
+
+/* #290 — this link is the only action in the pane, so on a narrow screen it must
+   be a thumb-sized target by design. It measures 46px at 390 today only because
+   the label happens to wrap onto two lines; shortening the copy would silently
+   drop it under the minimum. Same 44px floor, same query and same reason as the
+   roster's controls above. */
+@media (max-width: 820px) {
+  .auth-error .auth-route a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
 .room-shell[data-state="auth-error"] .brief-panel,
 .room-shell[data-state="auth-error"] .room-main,
 .room-shell[data-state="auth-error"] .composer,
