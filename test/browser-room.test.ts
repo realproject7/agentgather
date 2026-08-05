@@ -2866,3 +2866,323 @@ test("a poll response cannot rewind the live cursor (#283)", async () => {
     await fixture.close();
   }
 });
+
+// #283 — the route to history older than the local backup holds.
+//
+// A warm entry (#278) renders the newest slice the backup kept and asks the host
+// only for what is new. Everything the #211 cap dropped is still on the host, and
+// before this there was no way to ask for it: `since_id` is a strictly forward
+// cursor, so the only expressible request was `since_id=0` — a refetch of the whole
+// history, the exact cost #278 removed.
+//
+// This asserts the three artifacts AMENDMENT 2 requires, because "the older
+// messages appeared" passes under a rewound cursor, under an `undefined` cursor and
+// under correct behaviour alike:
+//
+//   1. the RANGE each backward read actually requests (no refetch of what is shown);
+//   2. the request URL the NEXT poll issues — which is `state.cursor`'s value in the
+//      only form a module-private variable has outside the page, and the form the
+//      defects would actually show up in (`since_id=6`, or `since_id=undefined`);
+//   3. the exact set and order of messages on screen.
+test("show earlier loads host history older than the backup without refetching or moving the live cursor (#283)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // 60 messages, posted by the host: a room whose history outruns what a trimmed
+    // backup can hold. (Host, not the agent participant, so the loop guard — which
+    // only counts agent posts — never enters this fixture.)
+    for (let n = 1; n <= 60; n += 1) {
+      await postMessage(fixture, fixture.hostToken, `m${n}`);
+    }
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const ids = new Map(hosted.map((message) => [message.text, message.id]));
+    const kept = hosted.slice(-5);
+    assert.deepEqual(kept.map((message) => message.text), ["m56", "m57", "m58", "m59", "m60"]);
+
+    // Seed the warm entry: this device holds ONLY the newest five. #211's cap in
+    // miniature — the same shape a real 250-message cap has on a large room.
+    await page.addInitScript(
+      ([key, messages]) => {
+        window.localStorage.setItem(key as string, JSON.stringify({ messages }));
+      },
+      [
+        `agentgather.backup.${fixture.roomId}`,
+        kept.map((message) => ({
+          id: message.id,
+          from: message.from,
+          ts: message.ts,
+          type: "message",
+          text: message.text
+        }))
+      ] as const
+    );
+
+    const queries: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "GET") return;
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
+    });
+
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=m60");
+    const rendered = async () =>
+      (await page.locator("#timeline .message .message-text").allInnerTexts())
+        .map((line) => line.trim())
+        .filter((line) => /^m\d+$/.test(line));
+    // Waits for AT LEAST n so the exact set is asserted by the deepEqual below
+    // rather than by a timeout: a defect that renders too many rows must fail with
+    // the diff that names it, not with "waiting".
+    const waitForCount = (n: number) =>
+      page.waitForFunction(
+        (want) =>
+          [...document.querySelectorAll("#timeline .message .message-text")].filter((node) =>
+            /^m\d+$/.test((node.textContent ?? "").trim())
+          ).length >= want,
+        n,
+        { timeout: 10_000 }
+      );
+
+    // Warm entry holds exactly what the backup held — the host's older history is
+    // genuinely not on screen, which is what the control exists to reach.
+    await waitForCount(5);
+    assert.deepEqual(await rendered(), ["m56", "m57", "m58", "m59", "m60"]);
+    assert.match(
+      (await page.locator(".restored-divider").textContent()) ?? "",
+      new RegExp(`messages #${ids.get("m56")}–#${ids.get("m60")}\\. Earlier history isn't saved here and isn't shown`),
+      "the divider states the bound it actually holds"
+    );
+    assert.equal(await page.locator("#show-earlier").isVisible(), true, "the route exists on a trimmed restore");
+
+    // The control is on the timeline at both widths the ticket names, in each of
+    // the two states it is actually seen in (offered here, exhausted at the end).
+    const assertFits = async (label: string) => {
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 820 });
+        await page.waitForTimeout(150);
+        assert.equal(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          true,
+          `no horizontal overflow at ${width} (${label})`
+        );
+      }
+      await page.setViewportSize({ width: 1280, height: 820 });
+      await page.waitForTimeout(150);
+    };
+    await assertFits("control offered");
+
+    // The cursor the room is polling from, read where it is observable: the URL.
+    const pollsBefore = queries.filter((query) => query.includes("since_id="));
+    assert.equal(pollsBefore[0], `?since_id=${ids.get("m60")}`, "entry resumes from the restored head (#278)");
+
+    // ---- first page ----
+    await page.locator("#show-earlier").click();
+    await waitForCount(55);
+    // THE range assertion: backwards from the oldest id ON SCREEN, bounded by a
+    // limit the client always states. Nothing already rendered is inside it.
+    assert.equal(
+      queries.at(-1),
+      `?before_id=${ids.get("m56")}&limit=50`,
+      `expected a bounded backward read, saw ${queries.at(-1)}`
+    );
+    assert.deepEqual(
+      await rendered(),
+      Array.from({ length: 55 }, (_, i) => `m${i + 6}`),
+      "the page joins above the restored slice, in order, with no duplicate and no gap"
+    );
+    // More remains, so the route stays open and says nothing about being done.
+    assert.equal(await page.locator("#show-earlier").isVisible(), true);
+    // The divider no longer claims earlier history isn't shown — it is shown.
+    const dividerAfter = (await page.locator(".restored-divider").textContent()) ?? "";
+    assert.match(dividerAfter, /Earlier messages above were loaded from the host/);
+    assert.equal(/isn't shown/.test(dividerAfter), false, "the stale claim is gone, not appended to");
+    assert.match(
+      dividerAfter,
+      new RegExp(`messages #${ids.get("m56")}–#${ids.get("m60")}`),
+      "the restored range is still named, so the two classes never blur"
+    );
+
+    // ---- second page: the remainder, and the host stating that it IS the end ----
+    await page.locator("#show-earlier").click();
+    await waitForCount(60);
+    assert.equal(queries.at(-1), `?before_id=${ids.get("m6")}&limit=50`, "the second page starts where the first ended");
+    assert.deepEqual(
+      await rendered(),
+      Array.from({ length: 60 }, (_, i) => `m${i + 1}`),
+      "the whole history, once, in order"
+    );
+    await page.waitForSelector("#show-earlier", { state: "hidden" });
+    assert.match((await page.locator(".earlier-note").textContent()) ?? "", /Beginning of this room's history/);
+    await assertFits("history exhausted");
+
+    // DISPLAY-ONLY, which the ticket requires this PR to decide and state: the older
+    // pages are not written into the bounded local backup. #211's caps hold the
+    // NEWEST slice deliberately, so extending the store with history would evict
+    // newer messages to keep older ones — and raising those caps is out of scope.
+    const stored = await page.evaluate((key) => {
+      const raw = window.localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as { messages: Array<{ text: string }> }).messages.map((m) => m.text) : null;
+    }, `agentgather.backup.${fixture.roomId}`);
+    assert.deepEqual(stored, ["m56", "m57", "m58", "m59", "m60"], "the local backup is unchanged by a backward read");
+
+    // No request in the entire session refetched from the start: that is the cost
+    // #278 removed and this feature had to avoid reintroducing.
+    assert.deepEqual(queries.filter((query) => query.includes("since_id=0")), []);
+
+    // ---- the live cursor ----
+    // Both backward reads are behind us. The next poll must still ask from the
+    // restored head: not rewound to an older page's id, not `undefined` from a
+    // response that carries no forward cursor. This is the value of `state.cursor`.
+    const settled = queries.length;
+    const deadline = Date.now() + 10_000;
+    while (queries.length === settled && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const after = queries.slice(settled);
+    assert.ok(after.length >= 1, "expected at least one poll after the backward reads");
+    for (const query of after) {
+      assert.equal(query, `?since_id=${ids.get("m60")}`, `a poll after the backward reads asked ${query}`);
+    }
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #283 — a closed room still serves its read-only log (`getMessages` never required
+// the room to be open), while the client has deliberately stopped every timer
+// (#241). "Show earlier" there must be a ONE-OFF fetch that leaves polling stopped,
+// which is also why it does not borrow the poll's machinery.
+test("show earlier in a closed room is a one-off fetch that leaves polling stopped (#283)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    for (let n = 1; n <= 8; n += 1) {
+      await postMessage(fixture, fixture.hostToken, `c${n}`);
+    }
+    await fetch(`${fixture.baseUrl}/close`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fixture.hostToken}`, "Content-Type": "application/json" }
+    });
+    const hosted = (await readMessages(fixture.root, fixture.roomId)).filter((message) => /^c\d+$/.test(message.text));
+    const kept = hosted.slice(-2);
+    assert.deepEqual(kept.map((message) => message.text), ["c7", "c8"]);
+    const oldestKept = kept[0]!.id;
+    await page.addInitScript(
+      ([key, messages]) => {
+        window.localStorage.setItem(key as string, JSON.stringify({ messages }));
+      },
+      [
+        `agentgather.backup.${fixture.roomId}`,
+        kept.map((message) => ({
+          id: message.id,
+          from: message.from,
+          ts: message.ts,
+          type: "message",
+          text: message.text
+        }))
+      ] as const
+    );
+
+    const queries: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "GET") return;
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
+    });
+
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("#history-strip:not([hidden])");
+    await page.waitForSelector("text=c8");
+    // A closed room loads its history once and leaves no timer (#241): let the poll
+    // interval pass and confirm nothing else is asking.
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    const beforeClick = queries.length;
+    assert.equal(await page.locator("#composer").isHidden(), true, "still a closed room");
+    assert.equal(await page.locator("#show-earlier").isVisible(), true, "the host's log is still readable");
+
+    await page.locator("#show-earlier").click();
+    await page.waitForSelector("text=c1");
+    assert.equal(queries.length, beforeClick + 1, "exactly one request — the backward read");
+    assert.equal(queries.at(-1), `?before_id=${oldestKept}&limit=50`);
+
+    // The one-off fetch did not restart anything: after another poll interval the
+    // request count is unchanged.
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    assert.equal(queries.length, beforeClick + 1, `polling restarted: ${queries.slice(beforeClick).join(" ")}`);
+    const texts = (await page.locator("#timeline .message .message-text").allInnerTexts())
+      .map((line) => line.trim())
+      .filter((line) => /^c\d+$/.test(line));
+    assert.deepEqual(texts, ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #283 — older history lives only on the host, so an unreachable host means the
+// route is genuinely gone. The control must say that where the reader is looking
+// rather than offering a click that silently does nothing.
+test("show earlier is withdrawn with a stated reason while the host is unreachable (#283)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    for (let n = 1; n <= 6; n += 1) {
+      await postMessage(fixture, fixture.hostToken, `o${n}`);
+    }
+    const hosted = (await readMessages(fixture.root, fixture.roomId)).filter((message) => /^o\d+$/.test(message.text));
+    const kept = hosted.slice(-2);
+    await page.addInitScript(
+      ([key, messages]) => {
+        window.localStorage.setItem(key as string, JSON.stringify({ messages }));
+      },
+      [
+        `agentgather.backup.${fixture.roomId}`,
+        kept.map((message) => ({
+          id: message.id,
+          from: message.from,
+          ts: message.ts,
+          type: "message",
+          text: message.text
+        }))
+      ] as const
+    );
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=o6");
+    await page.waitForSelector("#show-earlier:not([hidden])");
+
+    await page.route(/\/(messages|status)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host tunnel did not respond" })
+      })
+    );
+    await page.waitForSelector('#room-banner[data-kind="degraded"]');
+    await page.waitForSelector("#show-earlier", { state: "hidden" });
+    assert.match(
+      (await page.locator(".earlier-note").textContent()) ?? "",
+      /Earlier history is on the host — unavailable while it's offline/
+    );
+
+    // Recovery: the host answers again and the route comes back with it.
+    await page.unroute(/\/(messages|status)(\?|$)/);
+    await page.waitForSelector("#room-banner", { state: "hidden" });
+    await page.waitForSelector("#show-earlier:not([hidden])");
+    await page.locator("#show-earlier").click();
+    await page.waitForSelector("text=o1");
+    const texts = (await page.locator("#timeline .message .message-text").allInnerTexts())
+      .map((line) => line.trim())
+      .filter((line) => /^o\d+$/.test(line));
+    assert.deepEqual(texts, ["o1", "o2", "o3", "o4", "o5", "o6"]);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});

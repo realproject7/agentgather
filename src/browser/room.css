@@ -759,6 +759,42 @@ h1::before {
   text-align: center;
 }
 
+/* #283 — the route to host history older than this device's backup holds. It sits
+   at the top of the timeline and reads as part of the same divider rail: this is an
+   explicit request for something the view already says it does not have, not a call
+   to action competing with the room. Muted by default, accent only on hover/focus —
+   the one accent use here, and only while the pointer or keyboard is on it. */
+.earlier-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--chip);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.earlier-btn:hover,
+.earlier-btn:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+.earlier-btn[disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Why the control cannot be used, in the place the reader is already looking:
+   loading, exhausted, offline, or a failed attempt. */
+.earlier-history .earlier-note {
+  color: var(--faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
 .system-pill::before,
 .system-pill::after {
   content: "";
