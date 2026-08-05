@@ -86,7 +86,26 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
     // marked. The active mark is what makes "current" a claim rather than a list.
     assert.equal(await page.locator("#channel-rail .channel-link.on").count(), 1);
 
-    // the rail carries no token text (metadata-only); token rides the href only.
+    // #276 — the rail must be token-free in its MARKUP, not merely in its visible
+    // text. `innerText` excludes attributes, so a credential sitting in an `href`
+    // passed the old check unseen; assert the DOM and every href directly.
+    const railHtml = (await page.locator("#channel-rail").innerHTML()) ?? "";
+    assert.equal(railHtml.includes(fixture.hostToken), false, "no token anywhere in the rail markup");
+    assert.equal(/tgl_|Bearer|token=|invite=|card=/i.test(railHtml), false, "no credential-shaped value in the rail");
+    const hrefs = await page.locator("#channel-rail a").evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLAnchorElement).getAttribute("href") ?? "")
+    );
+    assert.ok(hrefs.length > 0, "the rail rendered no links to check");
+    for (const href of hrefs) {
+      assert.equal(/token=|tgl_/i.test(href), false, `channel href carries a credential: ${href}`);
+    }
+    // ...and the navigation still authenticates: the target surface reads this
+    // tab's sessionStorage copy, which is why the URL never needed the token.
+    assert.equal(
+      await page.evaluate(() => window.sessionStorage.getItem("agentgather.token") !== null),
+      true,
+      "the tab-scoped token the rail relies on is present"
+    );
     assert.equal((await page.locator("#channel-rail").innerText()).includes(fixture.hostToken), false);
 
     // overflow-0 at desktop with the rail present
