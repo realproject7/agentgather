@@ -2967,6 +2967,19 @@ test("show earlier loads host history older than the backup without refetching o
           true,
           `no horizontal overflow at ${width} (${label})`
         );
+        // On a narrow screen a thumb is the only way to press this, and it is the
+        // only route to history the device does not hold — so it carries the same
+        // 44px floor the roster's controls already do. Measured as rendered, not
+        // read off the stylesheet: padding, line-height and font-size compose into
+        // the height, so only the box the finger lands on can settle it.
+        const button = page.locator("#show-earlier");
+        if (width === 390 && (await button.isVisible())) {
+          const box = await button.boundingBox();
+          assert.ok(
+            box !== null && box.height >= 44,
+            `touch target is ${box?.height ?? "unmeasurable"}px at 390 (${label}), below the 44px minimum`
+          );
+        }
       }
       await page.setViewportSize({ width: 1280, height: 820 });
       await page.waitForTimeout(150);

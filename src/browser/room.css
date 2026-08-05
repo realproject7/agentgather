@@ -772,7 +772,7 @@ h1::before {
   font-family: var(--font);
   font-size: var(--fs-sm);
   line-height: 1.35;
-  padding: 4px 12px;
+  padding: 8px 12px;
   cursor: pointer;
 }
 
@@ -1902,5 +1902,12 @@ button:disabled {
   .ac-line input[type="checkbox"] {
     width: 24px;
     height: 24px;
+  }
+
+  /* #283 — "show earlier" is a primary action on a narrow screen: it is the only
+     way to reach history the device does not hold, and a thumb is the only way to
+     press it. Same 44px floor and same reason as the rows above. */
+  .earlier-btn {
+    min-height: 44px;
   }
 }
