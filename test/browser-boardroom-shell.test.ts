@@ -86,30 +86,28 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
     // marked. The active mark is what makes "current" a claim rather than a list.
     assert.equal(await page.locator("#channel-rail .channel-link.on").count(), 1);
 
-    // #276 — coverage of what the rail markup ACTUALLY exposes today, so the state
-    // is documented rather than assumed. The pre-existing check below reads
-    // `innerText`, which excludes attributes; a credential in an `href` passes it
-    // unseen, which is how the rail came to be described as token-free when it is
-    // not. These assertions pin the real behaviour: the session token rides every
-    // channel link's fragment (#161's cross-surface mechanism).
-    //
-    // This is DELIBERATELY an assertion of the exposure, not of its absence. The
-    // mechanism change belongs to #288; when it lands these flip, and the flip is
-    // exactly the signal that should require a review rather than pass silently.
+    // #276 — the rail must be token-free in its MARKUP, not merely in its visible
+    // text. The pre-existing check below reads `innerText`, which excludes
+    // attributes, so a credential sitting in an `href` passed it unseen — which is
+    // how the rail came to be described as token-free while every channel link
+    // carried the session token in its fragment.
     const railHtml = (await page.locator("#channel-rail").innerHTML()) ?? "";
+    assert.equal(railHtml.includes(fixture.hostToken), false, "no token anywhere in the rail markup");
+    assert.equal(/tgl_|Bearer|token=|invite=|card=/i.test(railHtml), false, "no credential-shaped value in the rail");
     const hrefs = await page.locator("#channel-rail a").evaluateAll((nodes) =>
       nodes.map((node) => (node as HTMLAnchorElement).getAttribute("href") ?? "")
     );
     assert.ok(hrefs.length > 0, "the rail rendered no links to check");
+    for (const href of hrefs) {
+      assert.equal(/token=|tgl_/i.test(href), false, `channel href carries a credential: ${href}`);
+    }
+    // ...and the navigation still authenticates without it: the target surface reads
+    // this tab's sessionStorage copy, which is why the URL never needed the token.
     assert.equal(
-      hrefs.every((href) => href.includes(`token=${encodeURIComponent(fixture.hostToken)}`)),
+      await page.evaluate(() => window.sessionStorage.getItem("agentgather.token") !== null),
       true,
-      "every channel href currently carries the session token in its fragment (#161; changed by #288)"
+      "the tab-scoped token the rail relies on is present"
     );
-    assert.equal(railHtml.includes(fixture.hostToken), true, "the token is present in the rail markup, not only in URLs");
-    // Whatever the mechanism, no INVITE or CARD URL may appear — those are a
-    // different class and are not part of #288's scope.
-    assert.equal(/invite=|card=|https?:\/\/[^"]*\/invite/i.test(railHtml), false, "no invite or card URL in the rail");
 
     assert.equal((await page.locator("#channel-rail").innerText()).includes(fixture.hostToken), false);
 

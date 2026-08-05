@@ -2704,55 +2704,96 @@ test("the room view offers a labelled route home and discloses no other room (#2
     // would learn every other room they are in — the reason an acceptance criterion
     // was declined, so it is asserted rather than argued.
     //
-    // Every surface a host's page script can read is swept, and the check is by
-    // ORIGIN rather than by pattern: matching only loopback addresses would miss a
-    // tunnelled or remote room entirely, which is exactly the room whose disclosure
-    // would matter most (@re1).
+    // Checked by ORIGIN rather than by pattern: matching only loopback addresses
+    // would miss a tunnelled or remote room entirely, which is exactly the room
+    // whose disclosure would matter most (@re1).
     await postMessage(fixture, fixture.reviewerToken, "a line in this room");
     await page.waitForSelector("text=a line in this room");
-    const disclosed = await page.evaluate(() => {
-      const dump = (store: Storage): string =>
-        Object.keys(store)
-          .map((key) => `${key}=${store.getItem(key) ?? ""}`)
-          .join("\n");
+
+    const allowed = new Set([new URL(fixture.baseUrl).origin, new URL(dashboard).origin]);
+    const sweep = async (): Promise<Array<{ surface: string; urls: string[]; foreign: string[] }>> => {
+      const blobs = await page.evaluate(() => {
+        const dump = (store: Storage): string =>
+          Object.keys(store)
+            .map((key) => `${key}=${store.getItem(key) ?? ""}`)
+            .join("\n");
+        return {
+          localStorage: dump(window.localStorage),
+          sessionStorage: dump(window.sessionStorage),
+          DOM: document.documentElement?.outerHTML ?? ""
+        };
+      });
+      return Object.entries(blobs).map(([surface, blob]) => {
+        const urls = [...new Set(blob.match(/https?:\/\/[^\s"'<>\\)]+/g) ?? [])];
+        return {
+          surface,
+          urls,
+          foreign: urls.filter((raw) => {
+            try {
+              return !allowed.has(new URL(raw).origin);
+            } catch {
+              return false;
+            }
+          })
+        };
+      });
+    };
+
+    // An absence assertion passes both when the invariant holds and when the
+    // instrument is not recording (@head). So each surface is proved twice: it is
+    // shown to capture a planted foreign origin, and shown clean once it is removed.
+    for (const surface of ["localStorage", "sessionStorage", "DOM"] as const) {
+      const planted = "https://room.example.com/some-other-room";
+      await page.evaluate(
+        ({ where, url }) => {
+          if (where === "localStorage") window.localStorage.setItem("__probe", url);
+          if (where === "sessionStorage") window.sessionStorage.setItem("__probe", url);
+          if (where === "DOM") {
+            const a = document.createElement("a");
+            a.id = "__probe";
+            a.href = url;
+            document.body.append(a);
+          }
+        },
+        { where: surface, url: planted }
+      );
+      const seeded = (await sweep()).find((entry) => entry.surface === surface);
+      // positive control: the matcher actually reads this surface at all.
+      assert.ok((seeded?.urls.length ?? 0) > 0, `${surface}: the sweep captured no URLs — the instrument is blind`);
+      // negative control: the reject branch runs and names what it rejected.
+      assert.deepEqual(seeded?.foreign, [planted], `${surface}: a planted foreign origin was not rejected`);
+      await page.evaluate((where) => {
+        if (where === "localStorage") window.localStorage.removeItem("__probe");
+        if (where === "sessionStorage") window.sessionStorage.removeItem("__probe");
+        if (where === "DOM") document.getElementById("__probe")?.remove();
+      }, surface);
+    }
+
+    // With the instrument proved on every surface, the real assertion means something.
+    for (const entry of await sweep()) {
+      assert.deepEqual(
+        entry.foreign,
+        [],
+        `${entry.surface} discloses an origin that is neither this room nor the dashboard`
+      );
+    }
+
+    // Every remembered room row belongs to THIS origin — nothing from another host.
+    const joinedBaseUrls = await page.evaluate(() => {
       const joined = JSON.parse(window.localStorage.getItem("agentgather.joinedRooms") ?? '{"rooms":[]}') as {
         rooms: Array<{ baseUrl?: string }>;
       };
-      return {
-        localBlob: dump(window.localStorage),
-        sessionBlob: dump(window.sessionStorage),
-        domBlob: document.documentElement?.outerHTML ?? "",
-        joinedBaseUrls: (joined.rooms ?? []).map((room) => room.baseUrl ?? "")
-      };
+      return (joined.rooms ?? []).map((room) => room.baseUrl ?? "");
     });
-
-    // Every remembered room row belongs to THIS origin — nothing from another host.
-    for (const baseUrl of disclosed.joinedBaseUrls) {
+    for (const baseUrl of joinedBaseUrls) {
       assert.equal(baseUrl.startsWith(fixture.baseUrl), true, `foreign room disclosed to this origin: ${baseUrl}`);
     }
 
-    // No absolute URL anywhere on this origin may point at a third party. The only
-    // two this device legitimately holds here are the room itself and the dashboard
-    // that supplied the route home.
-    const allowed = new Set([new URL(fixture.baseUrl).origin, new URL(dashboard).origin]);
-    for (const [surface, blob] of [
-      ["localStorage", disclosed.localBlob],
-      ["sessionStorage", disclosed.sessionBlob],
-      ["DOM", disclosed.domBlob]
-    ] as const) {
-      const foreign = [...new Set(blob.match(/https?:\/\/[^\s"'<>\\)]+/g) ?? [])].filter((raw) => {
-        try {
-          return !allowed.has(new URL(raw).origin);
-        } catch {
-          return false;
-        }
-      });
-      assert.deepEqual(foreign, [], `${surface} discloses an origin that is neither this room nor the dashboard`);
-    }
-
     // The dashboard's own stores must not have been mirrored here either.
-    assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(disclosed.localBlob), false);
-    assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(disclosed.sessionBlob), false);
+    const finalBlobs = await sweep();
+    for (const entry of finalBlobs) {
+      assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(entry.urls.join("\n")), false);
+    }
   } finally {
     await browser?.close();
     await fixture.close();
