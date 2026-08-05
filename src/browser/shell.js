@@ -1986,21 +1986,30 @@ async function showJoinedSnapshot(entry) {
   setBreadcrumb({ room_id: entry.roomId, title: entry.title });
 
   let snapshot = null;
+  // What the local store actually reported (#293). "absent" and "unreadable" are
+  // different facts and this view must not flatten them: a snapshot is the only
+  // copy of a room whose host is gone, so a damaged one is the failure the user
+  // can still act on — and only while they still can.
+  let snapshotState = "absent";
   try {
     const payload = await apiFetch(
       `./joined-rooms/history?room_id=${encodeURIComponent(entry.roomId || "")}&base_url=${encodeURIComponent(entry.baseUrl)}`
     );
     snapshot = payload.snapshot ?? null;
+    // Only the reader's own enum is trusted; anything else falls back to the
+    // conservative reading rather than being echoed or displayed.
+    snapshotState = payload.state === "unreadable" || payload.state === "ok" ? payload.state : "absent";
   } catch {
     // Treated exactly like "nothing saved yet" — this view never guesses.
     snapshot = null;
+    snapshotState = "absent";
   }
-  renderJoinedSnapshot(entry, snapshot);
+  renderJoinedSnapshot(entry, snapshot, snapshotState);
 }
 
 // The saved transcript plus an honest band naming what it is and where it stops.
 // It never claims newer or unseen history exists — only what the cursor covers.
-function renderJoinedSnapshot(entry, snapshot) {
+function renderJoinedSnapshot(entry, snapshot, snapshotState = "absent") {
   const messages = snapshot?.messages ?? [];
   const forumPosts = snapshot?.forumPosts ?? [];
   timeline.replaceChildren();
@@ -2037,7 +2046,26 @@ function renderJoinedSnapshot(entry, snapshot) {
   chatEmpty.hidden = true;
   chatOffline.hidden = false;
   chatOffline.replaceChildren();
+  // Invalidated now, re-stamped only once this room's content is in the DOM. The
+  // breadcrumb and channel nav are set before the snapshot read resolves, so they
+  // describe the SELECTION while this band is still the previous room's; marking
+  // the band itself is what makes "which room is this text about" answerable.
+  delete chatOffline.dataset.room;
   const detailLine = document.createElement("span");
+  if (snapshotState === "unreadable") {
+    // A THIRD state, distinct from both "nothing saved" sentences below (#293).
+    // It names the condition and what follows from it, and deliberately says
+    // nothing about the file's contents: the bytes are unparsed data of unknown
+    // provenance and nothing derived from them reaches this screen.
+    detailLine.textContent =
+      `The host at ${hostLabel(entry.baseUrl)} is offline, and this device's saved copy of this room ` +
+      "exists but cannot be read. It is not being shown, and it cannot be rebuilt from anywhere " +
+      "while the host is unreachable — check or restore the file if you have a backup.";
+    historySourceLabel.textContent = "Local snapshot unreadable · host offline";
+    chatOffline.append(detailLine, buildSnapshotRetry(entry));
+    chatOffline.dataset.room = entry.roomId || "";
+    return;
+  }
   if (renderedRows === 0) {
     // Two different facts, so two different sentences (@re1). "Nothing is saved"
     // is true only when the store is genuinely empty; when it holds records that
@@ -2068,6 +2096,7 @@ function renderJoinedSnapshot(entry, snapshot) {
       "until the host resumes.";
   }
   chatOffline.append(detailLine, buildSnapshotRetry(entry));
+  chatOffline.dataset.room = entry.roomId || "";
 }
 
 // Re-probe on demand. The action only becomes an open when the probe itself says

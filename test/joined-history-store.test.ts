@@ -37,7 +37,7 @@ test("a snapshot keeps only already-received messages, de-duped by id and ordere
   // A reconnect re-delivers an overlapping range — the transcript must not double up.
   await recordJoinedHistory(home, { ...KEY, messages: [message(2, "second"), message(3, "third")], savedAt: "2026-08-04T00:01:00.000Z" });
 
-  const snapshot = await readJoinedHistory(home, KEY);
+  const snapshot = (await readJoinedHistory(home, KEY)).snapshot;
   assert.deepEqual(snapshot?.messages.map((entry) => entry.id), [1, 2, 3]);
   assert.deepEqual(snapshot?.messages.map((entry) => entry.text), ["first", "second", "third"]);
   // The cursor is what the offline view is allowed to claim it holds.
@@ -73,7 +73,7 @@ test("a snapshot is bounded by message count, per-field length, and total bytes 
   const many = Array.from({ length: SNAPSHOT_MAX_MESSAGES + 40 }, (_, index) => message(index + 1, `line ${index + 1}`));
   await recordJoinedHistory(home, { ...KEY, messages: many, savedAt: "2026-08-04T00:00:00.000Z" });
 
-  let snapshot = await readJoinedHistory(home, KEY);
+  let snapshot = (await readJoinedHistory(home, KEY)).snapshot;
   assert.equal(snapshot?.messages.length, SNAPSHOT_MAX_MESSAGES);
   // Oldest dropped first, and the cursor still names what actually survived.
   assert.equal(snapshot?.messages[0]?.id, 41);
@@ -85,7 +85,7 @@ test("a snapshot is bounded by message count, per-field length, and total bytes 
     messages: [message(9_999, "x".repeat(50_000))],
     savedAt: "2026-08-04T00:02:00.000Z"
   });
-  snapshot = await readJoinedHistory(home, KEY);
+  snapshot = (await readJoinedHistory(home, KEY)).snapshot;
   const stored = snapshot?.messages.find((entry) => entry.id === 9_999);
   assert.equal(stored?.text.length, SNAPSHOT_MAX_TEXT_CHARS);
   const size = (await stat(joinedHistoryPath(home, KEY))).size;
@@ -105,7 +105,7 @@ test("a hostile room id or base URL cannot steer the snapshot outside its direct
   const entries = await readdir(joinedHistoryDir(home));
   assert.equal(entries.every((name) => /^[0-9a-f]{64}\.json/.test(name)), true);
   // ...and it is still readable back under the same hostile key, not silently lost.
-  assert.equal((await readJoinedHistory(home, hostile))?.messages.length, 1);
+  assert.equal((await readJoinedHistory(home, hostile)).snapshot?.messages.length, 1);
 });
 
 test("snapshots are keyed per (roomId, baseUrl) — a same-id room on another host is separate (#247)", async () => {
@@ -114,8 +114,8 @@ test("snapshots are keyed per (roomId, baseUrl) — a same-id room on another ho
   const other = { roomId: "snap-room", baseUrl: "http://127.0.0.1:8" };
   await recordJoinedHistory(home, { ...other, messages: [message(1, "host B line")], savedAt: "2026-08-04T00:00:00.000Z" });
 
-  assert.equal((await readJoinedHistory(home, KEY))?.messages[0]?.text, "host A line");
-  assert.equal((await readJoinedHistory(home, other))?.messages[0]?.text, "host B line");
+  assert.equal((await readJoinedHistory(home, KEY)).snapshot?.messages[0]?.text, "host A line");
+  assert.equal((await readJoinedHistory(home, other)).snapshot?.messages[0]?.text, "host B line");
 });
 
 test("concurrent snapshot writes are serialized — no batch is lost (#247)", async () => {
@@ -129,7 +129,7 @@ test("concurrent snapshot writes are serialized — no batch is lost (#247)", as
       })
     )
   );
-  const snapshot = await readJoinedHistory(home, KEY);
+  const snapshot = (await readJoinedHistory(home, KEY)).snapshot;
   assert.deepEqual(
     snapshot?.messages.map((entry) => entry.id),
     [1, 2, 3, 4, 5, 6, 7, 8]
@@ -160,7 +160,7 @@ test("a re-opened forum thread replaces its feed row and keeps its comments (#24
     savedAt: "2026-08-04T00:01:00.000Z"
   });
 
-  const snapshot = await readJoinedHistory(home, KEY);
+  const snapshot = (await readJoinedHistory(home, KEY)).snapshot;
   assert.equal(snapshot?.forumPosts.length, 1);
   assert.equal(snapshot?.forumPosts[0]?.comments.length, 1);
   // Comment bodies are redacted like message text.
@@ -172,7 +172,7 @@ test("a re-opened forum thread replaces its feed row and keeps its comments (#24
     forumPosts: [{ id: "p1", channel: "design", title: "Feed row", author: "project7", ts: "", status: "open", body: "body", comments: [] }],
     savedAt: "2026-08-04T00:02:00.000Z"
   });
-  assert.equal((await readJoinedHistory(home, KEY))?.forumPosts[0]?.comments.length, 1);
+  assert.equal((await readJoinedHistory(home, KEY)).snapshot?.forumPosts[0]?.comments.length, 1);
 });
 
 test("archive keeps the saved transcript and un-archive restores it; delete clears it (#247/#210)", async () => {
@@ -181,35 +181,56 @@ test("archive keeps the saved transcript and un-archive restores it; delete clea
   const row = { roomId: KEY.roomId, title: "Snapshot Room", alias: "project7", baseUrl: KEY.baseUrl, joinedAt: now, lastSeen: now };
   await recordJoinedRoom(home, row);
   await recordJoinedHistory(home, { ...KEY, messages: [message(1, "saved line")], savedAt: now });
-  assert.notEqual(await readJoinedHistory(home, KEY), null);
+  assert.equal((await readJoinedHistory(home, KEY)).state, "ok");
 
   // Archive is a reversible hide: the transcript must survive it, and un-archiving
   // must restore a readable row (PO ruling on #247; #210 defines archive as
   // recoverable, and a lost host transcript cannot be rebuilt from anywhere).
   assert.equal(await setJoinedRoomArchived(home, { ...KEY, archived: true }), true);
-  assert.equal((await readJoinedHistory(home, KEY))?.messages[0]?.text, "saved line", "archive keeps the snapshot");
+  assert.equal((await readJoinedHistory(home, KEY)).snapshot?.messages[0]?.text, "saved line", "archive keeps the snapshot");
   assert.equal(await setJoinedRoomArchived(home, { ...KEY, archived: false }), true);
-  assert.equal((await readJoinedHistory(home, KEY))?.messages[0]?.text, "saved line", "un-archive restores it");
+  assert.equal((await readJoinedHistory(home, KEY)).snapshot?.messages[0]?.text, "saved line", "un-archive restores it");
 
   // Delete is the explicit destructive action and does clear it.
   assert.equal(await deleteJoinedRoom(home, KEY), true);
-  assert.equal(await readJoinedHistory(home, KEY), null, "delete drops the snapshot");
+  assert.deepEqual(await readJoinedHistory(home, KEY), { state: "absent", snapshot: null }, "delete drops the snapshot");
 });
 
-test("a missing or corrupt snapshot reads as absent rather than throwing (#247)", async () => {
+test("a missing snapshot reads as absent, a damaged one as unreadable (#247/#293)", async () => {
+  // This test previously asserted that a corrupt snapshot "reads as absent" —
+  // it encoded the very conflation #293 exists to remove. A host log can be
+  // re-fetched; a snapshot cannot, so absence and damage are different facts and
+  // the user can only act on the second one while the host is still reachable.
   const home = await makeHome();
-  assert.equal(await readJoinedHistory(home, KEY), null);
+  assert.deepEqual(
+    await readJoinedHistory(home, KEY),
+    { state: "absent", snapshot: null },
+    "a room never opened offline is the ordinary case, and stays absent"
+  );
 
   const { writeSecureFile } = await import("../src/storage/index.js");
   await writeSecureFile(joinedHistoryPath(home, KEY), "{ not json");
-  assert.equal(await readJoinedHistory(home, KEY), null);
+  assert.deepEqual(
+    await readJoinedHistory(home, KEY),
+    { state: "unreadable", snapshot: null },
+    "truncated or hand-edited JSON is unreadable, not absent"
+  );
 
-  // A snapshot whose stored key does not match the requested one is not served.
+  // A snapshot whose stored key does not match the requested one is not served —
+  // and is not absence either: the file exists and is not what it claims.
   await writeSecureFile(
     joinedHistoryPath(home, KEY),
     JSON.stringify({ roomId: "other", baseUrl: KEY.baseUrl, cursor: 1, savedAt: "", messages: [], forumPosts: [] })
   );
-  assert.equal(await readJoinedHistory(home, KEY), null);
+  assert.deepEqual(await readJoinedHistory(home, KEY), { state: "unreadable", snapshot: null });
+
+  // Still non-fatal: every one of the reads above returned rather than threw, and
+  // a valid snapshot written afterwards reads back normally — one damaged file
+  // does not poison the reader.
+  await recordJoinedHistory(home, { roomId: KEY.roomId, baseUrl: KEY.baseUrl, savedAt: new Date(0).toISOString(), messages: [message(1, "recovered")] });
+  const after = await readJoinedHistory(home, KEY);
+  assert.equal(after.state, "ok");
+  assert.equal(after.snapshot?.messages[0]?.text, "recovered");
 });
 
 // #247 (@re1) — cleanup and the bridge write must not interleave. Archive/delete
@@ -224,7 +245,7 @@ test("a bridge write refused by its in-lock guard stores nothing (#247)", async 
     async () => false
   );
   assert.equal(stored, null);
-  assert.equal(await readJoinedHistory(home, KEY), null);
+  assert.deepEqual(await readJoinedHistory(home, KEY), { state: "absent", snapshot: null });
 });
 
 
@@ -277,7 +298,7 @@ test("a bridge write accepted before deletion cannot land after it (#247)", asyn
 
   assert.equal(await write, null, "the in-lock re-check refused the write");
   assert.equal(await deletion, true);
-  assert.equal(await readJoinedHistory(home, KEY), null, "no snapshot outlived the deleted row");
+  assert.deepEqual(await readJoinedHistory(home, KEY), { state: "absent", snapshot: null }, "no snapshot outlived the deleted row");
 });
 
 // #247 (@re2/@re1) — redaction covers EVERY persisted string, not just bodies. A
@@ -314,7 +335,7 @@ test("every persisted field is redacted, not only message and post bodies (#247)
   });
 
   // Exact expected values, not merely "the raw token is missing".
-  const snapshot = await readJoinedHistory(home, KEY);
+  const snapshot = (await readJoinedHistory(home, KEY)).snapshot;
   assert.equal(snapshot?.messages[0]?.from, "[redacted-url]");
   assert.equal(snapshot?.messages[0]?.ts, "[redacted-credential]");
   assert.equal(snapshot?.messages[0]?.type, "[redacted-token]");

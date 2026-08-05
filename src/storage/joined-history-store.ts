@@ -105,27 +105,64 @@ export function redactSnapshotText(value: unknown): string {
     .slice(0, SNAPSHOT_MAX_TEXT_CHARS);
 }
 
+// What a snapshot read found (#293). Absent and unreadable are different facts and
+// must stay different all the way to the screen: a host log can be re-fetched, but
+// a snapshot is the ONLY copy of history for a room whose host is gone (#247), so
+// "your saved copy is damaged" is the one failure the user can still act on — and
+// only while they still can. Reporting it as "nothing saved" spends that window.
+//
+// This is the single read path rather than a second reader beside the old one:
+// a caller that kept the old signature would silently lose the distinction again,
+// which is how per-caller drift produced the defect this ticket fixes.
+export type JoinedHistoryReadState = "absent" | "ok" | "unreadable";
+
+export interface JoinedHistoryRead {
+  state: JoinedHistoryReadState;
+  /** The snapshot, only when `state` is "ok". Absent AND unreadable both give null. */
+  snapshot: JoinedHistorySnapshot | null;
+}
+
 export async function readJoinedHistory(
   home: string,
   key: { roomId: string; baseUrl: string }
-): Promise<JoinedHistorySnapshot | null> {
+): Promise<JoinedHistoryRead> {
+  let raw: string;
   try {
-    const parsed = JSON.parse(await readFile(joinedHistoryPath(home, key), "utf8")) as JoinedHistorySnapshot;
-    if (parsed.roomId !== key.roomId || parsed.baseUrl !== key.baseUrl) return null;
-    return {
+    raw = await readFile(joinedHistoryPath(home, key), "utf8");
+  } catch (error) {
+    // A file that is not there is the ordinary case for a room never opened
+    // offline — no warning, exactly as before.
+    if (isNotFoundError(error)) return { state: "absent", snapshot: null };
+    // Anything else (EACCES, EISDIR, I/O) means a snapshot may well exist and
+    // this device cannot read it. That is not absence.
+    return { state: "unreadable", snapshot: null };
+  }
+  let parsed: JoinedHistorySnapshot;
+  try {
+    parsed = JSON.parse(raw) as JoinedHistorySnapshot;
+  } catch {
+    // Truncated or hand-edited. Deliberately NOT recovered or partially parsed
+    // (#293 out of scope) — and the parse error is discarded rather than
+    // returned, because its message can quote the file's own bytes.
+    return { state: "unreadable", snapshot: null };
+  }
+  // A snapshot naming a different room is not this room's history. The file
+  // exists and is not what it claims, so it is unreadable-for-this-key rather
+  // than absent — flattening it to absence is the same lost signal.
+  if (parsed === null || typeof parsed !== "object" || parsed.roomId !== key.roomId || parsed.baseUrl !== key.baseUrl) {
+    return { state: "unreadable", snapshot: null };
+  }
+  return {
+    state: "ok",
+    snapshot: {
       roomId: parsed.roomId,
       baseUrl: parsed.baseUrl,
       cursor: typeof parsed.cursor === "number" ? parsed.cursor : 0,
       savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : "",
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       forumPosts: Array.isArray(parsed.forumPosts) ? parsed.forumPosts : []
-    };
-  } catch (error) {
-    if (isNotFoundError(error)) return null;
-    // A truncated or hand-edited snapshot is treated as absent rather than fatal:
-    // the offline view then shows its honest empty state instead of failing open.
-    return null;
-  }
+    }
+  };
 }
 
 // Merge one batch of ALREADY-RECEIVED history into the snapshot. The caller never
@@ -154,7 +191,11 @@ export async function recordJoinedHistory(
   await ensureSecureDir(joinedHistoryDir(home));
   return withWriterLock(joinedHistoryLockPath(home, key), async () => {
     if (isStillTracked !== undefined && !(await isStillTracked())) return null;
-    const current = (await readJoinedHistory(home, key)) ?? {
+    // The write path's behaviour is deliberately UNCHANGED by #293: an existing
+    // file that cannot be read still starts a fresh snapshot rather than blocking
+    // the bridge. Recovery is explicitly out of scope, and refusing to write would
+    // turn one damaged file into a room that can never save history again.
+    const current = (await readJoinedHistory(home, key)).snapshot ?? {
       roomId: entry.roomId,
       baseUrl: entry.baseUrl,
       cursor: 0,
