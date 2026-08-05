@@ -288,6 +288,12 @@ const RAIL_MIN_BOTTOM = 120;
 const RAIL_STEP = 16;
 const RAIL_STEP_LARGE = 64;
 
+// The split the user actually asked for, in px, independent of what currently
+// fits. A narrow viewport clamps the APPLIED value, but clamping must not erase
+// the request: widening the window again has to give the split back. Never
+// persisted from a clamp — only from a real user action.
+let railDesiredTop = null;
+
 // Largest upper region this rail can currently show while the lower region keeps
 // its minimum. Depends on the live rail height, so it is recomputed rather than
 // stored — a value that was valid in a tall window is not valid in a short one.
@@ -352,13 +358,35 @@ function writeRailSplit(top) {
 
 // Apply a split to the layout and keep the separator's ARIA values in step with
 // it. Returns the applied value, or null if the rail cannot honour the minimums.
-function applyRailSplit(value) {
+function applyRailSplit(value, options) {
   const top = clampRailTop(value);
   if (top === null) return null;
+  // A user action (restore, drag, key) sets the desired split; a re-clamp forced
+  // by a layout change deliberately does not, so the original request survives.
+  if (options?.remember !== false) railDesiredTop = value;
   roomRail.dataset.split = "on";
   roomRail.style.setProperty("--rail-top", `${top}px`);
   syncRailAria(top);
   return top;
+}
+
+// Re-fit the rail to whatever it can currently show, and keep the separator's
+// announced values honest. This is THE settle point: restore, viewport change,
+// the rail being shown or hidden, and the first measurable layout all come
+// through here, so no path can move or invalidate the split without announcing
+// it. Re-clamping always works from the DESIRED split, so returning to a wide
+// window restores what the user chose rather than the value a narrow one forced.
+function settleRailSplit() {
+  if (railDesiredTop !== null) {
+    if (applyRailSplit(railDesiredTop, { remember: false }) !== null) return true;
+    // The rail cannot honour the minimums right now (hidden, or too short).
+    // Drop the stale pixel basis rather than leaving a region under its floor.
+    delete roomRail.dataset.split;
+    roomRail.style.removeProperty("--rail-top");
+    return false;
+  }
+  syncRailAria();
+  return railDivider.hasAttribute("aria-valuenow");
 }
 
 // Publish where the split currently sits. A focusable `role="separator"` is a
@@ -403,23 +431,26 @@ function bindRailDivider() {
   // rather than rejected, so a split saved in a taller window still yields a
   // usable layout.
   const stored = readRailSplit();
-  const settle = () => {
-    // Restoring is optional; publishing the ARIA values is not. A rail that has
-    // never been resized still has a split, and the separator has to say so.
-    const applied = stored === null ? null : applyRailSplit(stored);
-    if (applied === null) syncRailAria();
-    return stored === null ? railDivider.hasAttribute("aria-valuenow") : applied !== null;
-  };
-  if (!settle()) {
-    // Below 860px the rail is display:none until the Rooms toggle opens it, so
-    // there is nothing to measure or clamp against yet. Finish the moment it
-    // becomes measurable, rather than dropping the stored split and leaving the
-    // separator valueless.
-    const observer = new ResizeObserver(() => {
-      if (settle()) observer.disconnect();
-    });
-    observer.observe(roomRail);
-  }
+  if (stored !== null) railDesiredTop = stored;
+  settleRailSplit();
+
+  // Observe CONTINUOUSLY, and never disconnect. The previous revision installed
+  // this only when the initial restore FAILED — so a split that restored fine at
+  // 1280 had no observer at all, and moving to 390 (where the rail is
+  // `display: none`, then capped at 40vh when reopened) left the stale pixel
+  // basis in place with `.rail-lower` under its 120px minimum. @re1 found that by
+  // reading the INSTALL CONDITION rather than the installed thing; the fix is to
+  // remove the condition, not to add a second special case.
+  //
+  // Settled twice: once on the callback, once on the next frame. Showing the rail
+  // resizes it and its siblings in the same pass, so the first settle can land
+  // while the footer or lower region is still being laid out and clamp against a
+  // budget smaller than the final one — which showed up as a split pinned to the
+  // 120px minimum when 170px actually fit.
+  new ResizeObserver(() => {
+    settleRailSplit();
+    window.requestAnimationFrame(() => settleRailSplit());
+  }).observe(roomRail);
 
   railDivider.addEventListener("pointerdown", (event) => {
     // Primary button / touch only, and capture the pointer so a fast drag that
@@ -462,13 +493,9 @@ function bindRailDivider() {
   // A window resize can invalidate the current split — the rail may no longer be
   // tall enough for it. Re-clamp against the new height without persisting, so
   // resizing a window never overwrites the user's chosen split.
-  window.addEventListener("resize", () => {
-    // Re-clamp against the new height without persisting, so resizing a window
-    // never overwrites the user's chosen split. The ARIA maximum moves with the
-    // rail whether or not a split was ever chosen.
-    if (roomRail.dataset.split === "on") applyRailSplit(currentRailTop());
-    else syncRailAria();
-  });
+  // Re-clamp on viewport change too. Never persists: resizing a window must not
+  // overwrite the split the user chose.
+  window.addEventListener("resize", () => settleRailSplit());
 }
 
 async function loadVersion() {

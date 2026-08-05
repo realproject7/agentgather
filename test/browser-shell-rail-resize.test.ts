@@ -437,3 +437,91 @@ test("a stored split still applies when the rail was hidden at load (#275)", asy
     await fixture.close();
   }
 });
+
+test("a desktop split re-clamps on 1280 → 390 → open Rooms, keeping the lower minimum (#275)", async () => {
+  // The regression @re1 found: the observer used to be installed only when the
+  // INITIAL restore failed, so a split that restored fine at 1280 had no observer
+  // at all. Moving to 390 left the stale pixel basis against a 40vh rail and the
+  // lower region under its floor. Aimed at the MINIMUM, not at overflow — the
+  // existing responsive test asserts `lower > 0` and passes straight through this.
+  const fixture = await startFixture("300");
+  try {
+    const { page } = fixture;
+    assert.equal(await roomsHeight(page), 300, "positive control: the desktop split really did restore");
+
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.waitForFunction(() => window.innerWidth === 390);
+    await page.click("#rooms-toggle");
+    await page.waitForFunction(() => (document.querySelector(".room-rail") as HTMLElement).clientHeight > 0);
+
+    const expectedMax = await maxTop(page);
+    assert.ok(expectedMax < 300, "positive control: this viewport must actually force a clamp");
+    // Exact equality, not "<= the maximum": a split pinned to the 120px minimum
+    // also satisfies "<=", and that is precisely the wrong-but-passing state an
+    // early settle produced.
+    await page.waitForFunction(
+      (expected) =>
+        Math.round(document.querySelector(".rail-rooms")!.getBoundingClientRect().height) === (expected as number),
+      expectedMax
+    );
+
+    const lower = await page.evaluate(() =>
+      Math.round(document.querySelector(".rail-lower")!.getBoundingClientRect().height)
+    );
+    assert.ok(lower >= MIN_BOTTOM, `the lower region must keep its ${MIN_BOTTOM}px minimum, got ${lower}`);
+    assert.equal(await roomsHeight(page), expectedMax, "the split must re-clamp to exactly what now fits");
+    // The separator's announced bounds move with the rail, or it would report a
+    // maximum this viewport cannot honour.
+    assert.equal(await page.locator("#rail-divider").getAttribute("aria-valuemax"), String(expectedMax));
+    assert.equal(await page.locator("#rail-divider").getAttribute("aria-valuenow"), String(expectedMax));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("returning to a wide viewport restores the split the user chose, not the clamped one (#275)", async () => {
+  // A clamp forced by a small window is not a new preference. If the re-clamp
+  // overwrote the desired value, the user would silently lose their split by
+  // passing through a narrow viewport.
+  const fixture = await startFixture("300");
+  try {
+    const { page } = fixture;
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.waitForFunction(() => window.innerWidth === 390);
+    await page.click("#rooms-toggle");
+    await page.waitForFunction(() => (document.querySelector(".room-rail") as HTMLElement).clientHeight > 0);
+    const clamped = await roomsHeight(page);
+    assert.ok(clamped < 300, "positive control: the narrow viewport must have clamped it");
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.waitForFunction(
+      () => Math.round(document.querySelector(".rail-rooms")!.getBoundingClientRect().height) === 300
+    );
+    assert.equal(await roomsHeight(page), 300, "the originally chosen split must come back");
+    // And it was never persisted as the clamped value.
+    assert.equal(await page.evaluate((key) => window.localStorage.getItem(key as string), SPLIT_KEY), "300");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a fresh profile with no stored value announces position and bounds (#275)", async () => {
+  // The default state every user meets first. A suite that only exercises a
+  // stored split keeps passing while this announces nothing at all.
+  const fixture = await startFixture();
+  try {
+    const { page } = fixture;
+    assert.equal(
+      await page.evaluate((key) => window.localStorage.getItem(key as string), SPLIT_KEY),
+      null,
+      "positive control: this profile must genuinely have no stored split"
+    );
+    const divider = page.locator("#rail-divider");
+    const measured = await roomsHeight(page);
+    assert.equal(await divider.getAttribute("aria-valuenow"), String(measured));
+    assert.equal(await divider.getAttribute("aria-valuemin"), String(MIN_TOP));
+    assert.equal(await divider.getAttribute("aria-valuemax"), String(await maxTop(page)));
+  } finally {
+    await fixture.close();
+  }
+});
