@@ -111,6 +111,43 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
 
     assert.equal((await page.locator("#channel-rail").innerText()).includes(fixture.hostToken), false);
 
+    // #276 — OBSERVED fresh-tab behaviour, not the expected one (@head). Removing
+    // the token from the href means a cmd/middle-click opens a tab whose auth
+    // depends on whether the browser cloned sessionStorage. This asserts what the
+    // browser actually does rather than what the spec permits, so a change in that
+    // behaviour surfaces here instead of in someone's hands.
+    const [popup] = await Promise.all([
+      page.context().waitForEvent("page"),
+      page.locator("#channel-rail a").first().click({ modifiers: ["Meta"] })
+    ]);
+    await popup.waitForLoadState("load");
+    // The surface strips its entry fragment on read, so let it settle before
+    // reading — evaluating mid-navigation destroys the execution context.
+    await popup.waitForSelector("#room-title, .forum-shell, #auth-error", { timeout: 15000 });
+    const freshTab = await popup.evaluate(() => ({
+      url: location.href,
+      token: window.sessionStorage.getItem("agentgather.token"),
+      body: document.body?.innerText?.slice(0, 200) ?? ""
+    }));
+    console.log(`[#276 OBSERVED fresh tab] url=${freshTab.url} sessionToken=${freshTab.token === null ? "ABSENT" : "PRESENT"}`);
+    console.log(`[#276 OBSERVED fresh tab] body=${JSON.stringify(freshTab.body.replace(/\s+/g, " ").slice(0, 120))}`);
+    // The URL a participant could copy carries no credential — the point of the
+    // removal, and true regardless of how the fresh tab authenticates.
+    assert.equal(/token=|tgl_/i.test(freshTab.url), false, "a copied channel URL must carry no credential");
+    // OBSERVED in Chromium: sessionStorage is NOT inherited by the new tab, so the
+    // surface shows its ordinary "invite link required" entry panel. Asserting the
+    // exact absence would pin a browser-version detail; what must hold on every
+    // browser is that the tab lands in a COHERENT state — either authenticated, or
+    // explicitly asking for an invite — and never blank or half-rendered.
+    const authenticated = (await popup.locator("#room-title").count()) > 0 && freshTab.token !== null;
+    const asksForInvite = await popup.locator("#auth-error:not([hidden])").isVisible().catch(() => false);
+    assert.equal(
+      authenticated || asksForInvite,
+      true,
+      `fresh tab landed in neither state: token=${freshTab.token === null ? "absent" : "present"} body=${freshTab.body.slice(0, 80)}`
+    );
+    await popup.close();
+
     // overflow-0 at desktop with the rail present
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
