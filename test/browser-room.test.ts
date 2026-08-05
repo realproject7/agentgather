@@ -3215,3 +3215,63 @@ test("show earlier is withdrawn with a stated reason while the host is unreachab
     await fixture.close();
   }
 });
+
+// #290 — a labelled way back to the dashboard from an uncredentialed arrival.
+// Both branches are asserted with EXACT text, because an assertion that holds in
+// either state would not be testing this ticket at all.
+test("an uncredentialed arrival offers a credential-free route back to the dashboard (#290)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    // The dashboard value is smuggled with a credential in BOTH carriers this
+    // project has had to strip before (#288 fragment, query token). The href must
+    // keep the validated loopback host and carry neither.
+    const smuggled = `${fixture.baseUrl}/?token=tgl_smuggled_query#token=tgl_smuggled_fragment`;
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(smuggled)}`);
+    await page.waitForSelector("#auth-error:not([hidden])");
+    await page.waitForSelector("#auth-error-dashboard");
+
+    // Asserted against the DOM, not the helper that produced it.
+    const href = (await page.locator("#auth-error-dashboard").getAttribute("href")) ?? "";
+    assert.equal(href, new URL(fixture.baseUrl).origin, "the route must be the validated origin, nothing more");
+    assert.equal(/tgl_|token=/i.test(href), false, `the route must carry no credential, got ${href}`);
+    assert.equal(await page.locator("#auth-error-dashboard").textContent(), "Back to your dashboard");
+
+    // POSITIVE CONTROL: the credential really was in the URL that produced it, so
+    // its absence from the href is a fact about the route rather than the fixture.
+    assert.ok(page.url().includes("tgl_smuggled_query"), "the fixture must genuinely have smuggled a credential");
+    // And nothing token-bearing reaches the markup of the panel.
+    assert.equal(/tgl_/i.test(await page.locator("#auth-error").innerHTML()), false);
+    // The invite copy is still there — the route is additive, not a replacement.
+    assert.match((await page.locator("#auth-error").textContent()) ?? "", /This room needs an invite link/);
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
+test("with no dashboard target the invite copy is unchanged and no route is offered (#290)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    await page.goto(`${fixture.baseUrl}/`);
+    await page.waitForSelector("#auth-error:not([hidden])");
+
+    // NEGATIVE: no route at all.
+    assert.equal(await page.locator("#auth-error-dashboard").count(), 0, "no route may be offered without a target");
+    // POSITIVE CONTROL: the panel really rendered, so the zero above is about the
+    // route and not about an unrendered page.
+    assert.equal(await page.locator("#auth-error h2").textContent(), "Invite link required");
+    // Byte-for-byte the copy that ships today — no clause added for a case that
+    // is not occurring.
+    assert.equal(
+      await page.locator("#auth-error p").textContent(),
+      "This room needs an invite link or Attend Card from the host. Ask the host for a browser invite URL."
+    );
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});

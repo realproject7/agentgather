@@ -216,6 +216,7 @@ async function init() {
   if (!token) {
     authError.hidden = false;
     shell.dataset.state = "auth-error";
+    renderDashboardReturn();
     window.addEventListener("hashchange", () => {
       const nextToken = tokenFromEntryFragment();
       if (nextToken) {
@@ -226,6 +227,38 @@ async function init() {
     return;
   }
   await startWithToken(token);
+}
+
+// A labelled way back to the dashboard from an uncredentialed arrival (#290).
+// Rendered ONLY when a validated dashboard target already exists; with none, the
+// invite copy stays byte-for-byte what it is today and no route is offered.
+//
+// The href is reduced to the ORIGIN (@re2, msg 1392). `validLoopbackDashboardUrl`
+// checks protocol and hostname only, so path, query and fragment pass through
+// untouched — a room URL carrying `?dashboard=http://127.0.0.1:8787/#token=…`
+// would otherwise put a credential straight into the markup, which is the
+// invariant this ticket is written around. Origin-reduction keeps the validated
+// host and drops every carrier, matching what `sanitizeBaseUrl` already does on
+// the platform side.
+//
+// It is an ordinary same-tab link: nothing here authenticates, and the dashboard
+// resolves its own identity when it loads.
+function renderDashboardReturn() {
+  if (!authError || authError.querySelector(".auth-error-route") !== null) return;
+  const target = dashboardTarget();
+  if (target === null) return;
+  let origin;
+  try {
+    origin = new URL(target).origin;
+  } catch {
+    return;
+  }
+  const link = document.createElement("a");
+  link.className = "auth-error-route";
+  link.id = "auth-error-dashboard";
+  link.href = origin;
+  link.textContent = "Back to your dashboard";
+  authError.append(link);
 }
 
 function hydrateDashboardHome() {
