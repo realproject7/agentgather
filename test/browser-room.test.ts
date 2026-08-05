@@ -2563,3 +2563,112 @@ test("a backup whose ids run past the room is discarded instead of wedging the c
     await fixture.close();
   }
 });
+
+// #279 Gap 1 — the room page is served BY the host, so when the host is fully down
+// nothing on that origin can load and the local copy is only reachable through the
+// dashboard. The case that IS reachable here is a host that still serves its page
+// while its API fails: a broker still up with the host gone, a restart, a quota.
+// Entry used to abort on that (`/profile`, then `/brief`) several statements before
+// the backup was ever read, so a device holding a full copy showed a blank room.
+test("a host that serves its page but not its API shows the held copy, not a blank room (#279)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await postMessage(fixture, fixture.reviewerToken, "received while the host was up");
+    await page.waitForSelector("text=received while the host was up");
+
+    // Everything the room API serves now fails, while the page and its assets are
+    // still served exactly as a broker would with the host gone.
+    await page.route(/\/(profile|brief|status|messages)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host tunnel did not respond" })
+      })
+    );
+    await page.reload();
+
+    // The copy this device already holds is readable...
+    await page.waitForSelector("text=received while the host was up");
+    const restored = page.locator(".message", { hasText: "received while the host was up" }).first();
+    assert.equal(await restored.getAttribute("data-restored"), "true", "shown as this device's copy, not as live");
+    // ...and the room states honestly that it is offline and read-only.
+    await page.waitForSelector('#room-banner[data-kind="degraded"]');
+    await page.waitForSelector("#backup-notice:not([hidden])");
+    assert.equal(await page.locator("#message-text").isDisabled(), true, "composer is disabled offline");
+    // The divider must not imply the room holds more than it does.
+    assert.match((await page.locator(".restored-divider").textContent()) ?? "", /Restored from this device/);
+
+    // Entering without a profile must not be a one-way door: when the host answers
+    // again the identity this tab entered without has to load, or the messages come
+    // back while the composer and own-message marking stay degraded for the life of
+    // the tab. The composer identity is the surface that shows it.
+    assert.equal(((await page.locator("#composer-identity").textContent()) ?? "").trim(), "");
+    await page.unroute(/\/(profile|brief|status|messages)(\?|$)/);
+    await page.waitForFunction(
+      () => (document.getElementById("composer-identity")?.textContent ?? "").trim().length > 0,
+      undefined,
+      { timeout: 15000 }
+    );
+    assert.match((await page.locator("#composer-identity").textContent()) ?? "", /Host/);
+    assert.equal(await page.locator("#message-text").isDisabled(), false, "composer works again once live");
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #279 Gap 2 — a room opened by its own URL carries neither the dashboard's address
+// nor a capability, so its history never reached the dashboard at all and the
+// offline row had nothing to show. The address the dashboard itself supplied on an
+// earlier open is remembered, so a later direct open still knows where to post.
+test("a room opened by its own URL still contributes history to the dashboard (#279)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const posted: Array<{ capability: unknown; roomId: unknown; baseUrl: unknown }> = [];
+    await page.route("**/joined-rooms/history", async (route) => {
+      try {
+        posted.push(JSON.parse(route.request().postData() ?? "{}"));
+      } catch {
+        posted.push({ capability: "unparseable", roomId: null, baseUrl: null });
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+    });
+
+    // First open comes FROM the dashboard, which is how the address is learned.
+    const dashboard = "http://127.0.0.1:8931/";
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboard)}#token=${fixture.hostToken}`);
+    await postMessage(fixture, fixture.reviewerToken, "seen during the dashboard open");
+    await page.waitForSelector("text=seen during the dashboard open");
+
+    // Now open the same room by its own URL — no ?dashboard=, no capability, which
+    // is exactly the invite-link and bookmark case that contributed nothing before.
+    posted.length = 0;
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=seen during the dashboard open");
+    await postMessage(fixture, fixture.reviewerToken, "seen during the direct open");
+    await page.waitForSelector("text=seen during the direct open");
+    await page.waitForFunction(() => true);
+
+    assert.ok(posted.length > 0, "a direct open contributed no history at all");
+    const direct = posted[posted.length - 1];
+    // It holds no capability — it proves which room it is by its own origin, which
+    // the browser sets and page script cannot forge.
+    assert.equal(direct?.capability ?? null, null, "a direct open must not carry a capability");
+    assert.equal(direct?.baseUrl, `${fixture.baseUrl}`, "names its own room");
+    assert.equal(typeof direct?.roomId, "string");
+
+    // Nothing token-shaped is ever in that body.
+    const raw = JSON.stringify(posted);
+    assert.equal(raw.includes(fixture.hostToken), false, "no token in the bridge body");
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});

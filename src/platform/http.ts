@@ -56,6 +56,9 @@ const ASSETS: Record<string, { file: string; contentType: string }> = {
   "/shell.css": { file: "shell.css", contentType: "text/css; charset=utf-8" },
   "/theme.css": { file: "theme.css", contentType: "text/css; charset=utf-8" },
   "/shell.js": { file: "shell.js", contentType: "text/javascript; charset=utf-8" },
+  // Shared with the room page: one definition of how a stored record may be
+  // attributed, so the two renderers cannot drift apart on provenance (#279).
+  "/restored-provenance.js": { file: "restored-provenance.js", contentType: "text/javascript; charset=utf-8" },
   "/manifest.webmanifest": { file: "manifest.webmanifest", contentType: "application/manifest+json; charset=utf-8" },
   "/agentgather-logo.png": { file: "agentgather-logo.png", contentType: "image/png" },
   "/favicon.png": { file: "agentgather-logo.png", contentType: "image/png" }
@@ -318,6 +321,42 @@ function resolveSnapshotCapability(value: unknown): { roomId: string; baseUrl: s
   return { roomId: grant.roomId, baseUrl: grant.baseUrl };
 }
 
+// Target for a room opened by its own URL, which holds no capability (#279).
+//
+// The room names itself, and that name is honoured ONLY when it sits under the very
+// origin the browser reports for this request — so a browser page can contribute
+// history for a room its own host serves, and for nothing else.
+//
+// The precise scope of that, because it is easy to overstate: a BROWSER page cannot
+// set `Origin`, so this confines every page to its own host. A non-browser local
+// caller sets any header it likes, so this is not a defence against local processes
+// — but neither was the capability, which such a caller could equally have read or
+// replayed. Both mechanisms rest on the same floor: `isLoopbackOrigin` plus the
+// requirement that the row already be tracked and unarchived, checked before the
+// write and again inside the writer lock. Against a page this is strictly narrower
+// than a bearer capability; against a local process it is neither better nor worse.
+function snapshotTargetFromOrigin(
+  baseUrl: unknown,
+  roomId: unknown,
+  origin: string | undefined
+): { roomId: string; baseUrl: string } | null {
+  if (typeof baseUrl !== "string" || baseUrl.length === 0) return null;
+  if (typeof roomId !== "string" || roomId.length === 0) return null;
+  if (typeof origin !== "string" || origin.length === 0) return null;
+  let claimed: URL;
+  let reported: URL;
+  try {
+    claimed = new URL(baseUrl);
+    reported = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (claimed.origin !== reported.origin) return null;
+  const canonical = sanitizeBaseUrl(baseUrl);
+  if (canonical === null) return null;
+  return { roomId, baseUrl: canonical };
+}
+
 function pruneSnapshotCapabilities(): void {
   const now = Date.now();
   for (const [capability, grant] of snapshotCapabilities) {
@@ -452,14 +491,23 @@ async function receiveJoinedHistoryRequest(
     sendJson(res, 403, { ok: false, error: "bad_origin", message: "history bridge is loopback-only" });
     return;
   }
-  let body: { capability?: unknown; messages?: unknown; forumPosts?: unknown };
+  let body: { capability?: unknown; baseUrl?: unknown; roomId?: unknown; messages?: unknown; forumPosts?: unknown };
   try {
     body = JSON.parse(await readRequestBody(req, SNAPSHOT_BODY_MAX_BYTES)) as typeof body;
   } catch {
     sendJson(res, 400, { ok: false, error: "invalid_body", message: "body must be JSON within the size limit" });
     return;
   }
-  const target = resolveSnapshotCapability(body.capability);
+  // A dashboard-opened room carries the capability this dashboard minted for it.
+  // A room opened by its own URL has none — that is why its history never arrived
+  // at all (#279) — so it names its own room, and the name is accepted only if it
+  // sits under the SAME origin the browser reports for this request. The caller
+  // still cannot steer the write outside the host that served it: `Origin` is set
+  // by the browser, not by page script.
+  const target =
+    body.capability === undefined || body.capability === null
+      ? snapshotTargetFromOrigin(body.baseUrl, body.roomId, req.headers.origin)
+      : resolveSnapshotCapability(body.capability);
   if (target === null) {
     sendJson(res, 403, { ok: false, error: "bad_capability", message: "unknown or expired bridge capability" });
     return;

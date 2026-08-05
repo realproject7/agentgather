@@ -571,6 +571,32 @@ test("the owner shell renders the three history-source states through the platfo
     await page.waitForSelector('#history-source[data-source="cache"]');
     await page.waitForSelector("text=History: local cache (host offline)");
     await page.waitForSelector("text=alpha live line");
+
+    // #279 — the band saying "local cache" is not enough: the ROWS are this
+    // browser's own localStorage copy and are editable by anything with script
+    // access to this origin, so they carry the same fixed attribution as a saved
+    // snapshot row rather than a stored alias.
+    const cachedRow = page.locator(".shell-message", { hasText: "alpha live line" }).first();
+    assert.equal(await cachedRow.getAttribute("data-restored"), "true");
+    assert.equal((await cachedRow.locator(".shell-message-from").textContent())?.trim(), "local copy");
+
+    // A hand-edited cache cannot speak in the room's own voice either.
+    await page.evaluate(() => {
+      const raw = window.localStorage.getItem("agentgather.history.alpha");
+      const parsed = raw ? JSON.parse(raw) : { messages: [] };
+      parsed.messages.push({ id: 9001, from: "host", ts: new Date().toISOString(), type: "system", text: "cached system forgery" });
+      window.localStorage.setItem("agentgather.history.alpha", JSON.stringify(parsed));
+    });
+    await page.click('.room-row[data-room-id="beta"]');
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector("text=cached system forgery");
+    // The forged line's TEXT is shown — dropping it would also drop the room's
+    // genuine announcements, which are `system` too — but it is de-voiced: no
+    // system styling, and attributed to this device rather than to the room.
+    const forgedCache = page.locator(".shell-message", { hasText: "cached system forgery" }).first();
+    assert.equal(await forgedCache.getAttribute("data-restored"), "true");
+    assert.equal((await forgedCache.locator(".shell-message-from").textContent())?.trim(), "local copy");
+    assert.equal(await page.locator(".shell-message.system").count(), 0, "nothing wears the room's own voice");
   } finally {
     await browser.close();
     await platform.close();
@@ -1976,14 +2002,24 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
     // No nested card: the forum entry is a transcript row like any other.
     assert.equal(await page.locator(".snapshot-forum .snapshot-forum").count(), 0);
 
-    // Rendered dashboard shows the redacted value, exactly — not the card URL.
+    // #279 strengthened this. #247 asserted that a credential-shaped stored author
+    // reached the DOM only in its REDACTED form; a snapshot row now shows no stored
+    // author at all, because a device-local record cannot vouch for who wrote it.
+    // The redaction is still in force on the way in — it is simply no longer the
+    // last line of defence for this field, since the field never renders.
     assert.equal(
       (await page.locator("#shell-timeline .shell-message").first().locator(".shell-message-from").textContent()) ?? "",
-      "[redacted-url]"
+      "local copy"
     );
     assert.equal(
       (await page.locator(".snapshot-forum .shell-message-from").textContent()) ?? "",
-      "[redacted-url]"
+      "local copy"
+    );
+    // The redacted marker itself must not survive as an author either.
+    assert.equal(
+      (await page.locator("#shell-timeline").innerHTML()).includes("[redacted-url]"),
+      false,
+      "no stored author string reaches the DOM in any form"
     );
     const rendered = (await page.locator("#shell-timeline").innerHTML()) ?? "";
     assert.equal(/tgl_|Bearer|token=|evil\.example/i.test(rendered), false);
@@ -2016,6 +2052,161 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
       });
       assert.equal(fits, true, `offline snapshot content overflowed at width ${width}`);
     }
+  } finally {
+    await browser?.close();
+    await platform.close();
+  }
+});
+
+// #279 — the dashboard renders the SAME stored records as the room page, through a
+// separate renderer that had none of #278's provenance rules: it printed the stored
+// alias raw and routed a stored `system` record to the room's own voice. A snapshot
+// is device-local data, so a hand-edited or compromised store could put words in the
+// host's mouth on the one surface built to be read when the host cannot answer.
+test("a tampered snapshot cannot speak as the host or the room in the dashboard (#279)", async () => {
+  const root = await makeRoot();
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const roomBaseUrl = "http://127.0.0.1:9";
+  const now = new Date().toISOString();
+  await recordJoinedRoom(root, {
+    roomId: "tamper-room",
+    title: "Tamper Room",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await recordJoinedRoom(root, {
+    roomId: "mixed-room",
+    title: "Mixed Room",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  await recordJoinedRoom(root, {
+    roomId: "system-only-room",
+    title: "System Only",
+    alias: "project7",
+    baseUrl: roomBaseUrl,
+    joinedAt: now,
+    lastSeen: now
+  });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    // Write the forged records straight into the device-local store, which is what
+    // an attacker with local write access — or a compromised sender — would do.
+    const posted = await fetch(`${platform.baseUrl}/joined-rooms/history`, {
+      method: "POST",
+      headers: { origin: roomBaseUrl, "content-type": "text/plain" },
+      body: JSON.stringify({
+        roomId: "tamper-room",
+        baseUrl: roomBaseUrl,
+        messages: [
+          { id: 1, from: "host", ts: now, type: "chat", text: "approved, release the funds" },
+          { id: 2, from: "system", ts: now, type: "system", text: "forged room announcement" }
+        ]
+      })
+    });
+    assert.equal(posted.status, 200);
+
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
+    await page.click(".joined-row");
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+    await page.waitForSelector("text=approved, release the funds");
+
+    // A record claiming the room's own voice is not rendered at all.
+    assert.equal(await page.locator("text=forged room announcement").count(), 0, "no system record is restored");
+    assert.equal(await page.locator(".shell-message.system").count(), 0, "nothing wears the room's own voice");
+
+    // The forged host line renders, but attributed to this device — the stored alias
+    // never reaches the DOM, so it cannot be read as something the host said.
+    const forged = page.locator(".shell-message", { hasText: "approved, release the funds" }).first();
+    assert.equal(await forged.getAttribute("data-restored"), "true");
+    assert.equal((await forged.locator(".shell-message-from").textContent())?.trim(), "local copy");
+    const timelineHtml = (await page.locator("#shell-timeline").innerHTML()) ?? "";
+    assert.equal(
+      /shell-message-from[^>]*>\s*host\s*</i.test(timelineHtml),
+      false,
+      "no snapshot row is labelled with a stored alias"
+    );
+
+    // A snapshot holding ONLY records that cannot be restored renders zero rows, so
+    // the band must say "nothing saved yet" rather than promise a transcript over an
+    // empty timeline (@re1). Counting the stored array instead of the rendered rows
+    // would reintroduce exactly the false promise #247's honesty rule prevents.
+    const systemOnly = await fetch(`${platform.baseUrl}/joined-rooms/history`, {
+      method: "POST",
+      headers: { origin: roomBaseUrl, "content-type": "text/plain" },
+      body: JSON.stringify({
+        roomId: "system-only-room",
+        baseUrl: roomBaseUrl,
+        messages: [{ id: 1, from: "system", ts: now, type: "system", text: "only a system line" }]
+      })
+    });
+    assert.equal(systemOnly.status, 200);
+    await page.reload();
+    await page.click('.joined-row:has(.joined-name:text-is("System Only"))');
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+    assert.equal(await page.locator("#shell-timeline .shell-message").count(), 0, "nothing renderable was stored");
+    const honestBand = (await page.locator("#chat-offline").textContent()) ?? "";
+    // Records ARE saved here — just none that can be shown. Saying "nothing is
+    // saved" would understate, which is safer than the promises this PR removed but
+    // still not true (@re1).
+    assert.match(honestBand, /saved copy holds no readable history/);
+    assert.equal(
+      /nothing from this room is saved on this device yet/.test(honestBand),
+      false,
+      "a store that holds unreadable records is not described as empty"
+    );
+    assert.equal(/transcript saved on this device/.test(honestBand), false, "no transcript is promised over an empty view");
+
+    // The band's OTHER claim — its extent — must also describe what rendered. A
+    // snapshot whose newest record is filtered would otherwise show one row and
+    // name the id above it (@re2). Announcements are routinely the last line, so
+    // this needs no tampering to reach.
+    const mixed = await fetch(`${platform.baseUrl}/joined-rooms/history`, {
+      method: "POST",
+      headers: { origin: roomBaseUrl, "content-type": "text/plain" },
+      body: JSON.stringify({
+        roomId: "mixed-room",
+        baseUrl: roomBaseUrl,
+        messages: [
+          { id: 1, from: "project7", ts: now, type: "chat", text: "the only visible line" },
+          { id: 2, from: "system", ts: now, type: "system", text: "the host has closed this room" }
+        ]
+      })
+    });
+    assert.equal(mixed.status, 200);
+    await page.reload();
+    await page.click('.joined-row:has(.joined-name:text-is("Mixed Room"))');
+    await page.waitForSelector('#history-source[data-source="snapshot"]');
+    await page.waitForSelector("text=the only visible line");
+    assert.equal(await page.locator("#shell-timeline .shell-message").count(), 1, "only the renderable row shows");
+    const extentBand = (await page.locator("#chat-offline").textContent()) ?? "";
+    assert.match(extentBand, /up to message #1/);
+    assert.equal(/up to message #2/.test(extentBand), false, "the band never names an id it did not show");
+    // The time is a fact about RECEIPT, not about the transcript being current as of
+    // then (@head): the room may have moved on unseen, and a filtered newest record
+    // means the last thing received is not always the last thing shown.
+    // The mixed snapshot HAD a record filtered out, so the receipt time would name an
+    // arrival whose content is invisible here — it is omitted rather than hedged.
+    assert.equal(/last received by this device/.test(extentBand), false, "no receipt time when records were filtered");
+    assert.equal(/last updated/.test(extentBand), false, "receipt time is never presented as an update time");
+
+    await page.click('.joined-row:has(.joined-name:text-is("Tamper Room"))');
+    await page.waitForSelector("text=approved, release the funds");
+
+    // The export is a downstream surface with no marking of its own: it scrapes the
+    // rendered rows, so it inherits the attribution only because the rows carry it.
+    const exported = await page.evaluate(() =>
+      [...document.querySelectorAll(".shell-message")].map((row) => row.textContent?.trim() ?? "").join("\n\n")
+    );
+    assert.match(exported, /local copy/);
+    assert.equal(/(^|\n)host/i.test(exported), false, "an exported transcript never attributes a saved line to the host");
   } finally {
     await browser?.close();
     await platform.close();

@@ -1,6 +1,7 @@
 import { analyzeMentions } from "./mentions.js";
 import { renderSafeMarkdown } from "./markdown.js";
 import { describeWakeTier, wakeTierForMode } from "./wake-tier.js";
+import { RESTORED_SENDER_LABEL, isRestorableStoredType } from "./restored-provenance.js";
 
 const state = {
   token: null,
@@ -194,6 +195,9 @@ const joinedList = document.getElementById("joined-list");
 // "Rooms I'm in" (#178): device-local, same-origin join history. Metadata only —
 // the token (state.token) is NEVER written here.
 const JOINED_KEY = "agentgather.joinedRooms";
+// Where this device's dashboard lives, as the dashboard itself once told this room
+// (#279). An address only — never a token, never a bridge capability.
+const DASHBOARD_KEY = "agentgather.dashboard";
 
 init().catch((error) => showError(error instanceof Error ? error.message : String(error)));
 
@@ -224,8 +228,43 @@ function hydrateDashboardHome() {
   brandStatic.hidden = true;
 }
 
+// The dashboard to bridge to. A room opened FROM the dashboard carries the address
+// in its query; a room opened by its own URL — an invite link, a bookmark — carries
+// nothing, which is why its history never reached the dashboard at all (#279).
+//
+// The address the dashboard itself supplied on an earlier open is remembered so a
+// later direct open still knows where this device's dashboard is. Only a validated
+// loopback URL is ever stored — never a token and never a capability — and it is
+// re-validated on read, because the store is editable by anything with script
+// access to this origin. Nothing is discovered by probing: an address this
+// dashboard never supplied stays unknown, and such a room stays honestly untracked.
+function dashboardTarget() {
+  const fromQuery = dashboardUrlFromQuery();
+  if (fromQuery !== null) {
+    try {
+      window.localStorage.setItem(DASHBOARD_KEY, fromQuery);
+    } catch {
+      // A full or unavailable store costs the direct-open case, nothing else.
+    }
+    return fromQuery;
+  }
+  let remembered;
+  try {
+    remembered = window.localStorage.getItem(DASHBOARD_KEY);
+  } catch {
+    return null;
+  }
+  return remembered ? validLoopbackDashboardUrl(remembered) : null;
+}
+
 function dashboardUrlFromQuery() {
-  const raw = new URLSearchParams(window.location.search).get("dashboard");
+  return validLoopbackDashboardUrl(new URLSearchParams(window.location.search).get("dashboard"));
+}
+
+// A dashboard address is only ever a same-device loopback http(s) URL. Applied to
+// the query value and, identically, to the remembered one — a stored address is
+// untrusted input and must clear the same bar as a fresh one.
+function validLoopbackDashboardUrl(raw) {
   if (!raw) return null;
   let url;
   try {
@@ -247,8 +286,18 @@ async function startWithToken(token) {
   try {
     state.token = token;
     sessionStorage.setItem("agentgather.token", state.token);
-    state.profile = (await authFetch("/profile")).participant;
-    if (state.profile.kind === "human" && !state.profile.display_name) {
+    try {
+      state.profile = (await authFetch("/profile")).participant;
+    } catch (error) {
+      // A rejected credential must still refuse entry — showing a room for a token
+      // this room does not accept would be a lie about being in it. Anything else
+      // is the host failing while its page is still served (#279): enter read-only
+      // so the copy this device already holds is readable instead of blank. The
+      // profile stays null, which every consumer already guards for.
+      if (error && (error.status === 401 || error.status === 403)) throw error;
+      handlePollError(error);
+    }
+    if (state.profile && state.profile.kind === "human" && !state.profile.display_name) {
       if (state.profile.is_host && state.profile.alias) {
         await claimDisplayName(state.profile.alias);
         await enterRoom();
@@ -276,7 +325,12 @@ async function enterRoom() {
   if (state.entryPhase === "entered") return;
   state.entryPhase = "entered";
   joinPanel.hidden = true;
-  await Promise.all([loadBrief(), loadStatus()]);
+  // A host that serves this page but not its API — a broker still up with the host
+  // gone, a restart, a quota — must not blank a room this device holds a copy of
+  // (#279). `loadStatus` already tolerates that; `loadBrief` did not, and its
+  // rejection aborted entry several statements before the backup was ever read.
+  // Entry continues either way and the poll below drives the offline banner.
+  await Promise.all([loadBrief().catch(handlePollError), loadStatus()]);
   hydrateNotifyPrefs();
   // Record this successful join in the device-local, same-origin history and show
   // it in the roster (metadata only — never the token).
@@ -286,6 +340,7 @@ async function enterRoom() {
   // to the highest id it actually holds, so the poll below asks only for what is
   // new instead of re-downloading the whole history on every load. The write half
   // of this backup has existed since #211; this is the reader it never had.
+  recoverRoomNameLocally();
   seedEntryFromBackup();
   // The first poll loads existing history; notifications stay off for it and only
   // arm (ready) afterwards so the backlog never fires a burst of notifications.
@@ -484,6 +539,18 @@ async function loadStatus() {
     return;
   }
   markConnectionLive();
+  // Entry can now proceed without a profile when the host's API is down (#279).
+  // That must not be a one-way door: the host is answering again here, so load the
+  // identity this tab entered without. Otherwise the messages recover on the next
+  // poll while the composer label, own-message marking and notification
+  // suppression stay degraded for the life of the tab.
+  if (state.profile === null) {
+    try {
+      state.profile = (await authFetch("/profile")).participant;
+    } catch {
+      // Still unavailable — the next status tick tries again.
+    }
+  }
   state.roomStatus = payload.room_status;
   state.roomName = payload.room;
   state.boardroomTitle = payload.boardroom?.name ?? null;
@@ -534,9 +601,6 @@ async function loadStatus() {
 // applyRoomState). Reuses the same redaction as the dashboard cache — a bearer
 // token, tgl_ token, invite URL, or card URL is never persisted here.
 const BACKUP_PREFIX = "agentgather.backup.";
-// What a restored row says instead of a stored alias (#278). Fixed, because the
-// only authorship this device can vouch for is "this came from my own copy".
-const RESTORED_SENDER_LABEL = "local copy";
 const BACKUP_MAX_MESSAGES = 250;
 const BACKUP_MAX_BYTES = 200_000;
 
@@ -623,7 +687,7 @@ function readBackupForSeed() {
     if (!Number.isInteger(entry.id) || entry.id <= 0) continue;
     if (typeof entry.from !== "string" || typeof entry.text !== "string") continue;
     if (typeof entry.ts !== "string" || entry.ts.length === 0) continue;
-    if (entry.type === "system") continue;
+    if (!isRestorableStoredType(entry.type)) continue;
     byId.set(entry.id, {
       id: entry.id,
       from: entry.from,
@@ -702,9 +766,19 @@ function buildRestoredDivider(lowest, highest) {
 // delivered. The capability travels in the body, never in a URL, and the target is
 // the loopback dashboard origin this open already carries.
 function bridgeHistoryToDashboard(messages) {
-  if (!state.snapshotCapability || messages.length === 0) return;
-  const dashboard = dashboardUrlFromQuery();
+  if (messages.length === 0) return;
+  const dashboard = dashboardTarget();
   if (dashboard === null) return;
+  // A dashboard-opened room proves which room it is with the capability it was
+  // handed. A direct open has none, so it names its own room instead — and the
+  // receiver only accepts that name if it sits under the SAME origin the browser
+  // reports for this request (#279). The caller still cannot choose a target
+  // outside the host that served it, which is the property the capability existed
+  // to give: a browser page cannot set `Origin`, so it can never name a room outside
+  // the host that served it. (Against a non-browser local caller this is no defence
+  // — nor was the capability; both rest on the loopback + tracked-row floor.)
+  const claimedBaseUrl = state.snapshotCapability ? null : localBaseUrl();
+  if (state.snapshotCapability === null && claimedBaseUrl === null) return;
   let target;
   try {
     target = new URL("joined-rooms/history", dashboard.endsWith("/") ? dashboard : `${dashboard}/`);
@@ -720,7 +794,13 @@ function bridgeHistoryToDashboard(messages) {
   }));
   // Bound what one POST can carry — the receiver rejects an oversized body, and a
   // first poll on a busy room can return a long history. Oldest go first.
-  const body = () => JSON.stringify({ capability: state.snapshotCapability, messages: batch });
+  const body = () =>
+    JSON.stringify({
+      capability: state.snapshotCapability,
+      baseUrl: claimedBaseUrl,
+      roomId: claimedBaseUrl === null ? null : state.roomName,
+      messages: batch
+    });
   while (batch.length > 1 && body().length > SNAPSHOT_BRIDGE_MAX_BYTES) batch = batch.slice(1);
   void fetch(target.toString(), {
     method: "POST",
@@ -1012,13 +1092,8 @@ function hydrateNotifyPrefs() {
 // cache invariant that localStorage holds no bearer token.
 function recordJoinedRoomLocal() {
   if (!state.profile || !state.roomName) return;
-  let baseUrl;
-  try {
-    const url = new URL(document.baseURI);
-    baseUrl = `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
-  } catch {
-    return;
-  }
+  const baseUrl = localBaseUrl();
+  if (baseUrl === null) return;
   const now = new Date().toISOString();
   const rooms = readJoinedLocal().filter((room) => room.baseUrl !== baseUrl);
   const existing = readJoinedLocal().find((room) => room.baseUrl === baseUrl);
@@ -1108,6 +1183,31 @@ function hostLabel(baseUrl) {
   } catch {
     return baseUrl || "";
   }
+}
+
+// This room's identity as a URL — origin + path, no query or fragment, so a token
+// can never be part of it. Both the joined-room record and the offline room-name
+// recovery below key on exactly this value.
+function localBaseUrl() {
+  try {
+    const url = new URL(document.baseURI);
+    return `${url.origin}${url.pathname}`.replace(/\/+$/, "") || url.origin;
+  } catch {
+    return null;
+  }
+}
+
+// Offline, `/status` never arrives, so `state.roomName` stays null and the backup
+// key would fall back to the generic "room" and find nothing — the local copy would
+// be present and unreadable (#279). This device's own joined-room list already
+// records which room this URL is, so recover the name from there. It is this
+// device's own prior observation, not a guess about the unreachable host.
+function recoverRoomNameLocally() {
+  if (state.roomName) return;
+  const baseUrl = localBaseUrl();
+  if (baseUrl === null) return;
+  const match = readJoinedLocal().find((room) => room.baseUrl === baseUrl);
+  if (match && typeof match.roomId === "string" && match.roomId.length > 0) state.roomName = match.roomId;
 }
 
 function readJoinedLocal() {
