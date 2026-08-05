@@ -3199,3 +3199,123 @@ test("show earlier is withdrawn with a stated reason while the host is unreachab
     await fixture.close();
   }
 });
+
+// #290 — a channel link carries no credential (#288 working as designed), so a
+// cmd-clicked tab lands on `#auth-error`. "Ask the host for a browser invite URL"
+// is only true for an arrival that has no way in; a device that already remembers
+// its dashboard has one, because the dashboard reopens rooms through
+// `/joined-rooms/open` with the token held server-side.
+//
+// Both branches are asserted, and the no-dashboard branch is asserted BYTE-FOR-BYTE
+// against today's copy — "a route did not appear" would also pass if the pane had
+// been rewritten, and that participant must not be pointed at a dashboard they do
+// not have.
+const AUTH_ERROR_COPY =
+  "This room needs an invite link or Attend Card from the host. Ask the host for a browser invite URL.";
+
+test("an uncredentialed arrival is offered its remembered dashboard, and only then (#290)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+
+    // --- Branch A: nothing remembered. Today's pane, unchanged. ---
+    const bare = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await bare.goto(fixture.baseUrl);
+    await bare.waitForSelector('.room-shell[data-state="auth-error"]');
+    assert.equal(
+      (await bare.locator("#auth-error p").first().innerText()).trim(),
+      AUTH_ERROR_COPY,
+      "the invite copy must stay byte-for-byte where it is the true advice"
+    );
+    assert.equal(
+      await bare.locator("#auth-dashboard-route").isVisible(),
+      false,
+      "a participant with no remembered dashboard was offered one anyway"
+    );
+    assert.equal(
+      await bare.locator("#auth-dashboard-link").isVisible(),
+      false,
+      "the route element must be inert, not merely unstyled, with nothing remembered"
+    );
+    await bare.close();
+
+    // --- Branch B: this device already knows where its dashboard lives. ---
+    // Seeded the way the product seeds it — the dashboard supplying `?dashboard=`
+    // on an earlier open (#279) — rather than by writing localStorage directly, so
+    // the test exercises the real path into `DASHBOARD_KEY`.
+    const dashboardUrl = `http://127.0.0.1:${await getFreePort()}/`;
+    const known = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await known.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboardUrl)}#token=${fixture.hostToken}`);
+    await known.waitForSelector("text=Ship the browser room safely.");
+    assert.equal(
+      await known.evaluate(() => window.localStorage.getItem("agentgather.dashboard")),
+      dashboardUrl,
+      "precondition: the dashboard address is remembered for this origin"
+    );
+
+    // The uncredentialed arrival: same origin, no fragment, no session token —
+    // exactly what a cmd-clicked channel link produces.
+    await known.evaluate(() => window.sessionStorage.clear());
+    await known.goto(fixture.baseUrl);
+    await known.waitForSelector('.room-shell[data-state="auth-error"]');
+
+    assert.equal(
+      await known.locator("#auth-dashboard-route").isVisible(),
+      true,
+      "a device with a remembered dashboard was still told to ask the host"
+    );
+    assert.equal(
+      await known.locator("#auth-dashboard-link").getAttribute("href"),
+      dashboardUrl,
+      "the route must point at the same address #dashboard-home uses"
+    );
+
+    // The pane's only action, so on a narrow screen it must be a thumb-sized
+    // target by design rather than by wrapping — the label happens to run onto
+    // two lines at 390, which would carry the height on its own until someone
+    // shortened the copy. Measured as rendered, at both widths the project checks.
+    for (const width of [1280, 390]) {
+      await known.setViewportSize({ width, height: 820 });
+      await known.waitForTimeout(150);
+      assert.equal(
+        await known.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        true,
+        `the auth pane overflows horizontally at ${width}`
+      );
+      if (width === 390) {
+        const box = await known.locator("#auth-dashboard-link").boundingBox();
+        assert.ok(
+          box !== null && box.height >= 44,
+          `the route tap target is ${box?.height ?? "unmeasurable"}px at 390, below the 44px minimum`
+        );
+      }
+    }
+    await known.setViewportSize({ width: 1280, height: 820 });
+    // The advice that was already there stays there — the route is offered
+    // alongside it, per the ticket, not in place of it.
+    assert.equal(
+      (await known.locator("#auth-error p").first().innerText()).trim(),
+      AUTH_ERROR_COPY
+    );
+
+    // The whole point of #288: no credential may reach the URL, the markup, or
+    // anything persisted. Asserted over the rendered pane and the live href, not
+    // over the source.
+    const paneHtml = await known.locator("#auth-error").innerHTML();
+    const href = (await known.locator("#auth-dashboard-link").getAttribute("href")) ?? "";
+    for (const [label, subject] of [["pane markup", paneHtml], ["route href", href]] as const) {
+      assert.doesNotMatch(subject, /host-browser-|tgl_|Bearer|#token=|[?&]token=/i, `${label} carries a credential`);
+      assert.equal(subject.includes(fixture.hostToken), false, `${label} carries the participant token`);
+    }
+    assert.equal(known.url().includes(fixture.hostToken), false, "the arrival URL carries a credential");
+    assert.equal(
+      (await known.evaluate(() => JSON.stringify(window.localStorage))).includes(fixture.hostToken),
+      false,
+      "the token must never be persisted by this path"
+    );
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});

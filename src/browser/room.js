@@ -92,6 +92,8 @@ const state = {
 
 const shell = document.querySelector(".room-shell");
 const authError = document.getElementById("auth-error");
+const authDashboardRoute = document.getElementById("auth-dashboard-route");
+const authDashboardLink = document.getElementById("auth-dashboard-link");
 const joinPanel = document.getElementById("join-panel");
 const joinForm = document.getElementById("join-form");
 const displayNameInput = document.getElementById("display-name");
@@ -215,6 +217,7 @@ async function init() {
   const token = tokenFromEntryFragment() || sessionStorage.getItem("agentgather.token");
   if (!token) {
     authError.hidden = false;
+    offerDashboardRoute();
     shell.dataset.state = "auth-error";
     window.addEventListener("hashchange", () => {
       const nextToken = tokenFromEntryFragment();
@@ -226,6 +229,26 @@ async function init() {
     return;
   }
   await startWithToken(token);
+}
+
+// #290 — a link-opened tab inherits no credential, which is #288 working, not
+// failing. But "ask the host for an invite URL" is only good advice when the
+// arrival really has no way in; a device whose dashboard address is already
+// remembered has one, because the dashboard reopens rooms through
+// `/joined-rooms/open`, which holds the token SERVER-side.
+//
+// The route is therefore offered on exactly the condition that makes it true, and
+// on no other. `dashboardTarget()` returns a validated same-device loopback
+// address or null — the identical value `#dashboard-home` uses — so nothing is
+// guessed, nothing is probed, and no credential is read, written or linked. With
+// no remembered dashboard this function touches nothing at all and the pane reads
+// exactly as it did before this existed.
+function offerDashboardRoute() {
+  if (authDashboardRoute === null || authDashboardLink === null) return;
+  const dashboard = dashboardTarget();
+  if (dashboard === null) return;
+  authDashboardLink.href = dashboard;
+  authDashboardRoute.hidden = false;
 }
 
 function hydrateDashboardHome() {

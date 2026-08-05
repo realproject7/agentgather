@@ -41,6 +41,16 @@
       <section id="auth-error" class="auth-error k-card" hidden>
         <h2>Invite link required</h2>
         <p>This room needs an invite link or Attend Card from the host. Ask the host for a browser invite URL.</p>
+        <!-- #290 — shown only when this device already remembers where its dashboard
+             lives. A link-opened tab carries no credential by design (#288), but the
+             dashboard can reopen the room with one, so this arrival is a click from
+             fixed rather than a request to the host. Hidden, empty and inert
+             otherwise: a participant who really has no invite must not be pointed at
+             a dashboard they do not have. -->
+        <p id="auth-dashboard-route" class="auth-route" hidden>
+          You are signed in on this device.
+          <a id="auth-dashboard-link" href="/">Reopen this room from your dashboard</a>.
+        </p>
       </section>
 
       <section id="join-panel" class="auth-error k-card" hidden>
