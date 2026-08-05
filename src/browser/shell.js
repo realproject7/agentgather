@@ -357,10 +357,26 @@ function applyRailSplit(value) {
   if (top === null) return null;
   roomRail.dataset.split = "on";
   roomRail.style.setProperty("--rail-top", `${top}px`);
-  railDivider.setAttribute("aria-valuenow", String(top));
-  railDivider.setAttribute("aria-valuemin", String(RAIL_MIN_TOP));
-  railDivider.setAttribute("aria-valuemax", String(railMaxTop()));
+  syncRailAria(top);
   return top;
+}
+
+// Publish where the split currently sits. A focusable `role="separator"` is a
+// window splitter, and a name plus an orientation only make it operable — without
+// value attributes a screen-reader user can focus the handle and press arrows
+// with no idea where the boundary is, or that it moved (@re2, msg 1277).
+//
+// This runs on first layout too, not only after a resize: the values have to be
+// there BEFORE the user's first interaction, which is exactly when they are most
+// needed. `top` defaults to the measured height so the initial announcement
+// describes the real starting layout rather than a nominal one.
+function syncRailAria(top) {
+  const max = railMaxTop();
+  if (max < RAIL_MIN_TOP) return; // rail too short to resize; no value to claim
+  const now = top ?? Math.round(railRooms.getBoundingClientRect().height);
+  railDivider.setAttribute("aria-valuenow", String(Math.min(Math.max(now, RAIL_MIN_TOP), max)));
+  railDivider.setAttribute("aria-valuemin", String(RAIL_MIN_TOP));
+  railDivider.setAttribute("aria-valuemax", String(max));
 }
 
 // The split currently in effect, in px — the applied value if there is one, or
@@ -387,9 +403,20 @@ function bindRailDivider() {
   // rather than rejected, so a split saved in a taller window still yields a
   // usable layout.
   const stored = readRailSplit();
-  if (stored !== null && applyRailSplit(stored) === null) {
+  const settle = () => {
+    // Restoring is optional; publishing the ARIA values is not. A rail that has
+    // never been resized still has a split, and the separator has to say so.
+    const applied = stored === null ? null : applyRailSplit(stored);
+    if (applied === null) syncRailAria();
+    return stored === null ? railDivider.hasAttribute("aria-valuenow") : applied !== null;
+  };
+  if (!settle()) {
+    // Below 860px the rail is display:none until the Rooms toggle opens it, so
+    // there is nothing to measure or clamp against yet. Finish the moment it
+    // becomes measurable, rather than dropping the stored split and leaving the
+    // separator valueless.
     const observer = new ResizeObserver(() => {
-      if (applyRailSplit(stored) !== null) observer.disconnect();
+      if (settle()) observer.disconnect();
     });
     observer.observe(roomRail);
   }
@@ -436,8 +463,11 @@ function bindRailDivider() {
   // tall enough for it. Re-clamp against the new height without persisting, so
   // resizing a window never overwrites the user's chosen split.
   window.addEventListener("resize", () => {
-    if (roomRail.dataset.split !== "on") return;
-    applyRailSplit(currentRailTop());
+    // Re-clamp against the new height without persisting, so resizing a window
+    // never overwrites the user's chosen split. The ARIA maximum moves with the
+    // rail whether or not a split was ever chosen.
+    if (roomRail.dataset.split === "on") applyRailSplit(currentRailTop());
+    else syncRailAria();
   });
 }
 

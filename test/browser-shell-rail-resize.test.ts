@@ -129,6 +129,15 @@ test("the divider is a named, oriented separator that is reachable by keyboard (
     assert.equal(name, "Resize the rooms list");
     assert.ok(name.trim().length > 0);
 
+    // A focusable separator is a window splitter: without value attributes it is
+    // operable but not perceivable — arrows move a boundary the user cannot hear.
+    // These must be present BEFORE any interaction, which is when they matter
+    // most, and aria-valuenow must describe the real starting layout.
+    const startingHeight = await roomsHeight(page);
+    assert.equal(await divider.getAttribute("aria-valuenow"), String(startingHeight));
+    assert.equal(await divider.getAttribute("aria-valuemin"), String(MIN_TOP));
+    assert.equal(await divider.getAttribute("aria-valuemax"), String(await maxTop(page)));
+
     // Reached by real Tab presses, not by scripted focus.
     let reached = false;
     for (let press = 0; press < 40; press += 1) {
@@ -320,7 +329,7 @@ test("non-numeric stored values are discarded and the default layout is kept (#2
   // "" and "   " are in this list on purpose: `Number("")` is 0, so a validator
   // built on Number() alone would turn an empty entry into a real split rather
   // than rejecting it. "0x80" is here for the same reason.
-  for (const junk of ["not-a-number", "", "   ", "NaN", "Infinity", "0x80", '{"top":300}']) {
+  for (const junk of ["not-a-number", "", "   ", "NaN", "Infinity", "null", "undefined", "0x80", '{"top":300}']) {
     const fixture = await startFixture(junk);
     try {
       const { page } = fixture;
