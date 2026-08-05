@@ -2212,3 +2212,49 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     await platform.close();
   }
 });
+
+// #276 — the top/bottom split exists so the sidebar acts as a persistent nav: the
+// rooms stay reachable while a room is open, and the lower region follows the
+// selection. This is the behaviour the ticket was filed to protect, so it is
+// asserted rather than assumed to keep working.
+test("the dashboard sidebar keeps the rooms reachable while a room is open (#276)", async () => {
+  const root = await makeRoot();
+  await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
+  await createRoom({ root, roomId: "alpha", hostAlias: "host", briefBody: "go" });
+  await createControlPlaneRoom(root, roomInput({ room_id: "beta", title: "Beta", status: "active" }));
+  const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(platform.baseUrl);
+    await page.waitForSelector(".room-row");
+
+    // Home: rooms above, room-status guidance below.
+    assert.equal(await page.locator(".rail-rooms").isVisible(), true);
+    assert.equal(await page.locator("#lower-home").isVisible(), true);
+    assert.equal(await page.locator("#lower-room").isVisible(), false);
+
+    await page.click('.room-row[data-room-id="alpha"]');
+    await page.waitForSelector(".platform-shell.room-selected");
+
+    // With a room open the rooms are STILL reachable — that is the whole point of
+    // the split, and losing it is what this ticket reports.
+    assert.equal(await page.locator(".rail-rooms").isVisible(), true, "the rooms area must survive room selection");
+    assert.equal(await page.locator('.room-row[data-room-id="beta"]').isVisible(), true, "another room stays selectable");
+    // ...and the lower region now follows the selection.
+    assert.equal(await page.locator("#lower-room").isVisible(), true);
+    assert.equal(await page.locator("#lower-home").isVisible(), false);
+
+    // Switching directly to the other room needs no detour home.
+    await page.click('.room-row[data-room-id="beta"]');
+    await page.waitForSelector('.room-row[data-room-id="beta"][aria-current="true"]');
+    assert.equal(await page.locator(".rail-rooms").isVisible(), true);
+
+    // No credential is ever in the rail markup.
+    const railHtml = (await page.locator(".rail-rooms").innerHTML()) ?? "";
+    assert.equal(/tgl_|Bearer|token=/i.test(railHtml), false, "the rail stays token-free");
+  } finally {
+    await browser.close();
+    await platform.close();
+  }
+});
