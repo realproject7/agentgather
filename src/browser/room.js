@@ -2239,10 +2239,34 @@ function applyRoomState() {
   if (backupNotice !== null) {
     backupNotice.hidden = !offline;
     if (offline) {
+      // #297: when older rows fetched FROM THE HOST (#283) are also on screen, the
+      // notice must name both sources. It was never wrong — its stated bound is
+      // the upper one and still holds, and the provenance divider below already
+      // says where those rows came from — but it described one source as though
+      // it were the whole timeline, in the label next to the one #283 exists to
+      // keep honest.
+      //
+      // Where no host-fetched rows exist the text is byte-for-byte what it has
+      // always been: a notice that hedges in every state is worse than one that
+      // is partial in a rare one. The operative clause — newer messages aren't
+      // shown and can't be sent — is carried verbatim into every branch, because
+      // it is why the notice exists at all.
+      //
+      // It is a 2x2, not a pair (@re2, msg 1411). The empty-backup string is the
+      // one that reads worst with host rows on screen: "No messages are saved on
+      // this device yet" is true of the device and says nothing about a timeline
+      // that is visibly not empty. Both host-present variants name both sources;
+      // both host-absent variants are untouched.
+      const fetchedFromHost = state.earlier.loaded > 0;
+      const older = `${state.earlier.loaded} older ${state.earlier.loaded === 1 ? "message" : "messages"} fetched from the host while it was reachable`;
       backupNotice.textContent =
         state.seen.size > 0
-          ? `Local backup · the host server is offline. Showing messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
-          : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
+          ? fetchedFromHost
+            ? `Local backup + host history · the host server is offline. Showing ${older}, and messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
+            : `Local backup · the host server is offline. Showing messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
+          : fetchedFromHost
+            ? `Host history · the host server is offline. Showing ${older}; nothing is saved on this device yet, and newer messages aren't shown and can't be sent until the host resumes.`
+            : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
     }
   }
 }
