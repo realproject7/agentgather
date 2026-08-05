@@ -1162,7 +1162,8 @@ v0.1 rooms are broadcast. Every participant can read every message in the room.
 | `POST` | `/brief` | Bearer, host only | `200` updated brief | Server single-writer path for `room brief set`; increments version and emits system message |
 | `GET` | `/card?participant=<alias>&token=<token>` | token in query | `200` card | Onboarding; token in query is acceptable because the URL is the invite |
 | `POST` | `/join` | Bearer | `200` participant state | Marks participant active; sets `last_seen` |
-| `GET` | `/messages?since_id=<id>` | Bearer | `200` `{messages, next_since_id}` | One-shot read, no hold |
+| `GET` | `/messages?since_id=<id>` | Bearer | `200` `{messages, next_since_id}` | One-shot forward read, no hold. `limit` is optional; **absent means unbounded** — a stated property, not an accident: every existing caller relies on receiving the whole range |
+| `GET` | `/messages?before_id=<id>&limit=<n>` | Bearer | `200` `{messages, has_more_before}` | One-shot **backward** read (#283): the newest `limit` messages strictly older than `before_id`, ascending like every other response. Carries **no `next_since_id`** — that field is a forward cursor, and a backward page emitting one would rewind a client's live cursor. `has_more_before` is stated, never inferred from page length. `since_id` + `before_id` together is `400 conflicting_cursor`; a non-integer or negative `before_id` is `400 invalid_before_id`; `limit < 1` or non-integer is `400 invalid_limit` |
 | `POST` | `/messages` | Bearer | `201` `{ok, message}` | `from` is derived from token |
 | `GET` | `/wait?participant=<alias>&since_id=<id>` | Bearer | `200` wait response | Long-poll; see §12.7 |
 | `POST` | `/leave` | Bearer | `200` `{ok}` | Marks participant `left`; emits system message |
