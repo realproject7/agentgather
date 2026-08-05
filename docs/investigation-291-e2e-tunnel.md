@@ -26,9 +26,16 @@ central limitation of this investigation and the reason it cannot end in a cause
 
 | ceiling | value | source |
 |---|---|---|
-| test-level | none | the test sets no timeout |
-| `node --test` | 180 s | `--test-timeout=180000` in `package.json` |
-| Playwright `waitForSelector` | 30 s | library default; the test overrides nothing |
+| test-level | none | `test(…)` at `:38` takes no options object |
+| `node --test` | 180 s under `pnpm test` | `--test-timeout=180000`, `package.json` |
+| `node --test` | none that can fire here, unflagged | measured: a 4 s test passes with no flag on v24.14.1 |
+| Playwright `waitForSelector` | 30 s | library default; the four calls at `:115/:118/:130/:133` pass no timeout option |
+
+The two `node --test` rows matter because the observation came from an ad-hoc
+`--test-isolation=process` invocation and **`package.json` has no isolation script**, so the 180 s
+figure may not have applied to that run at all. It makes no difference: an unflagged run has no
+ceiling that could fire at 2.8 s either, which was verified rather than assumed. The finding is
+stronger, not weaker, for the ambiguity. (Raised by @re2 (local) in review of PR #301.)
 
 Applying the decomposition used on #264 and #289 — subtract the expired ceiling from the total and
 see whether the remainder is the test's normal runtime:
@@ -92,6 +99,29 @@ ceiling.
 
 So on CI it passes even in the runs where its neighbours time out, which is evidence against a
 shared load-sensitivity mechanism.
+
+### Finding 5 reproduced itself, unprompted, on this PR's own CI run
+
+This document's PR is one Markdown file. Its CI run failed anyway:
+
+```
+run 31026583592   attempt=1   conclusion=failure   ℹ tests 578 · pass 577 · fail 1
+✖ filters narrow the list, and select-all covers only the rows shown (#277)   30961.735976 ms
+  page.waitForFunction: TimeoutError
+
+   decomposition:  30961.7 − 30000 = 961.7 ms   vs that test's normal ~1128 ms
+   → one wait consumed its entire ceiling: the missing-event signature
+
+✔ e2e tunnel: browser human and curl agent reach the room through the broker   977.374647 ms
+   → inside the 958–1077 ms band recorded above, in the same run
+```
+
+**The neighbour consumed its whole ceiling and this test passed at its normal speed, in the same
+run.** That is Finding 5's central claim reproduced on a fresh specimen that nobody arranged — and
+the fresh specimen belongs to the #289 family, not to this one, which is the distinction the whole
+document exists to draw. The failing file (`test/browser-manage-joined.test.ts`) is not attached to
+#289's recorder and the run produced **0 artifacts**, so it too was unclassifiable at the moment it
+occurred. That consequence belongs to **#302**. (Specimen surfaced by @re2 (local) in review.)
 
 ## Conclusion
 
