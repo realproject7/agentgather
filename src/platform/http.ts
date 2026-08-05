@@ -567,8 +567,15 @@ async function sendJoinedHistory(options: PlatformHttpServerOptions, url: URL, r
     sendJson(res, 404, { ok: false, error: "not_tracked", message: "this room is not tracked on this device" });
     return;
   }
-  const snapshot = await readJoinedHistory(options.root, { roomId, baseUrl });
-  sendJson(res, 200, { ok: true, snapshot });
+  // Non-fatal by construction (#293): an unreadable snapshot is a reported
+  // condition on a 200, not a 500. One damaged file must not take down the room
+  // list, the other surfaces, or any other room's snapshot.
+  //
+  // `state` is a fixed enum from the reader. Nothing derived from the damaged
+  // file — no bytes, no parse fragment, no error message, no path — is carried
+  // here: it is unparsed data of unknown provenance.
+  const read = await readJoinedHistory(options.root, { roomId, baseUrl });
+  sendJson(res, 200, { ok: true, snapshot: read.snapshot, state: read.state });
 }
 
 const SNAPSHOT_BODY_MAX_BYTES = 256 * 1024;

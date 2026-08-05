@@ -188,12 +188,12 @@ test("bulk delete clears each deleted room's offline snapshot and keeps every ot
   await deleteJoinedRooms(home, targetsOf(deleted));
 
   for (const room of deleted) {
-    const snapshot = await readJoinedHistory(home, { roomId: room.roomId, baseUrl: room.baseUrl });
+    const snapshot = (await readJoinedHistory(home, { roomId: room.roomId, baseUrl: room.baseUrl })).snapshot;
     assert.equal(snapshot, null, `${room.roomId} was deleted so its snapshot must be gone`);
   }
   for (const room of seeded) {
     if (deleted.some((entry) => keyOf(entry) === keyOf(room))) continue;
-    const snapshot = await readJoinedHistory(home, { roomId: room.roomId, baseUrl: room.baseUrl });
+    const snapshot = (await readJoinedHistory(home, { roomId: room.roomId, baseUrl: room.baseUrl })).snapshot;
     assert.notEqual(snapshot, null, `${room.roomId} was not deleted so its snapshot must survive`);
   }
 });
@@ -211,7 +211,7 @@ test("bulk archive RETAINS the offline snapshot (#247), unlike delete", async ()
   }
   await setJoinedRoomsArchived(home, targetsOf(seeded), true);
   for (const room of seeded) {
-    const snapshot = await readJoinedHistory(home, { roomId: room.roomId, baseUrl: room.baseUrl });
+    const snapshot = (await readJoinedHistory(home, { roomId: room.roomId, baseUrl: room.baseUrl })).snapshot;
     assert.notEqual(snapshot, null, `${room.roomId} was archived, not deleted — its transcript must remain`);
   }
 });
