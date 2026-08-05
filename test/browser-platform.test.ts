@@ -2153,7 +2153,15 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     await page.waitForSelector('#history-source[data-source="snapshot"]');
     assert.equal(await page.locator("#shell-timeline .shell-message").count(), 0, "nothing renderable was stored");
     const honestBand = (await page.locator("#chat-offline").textContent()) ?? "";
-    assert.match(honestBand, /nothing from this room is saved on this device yet/);
+    // Records ARE saved here — just none that can be shown. Saying "nothing is
+    // saved" would understate, which is safer than the promises this PR removed but
+    // still not true (@re1).
+    assert.match(honestBand, /saved copy holds no readable history/);
+    assert.equal(
+      /nothing from this room is saved on this device yet/.test(honestBand),
+      false,
+      "a store that holds unreadable records is not described as empty"
+    );
     assert.equal(/transcript saved on this device/.test(honestBand), false, "no transcript is promised over an empty view");
 
     // The band's OTHER claim — its extent — must also describe what rendered. A
@@ -2184,8 +2192,10 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     // The time is a fact about RECEIPT, not about the transcript being current as of
     // then (@head): the room may have moved on unseen, and a filtered newest record
     // means the last thing received is not always the last thing shown.
-    assert.match(extentBand, /last received by this device/);
-    assert.equal(/last updated/.test(extentBand), false, "receipt time is not presented as an update time");
+    // The mixed snapshot HAD a record filtered out, so the receipt time would name an
+    // arrival whose content is invisible here — it is omitted rather than hedged.
+    assert.equal(/last received by this device/.test(extentBand), false, "no receipt time when records were filtered");
+    assert.equal(/last updated/.test(extentBand), false, "receipt time is never presented as an update time");
 
     await page.click('.joined-row:has(.joined-name:text-is("Tamper Room"))');
     await page.waitForSelector("text=approved, release the funds");

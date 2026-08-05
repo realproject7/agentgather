@@ -1799,21 +1799,33 @@ function renderJoinedSnapshot(entry, snapshot) {
   chatOffline.replaceChildren();
   const detailLine = document.createElement("span");
   if (renderedRows === 0) {
+    // Two different facts, so two different sentences (@re1). "Nothing is saved"
+    // is true only when the store is genuinely empty; when it holds records that
+    // none of which can be shown, saying nothing is saved understates — safer than
+    // the promises this PR removed, but still not true, and an inaccuracy that
+    // happens to be safe is still an inaccuracy.
     detailLine.textContent =
-      `The host at ${hostLabel(entry.baseUrl)} is offline and nothing from this room is saved on this device yet. ` +
-      "Nothing can be sent or loaded until the host is reachable again.";
+      messages.length + forumPosts.length === 0
+        ? `The host at ${hostLabel(entry.baseUrl)} is offline and nothing from this room is saved on this device yet. ` +
+          "Nothing can be sent or loaded until the host is reachable again."
+        : `The host at ${hostLabel(entry.baseUrl)} is offline, and this device's saved copy holds no readable ` +
+          "history for this room. Nothing can be sent or loaded until the host is reachable again.";
   } else {
-    // `savedAt` is when this device last WROTE a snapshot batch — a fact about
-    // receipt, not about the transcript. Calling it "last updated" invited the
-    // reading that the visible history is current as of then, which it is not: the
-    // room may have moved on unseen, and filtered records mean the newest thing
-    // received is not always the newest thing shown (@head).
-    const savedAt = snapshot?.savedAt ? formatTime(snapshot.savedAt) : "an earlier session";
     const upTo = highestRenderedId > 0 ? ` up to message #${highestRenderedId}` : "";
+    // `savedAt` is when this device last WROTE a batch. That is a statement about
+    // what is SHOWN only when nothing was filtered out of the store — otherwise the
+    // time could name an arrival whose content is entirely invisible here. The store
+    // carries no per-record receipt time, so there is nothing finer to derive from:
+    // the honest options are to name it when it describes the visible rows, or to
+    // omit it (@re1). It is omitted rather than qualified, because a hedged
+    // timestamp is read as a timestamp.
+    const everythingShown = messages.length + forumPosts.length === renderedRows;
+    const receipt =
+      everythingShown && snapshot?.savedAt ? ` It was last received by this device ${formatTime(snapshot.savedAt)}.` : "";
     detailLine.textContent =
-      `The host at ${hostLabel(entry.baseUrl)} is offline. This is the transcript saved on this device${upTo}, ` +
-      `last received by this device ${savedAt}. Anything sent after that is not here, and nothing can be ` +
-      "sent until the host resumes.";
+      `The host at ${hostLabel(entry.baseUrl)} is offline. This is the transcript saved on this device${upTo}.` +
+      `${receipt} Messages sent after this copy was saved are not here, and nothing can be sent ` +
+      "until the host resumes.";
   }
   chatOffline.append(detailLine, buildSnapshotRetry(entry));
 }
