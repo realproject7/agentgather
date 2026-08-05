@@ -5,6 +5,8 @@
 // from the platform's read-only chat endpoint. It never derives status or stores
 // messages itself; it only renders what the platform serves.
 
+import { RESTORED_SENDER_LABEL, isRestorableStoredType } from "./restored-provenance.js";
+
 const state = {
   rooms: [],
   joinedRooms: [],
@@ -491,7 +493,22 @@ async function selectRoom(roomId) {
   // known. These entries are not added to seen/messages, so a live fetch
   // replaces them with the faithful host copy rather than being skipped.
   const cached = readCache(roomId);
-  for (const message of cached) renderMessage(message);
+  // This browser's own localStorage copy, not a line the host just served — so it
+  // gets the same treatment as a saved snapshot row (#279). Found by running the
+  // audit rather than reading the file: the offline BAND already said "local cache",
+  // while the rows underneath it still carried a stored alias and could still route
+  // a stored `system` record to the room's own voice. Same store shape, same store
+  // trust, same rule.
+  //
+  // Note what is deliberately NOT done here, because it differs from the snapshot
+  // path below. A `system` record is not DROPPED from the cache, it is de-voiced:
+  // `renderMessage` suppresses the system styling for a restored row, so a forged
+  // record cannot speak as the room, but its text still appears attributed to this
+  // device. The cache is the dashboard's own copy of a log it fetched live, and
+  // genuine room announcements are `system` — dropping them would silently delete
+  // real content from the only offline view of it. The snapshot keeps #278's
+  // exclusion because that is the rule #278 settled for bridged room history.
+  for (const message of cached) renderMessage(message, { restored: true });
   state.cacheRendered = cached.length > 0;
   if (room) {
     renderDetail(room);
@@ -779,13 +796,20 @@ function pausedCopy(room) {
   return "";
 }
 
-function renderMessage(message) {
+function renderMessage(message, options = {}) {
+  // A row rendered from this device's saved snapshot is not a line the host just
+  // served, and must not be able to present itself as one (#279, applying #278's
+  // rules to the second renderer). The stored `type` is discarded so a hand-edited
+  // record cannot claim the room's own voice, and the stored alias never reaches
+  // the DOM — the row says only that it came from this device's copy.
+  const restoredRow = options.restored === true;
   const item = document.createElement("li");
-  item.className = `shell-message ${message.type === "system" ? "system" : ""}`.trim();
+  item.className = `shell-message ${!restoredRow && message.type === "system" ? "system" : ""}`.trim();
+  if (restoredRow) item.dataset.restored = "true";
 
   const from = document.createElement("span");
   from.className = "shell-message-from";
-  from.textContent = message.from;
+  from.textContent = restoredRow ? RESTORED_SENDER_LABEL : message.from;
 
   const time = document.createElement("time");
   time.className = "shell-message-time";
@@ -1740,7 +1764,13 @@ function renderJoinedSnapshot(entry, snapshot) {
   const messages = snapshot?.messages ?? [];
   const forumPosts = snapshot?.forumPosts ?? [];
   timeline.replaceChildren();
-  for (const message of messages) renderMessage(message);
+  // `system`/`status` records are not restored at all — the room's own voice is not
+  // something a device-local store may speak in (#278's rule, shared via
+  // restored-provenance.js so the two renderers cannot drift apart).
+  for (const message of messages) {
+    if (!isRestorableStoredType(message.type)) continue;
+    renderMessage(message, { restored: true });
+  }
   for (const post of forumPosts) renderSnapshotForumPost(post);
 
   historySource.dataset.source = "snapshot";
@@ -1797,11 +1827,15 @@ function buildSnapshotRetry(entry) {
 function renderSnapshotForumPost(post) {
   const item = document.createElement("li");
   item.className = "shell-message snapshot-forum";
+  item.dataset.restored = "true";
   const meta = document.createElement("div");
   meta.className = "shell-message-meta";
   const from = document.createElement("span");
   from.className = "shell-message-from";
-  from.textContent = post.author || "unknown";
+  // Saved forum authors are stored records like any other, so they get the same
+  // fixed attribution as a saved message row (#279) — a stored `author` naming the
+  // host would otherwise render here exactly as a genuine one does.
+  from.textContent = RESTORED_SENDER_LABEL;
   const where = document.createElement("time");
   where.className = "shell-message-time";
   where.dateTime = post.ts || "";
@@ -1817,7 +1851,8 @@ function renderSnapshotForumPost(post) {
   for (const comment of post.comments || []) {
     const line = document.createElement("div");
     line.className = "shell-message-text snapshot-forum-comment";
-    line.textContent = `${comment.author || "unknown"}: ${comment.body || ""}`;
+    // Same rule for a saved comment's author (#279).
+    line.textContent = `${RESTORED_SENDER_LABEL}: ${comment.body || ""}`;
     item.append(line);
   }
   timeline.append(item);

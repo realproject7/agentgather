@@ -1,6 +1,7 @@
 import { analyzeMentions } from "./mentions.js";
 import { renderSafeMarkdown } from "./markdown.js";
 import { describeWakeTier, wakeTierForMode } from "./wake-tier.js";
+import { RESTORED_SENDER_LABEL, isRestorableStoredType } from "./restored-provenance.js";
 
 const state = {
   token: null,
@@ -600,9 +601,6 @@ async function loadStatus() {
 // applyRoomState). Reuses the same redaction as the dashboard cache — a bearer
 // token, tgl_ token, invite URL, or card URL is never persisted here.
 const BACKUP_PREFIX = "agentgather.backup.";
-// What a restored row says instead of a stored alias (#278). Fixed, because the
-// only authorship this device can vouch for is "this came from my own copy".
-const RESTORED_SENDER_LABEL = "local copy";
 const BACKUP_MAX_MESSAGES = 250;
 const BACKUP_MAX_BYTES = 200_000;
 
@@ -689,7 +687,7 @@ function readBackupForSeed() {
     if (!Number.isInteger(entry.id) || entry.id <= 0) continue;
     if (typeof entry.from !== "string" || typeof entry.text !== "string") continue;
     if (typeof entry.ts !== "string" || entry.ts.length === 0) continue;
-    if (entry.type === "system") continue;
+    if (!isRestorableStoredType(entry.type)) continue;
     byId.set(entry.id, {
       id: entry.id,
       from: entry.from,
@@ -776,7 +774,9 @@ function bridgeHistoryToDashboard(messages) {
   // receiver only accepts that name if it sits under the SAME origin the browser
   // reports for this request (#279). The caller still cannot choose a target
   // outside the host that served it, which is the property the capability existed
-  // to give: `Origin` is set by the browser and cannot be forged by page script.
+  // to give: a browser page cannot set `Origin`, so it can never name a room outside
+  // the host that served it. (Against a non-browser local caller this is no defence
+  // — nor was the capability; both rest on the loopback + tracked-row floor.)
   const claimedBaseUrl = state.snapshotCapability ? null : localBaseUrl();
   if (state.snapshotCapability === null && claimedBaseUrl === null) return;
   let target;
