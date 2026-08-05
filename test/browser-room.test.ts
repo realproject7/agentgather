@@ -204,6 +204,7 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
+    diagnostics?.beginAction("composer send round-trip");
     await page.waitForSelector("text=Ship the browser room safely.");
 
     await page.fill("#message-text", "@reviewer duplicate guard");

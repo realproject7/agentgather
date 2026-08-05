@@ -182,3 +182,52 @@ test("URL redaction covers the carriers this project actually uses (#289)", () =
   // useful part would make the artifact worthless for its actual purpose.
   assert.equal(redactUrl("http://127.0.0.1:9/messages?since=4"), "http://127.0.0.1:9/messages?since=4");
 });
+
+test("a loaded page whose action issues nothing still reads as never-requested (#289)", async () => {
+  // @re1's P1 on PR #295: the first version summarised every request since the
+  // recorder started. A real test has already loaded a page, so that baseline
+  // made `requestsIssued > 0` regardless of whether the AWAITED action issued
+  // anything — never-requested and requested-and-blocked became the same
+  // artifact. My original proof used `about:blank`, which has no baseline, so it
+  // validated the mechanism in the one scenario the real tests never occupy.
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-diagnostics-window-test-"));
+  const roomId = "window-room";
+  await createRoom({ root, roomId, hostAlias: "host", briefBody: "Window fixture." });
+  await writeParticipants(root, roomId, [
+    { ...participant("host", "human", true, "tgl_window_host"), display_name: "Host" }
+  ]);
+  const HOST_TOKEN = "tgl_window_host";
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const server = createRoomHttpServer({ root, roomId, baseUrl, rateLimitPerMinute: 1_000 });
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+  const browser = await chromium.launch();
+  let artifact = "";
+  try {
+    const page = await browser.newPage();
+    const diagnostics = recordBrowserDiagnostics(page, page.context());
+    // A genuine baseline: the page loads and polls, exactly like the real tests.
+    await page.goto(`${baseUrl}/#token=${HOST_TOKEN}`);
+    await page.waitForSelector("text=Window fixture.");
+
+    // Now an action that issues nothing at all — the never-requested branch.
+    diagnostics.beginAction("an action that never reaches a handler");
+    artifact = await diagnostics.write("window-never-requested", new Error("the awaited event never arrived"));
+
+    const report = JSON.parse(await readFile(artifact, "utf8")) as {
+      awaiting: string | null;
+      branches: { requestsIssued: number };
+      overall: { requestsIssued: number };
+    };
+    // POSITIVE CONTROL: the baseline really happened, so `branches` reading zero
+    // is a statement about the action window and not about an idle browser.
+    assert.ok(report.overall.requestsIssued > 0, "the page must genuinely have loaded first");
+    assert.equal(report.branches.requestsIssued, 0, "the action window must show no request for the action");
+    assert.equal(report.awaiting, "an action that never reaches a handler", "the window must name its subject");
+  } finally {
+    await browser.close();
+    await closeServer(server);
+    if (artifact) await rm(artifact, { force: true });
+  }
+});

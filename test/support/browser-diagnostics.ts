@@ -64,8 +64,24 @@ function redactText(value: string): string {
 export interface BrowserDiagnostics {
   /** Note a step the test reached, so the log shows how far it got. */
   mark(step: string): void;
+  /**
+   * Open a diagnostic window around the action being awaited (@re1, PR #295).
+   * Counting every request since the recorder started cannot answer "did THIS
+   * action issue one": a real page has already loaded, so the baseline traffic
+   * makes `requestsIssued > 0` regardless, and never-requested becomes
+   * indistinguishable from requested-and-blocked — the one distinction the
+   * artifact exists to make. `target` names what is being awaited.
+   */
+  beginAction(target: string): void;
   /** Write the artifact and return its path. Call only on failure. */
   write(label: string, error: unknown): Promise<string>;
+  /**
+   * Feed a second page into the same log. The awaited action sometimes happens
+   * on a page opened mid-test (a fresh tab, a popup); without this its traffic
+   * is invisible and the action window would read zero requests no matter what
+   * happened — the same blindness @re1 found in the whole-run count.
+   */
+  attachPage(page: Page, tag: string): void;
   /** The events recorded so far, for assertions about the recorder itself. */
   events(): DiagnosticEvent[];
 }
@@ -79,47 +95,69 @@ export function recordBrowserDiagnostics(page: Page, context?: BrowserContext): 
     events.push({ at: Date.now() - started, kind, detail });
   };
 
+  const listen = (target: Page, tag: string): void => {
+    const tagged = (kind: string, detail: Record<string, unknown>): void => add(kind, { ...detail, page: tag });
+
   // (a) "never requested" — if the log holds no `request` for the action, the
   //     click never reached a handler that issued one. In this codebase that has
   //     repeatedly meant a control clicked before its handler was bound.
-  page.on("request", (request) =>
-    add("request", { method: request.method(), url: redactUrl(request.url()), resource: request.resourceType() })
-  );
+    target.on("request", (request) =>
+      tagged("request", { method: request.method(), url: redactUrl(request.url()), resource: request.resourceType() })
+    );
   // (b) "requested and blocked" — a request with no response, or a failure with
   //     the transport's own reason.
-  page.on("response", (response) => add("response", { status: response.status(), url: redactUrl(response.url()) }));
-  page.on("requestfailed", (request) =>
-    add("requestfailed", { url: redactUrl(request.url()), reason: request.failure()?.errorText ?? "unknown" })
-  );
+    target.on("response", (response) => tagged("response", { status: response.status(), url: redactUrl(response.url()) }));
+    target.on("requestfailed", (request) =>
+      tagged("requestfailed", { url: redactUrl(request.url()), reason: request.failure()?.errorText ?? "unknown" })
+    );
   // (c) "crashed" — a page error, a crash, or a closed page.
-  page.on("pageerror", (error) => add("pageerror", { message: redactText(error.message) }));
-  page.on("crash", () => add("crash", {}));
-  page.on("close", () => add("pageclose", {}));
-  page.on("console", (message) => add("console", { type: message.type(), text: redactText(message.text()) }));
+    target.on("pageerror", (error) => tagged("pageerror", { message: redactText(error.message) }));
+    target.on("crash", () => tagged("crash", {}));
+    target.on("close", () => tagged("pageclose", {}));
+    target.on("console", (message) => tagged("console", { type: message.type(), text: redactText(message.text()) }));
   // The popup/page event itself: its presence or absence is what separates "the
   // window never opened" from "it opened and something else went wrong".
-  page.on("popup", (popup) => add("popup", { url: redactUrl(popup.url()) }));
-  context?.on("page", (opened) => add("contextpage", { url: redactUrl(opened.url()) }));
+    target.on("popup", (popup) => tagged("popup", { url: redactUrl(popup.url()) }));
+  };
+
+  listen(page, "main");
+  context?.on("page", (opened) => add("contextpage", { url: redactUrl(opened.url()), page: "main" }));
 
   return {
     mark: (step) => add("mark", { step }),
+    beginAction: (target) => add("action-start", { target }),
+    attachPage: (opened, tag) => {
+      add("attach", { page: tag });
+      listen(opened, tag);
+    },
     events: () => [...events],
     write: async (label, error) => {
       const file = path.join(DIAGNOSTICS_DIR, `${label.replace(/[^a-z0-9._-]+/gi, "-")}.json`);
       await mkdir(DIAGNOSTICS_DIR, { recursive: true });
+      // Everything after the last `beginAction`, or the whole run if the test
+      // never opened a window. This is the scope the branches are decided on.
+      const actionStart = events.map((event) => event.kind).lastIndexOf("action-start");
+      const windowed = actionStart === -1 ? events : events.slice(actionStart + 1);
+      const summarize = (scope: DiagnosticEvent[]): Record<string, unknown> => ({
+        requestsIssued: scope.filter((event) => event.kind === "request").length,
+        responsesSeen: scope.filter((event) => event.kind === "response").length,
+        requestsFailed: scope.filter((event) => event.kind === "requestfailed").length,
+        pagesOpened: scope.filter((event) => event.kind === "popup" || event.kind === "contextpage").length,
+        crashed: scope.some((event) => event.kind === "crash" || event.kind === "pageerror")
+      });
       const report = {
         label,
         failure: redactText(error instanceof Error ? `${error.name}: ${error.message}` : String(error)),
         durationMs: Date.now() - started,
-        // A one-read summary of the three branches, so a reader does not have to
-        // infer them from the raw log.
-        branches: {
-          requestsIssued: events.filter((event) => event.kind === "request").length,
-          responsesSeen: events.filter((event) => event.kind === "response").length,
-          requestsFailed: events.filter((event) => event.kind === "requestfailed").length,
-          pagesOpened: events.filter((event) => event.kind === "popup" || event.kind === "contextpage").length,
-          crashed: events.some((event) => event.kind === "crash" || event.kind === "pageerror")
-        },
+        // What was being awaited when it failed, so the window has a subject.
+        awaiting: actionStart === -1 ? null : (events[actionStart]?.detail.target ?? null),
+        // THE branches, scoped to the awaited action. A page that loaded fine and
+        // then never issued the action's request reads `requestsIssued: 0` here
+        // while `overall` shows the baseline traffic — which is precisely the
+        // distinction a whole-run count destroys.
+        branches: summarize(windowed),
+        // Kept for context: the session as a whole.
+        overall: summarize(events),
         events
       };
       await writeFile(file, `${JSON.stringify(report, null, 2)}\n`, "utf8");

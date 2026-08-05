@@ -134,6 +134,11 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
     // inherited, it lands coherently in the weaker case too.
     const freshContext = await browser.newContext();
     const fresh = await freshContext.newPage();
+    // #289: the awaited action happens on THIS page, so it feeds the same log,
+    // and the window opens immediately before it. Without both, the artifact
+    // would count the main tab's baseline traffic and answer the wrong question.
+    diagnostics?.attachPage(fresh, "fresh-tab");
+    diagnostics?.beginAction("fresh-tab load of a copied channel URL");
     await fresh.goto(freshUrl);
     await fresh.waitForSelector("#room-title, .forum-shell, #auth-error", { timeout: 15000 });
     const observed = await fresh.evaluate(() => ({
