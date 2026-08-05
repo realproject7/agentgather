@@ -61,10 +61,46 @@ async function seedSnapshot(home: string, key: { roomId: string; baseUrl: string
 // it reaches the response — a bare "{ not json" would be indistinguishable from
 // any other parse failure in the output.
 const DAMAGED_MARKER = "TRIPWIRE-SNAPSHOT-CONTENT-9f3a";
-const DAMAGED_BYTES = `{"roomId":"damaged-room","messages":[{"text":"${DAMAGED_MARKER}"`;
 
-async function damage(home: string, key: { roomId: string; baseUrl: string }): Promise<void> {
-  await writeSecureFile(joinedHistoryPath(home, key), DAMAGED_BYTES);
+// Corruption shape matters for this invariant (@re2, msg 1307). `JSON.parse`
+// only quotes the file's own bytes for SOME shapes:
+//
+//   leading non-JSON  -> Unexpected token 'T', "TRIPWIRE-S"... is not valid JSON  <- ECHOES
+//   truncated object  -> Expected ',' or '}' after property value ... position 77 <- positional
+//   trailing garbage  -> Unexpected non-whitespace character ... position 8        <- positional
+//
+// A non-echo assertion driven only by a positional shape cannot fail even against
+// code that surfaces `error.message` — it would be a test that guards nothing. So
+// the echoing shape is the primary fixture, and `parseMessageEchoes` below proves
+// on the spot that this Node really does echo for it.
+const DAMAGED_SHAPES = {
+  // Marker FIRST, so the parse error quotes it. This is also the realistic case:
+  // a partially-overwritten file or a stray log line prepended to the snapshot.
+  echoing: `${DAMAGED_MARKER} not json`,
+  truncated: `{"roomId":"damaged-room","messages":[{"text":"${DAMAGED_MARKER}"`
+} as const;
+
+// V8 quotes only the first ~10 bytes of the offending input, so the leaked
+// fragment is a PREFIX of the file, not the whole marker. Checking for the full
+// marker would report "no echo" for a message that is visibly echoing — the
+// instrument would be wrong in the reassuring direction.
+const ECHOED_PREFIX = DAMAGED_MARKER.slice(0, 10);
+
+function parseMessageEchoes(raw: string): boolean {
+  try {
+    JSON.parse(raw);
+    return false;
+  } catch (error) {
+    return (error as Error).message.includes(ECHOED_PREFIX);
+  }
+}
+
+async function damage(
+  home: string,
+  key: { roomId: string; baseUrl: string },
+  shape: keyof typeof DAMAGED_SHAPES = "echoing"
+): Promise<void> {
+  await writeSecureFile(joinedHistoryPath(home, key), DAMAGED_SHAPES[shape]);
 }
 
 async function startServer(root: string): Promise<{ baseUrl: string; close: () => Promise<void> }> {
@@ -123,29 +159,47 @@ test("an unreadable snapshot is a 200 with a reported condition, never a 500 (#2
 });
 
 test("nothing from the damaged file's contents reaches the response (#293)", async () => {
-  const root = await makeHome();
-  await track(root, KEY);
-  await damage(root, KEY);
-  const fixture = await startServer(root);
-  try {
-    const body = await (await fetch(historyUrl(fixture.baseUrl, KEY))).text();
+  // Instrument check FIRST: prove this runtime's parse error really does quote the
+  // file for the echoing shape, and really does not for the truncated one. Without
+  // this, "the marker is absent from the response" could simply mean the error
+  // never contained it — a passing assertion about nothing.
+  assert.equal(parseMessageEchoes(DAMAGED_SHAPES.echoing), true, "the echoing shape must genuinely echo here");
+  assert.equal(parseMessageEchoes(DAMAGED_SHAPES.truncated), false, "the truncated shape is positional");
+
+  for (const shape of ["echoing", "truncated"] as const) {
+    const root = await makeHome();
+    await track(root, KEY);
+    await damage(root, KEY, shape);
+    const fixture = await startServer(root);
+    try {
+      await assertNoLeak(fixture.baseUrl, root, shape);
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
+async function assertNoLeak(baseUrl: string, root: string, shape: string): Promise<void> {
+  {
+    const body = await (await fetch(historyUrl(baseUrl, KEY))).text();
     // Positive control: the marker really is in the file on disk, so its absence
     // from the response is a fact about the response and not about the fixture.
     const onDisk = await readFile(joinedHistoryPath(root, KEY), "utf8");
-    assert.ok(onDisk.includes(DAMAGED_MARKER), "the fixture must actually contain the tripwire");
+    assert.ok(onDisk.includes(DAMAGED_MARKER), `${shape}: the fixture must actually contain the tripwire`);
 
-    assert.equal(body.includes(DAMAGED_MARKER), false, "no byte of the damaged file may be echoed");
+    assert.equal(body.includes(DAMAGED_MARKER), false, `${shape}: no byte of the damaged file may be echoed`);
+    // The leaked form is a prefix, so guard the prefix too — checking only the
+    // full marker would miss exactly what this shape actually leaks.
+    assert.equal(body.includes(ECHOED_PREFIX), false, `${shape}: not even the quoted prefix may appear`);
     // Nor a parse fragment, an error message, or the path it was read from. A
     // JSON parse error message routinely quotes the offending token.
     assert.equal(/Unexpected|JSON|SyntaxError|position \d+/i.test(body), false, `parse detail leaked: ${body}`);
-    assert.equal(body.includes(root), false, "the filesystem path must not appear");
+    assert.equal(body.includes(root), false, `${shape}: the filesystem path must not appear`);
     assert.equal(/joined-history|\.json/i.test(body), false, "no internal file naming may appear");
     // The whole response is still just the three known keys.
     assert.deepEqual(Object.keys(JSON.parse(body) as Record<string, unknown>).sort(), ["ok", "snapshot", "state"]);
-  } finally {
-    await fixture.close();
   }
-});
+}
 
 test("one damaged snapshot does not affect any other room's snapshot or the room list (#293)", async () => {
   const root = await makeHome();

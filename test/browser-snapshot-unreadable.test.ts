@@ -21,6 +21,9 @@ import {
 import { closeServer } from "./support/close-server.js";
 
 const DAMAGED_MARKER = "TRIPWIRE-SNAPSHOT-CONTENT-4c71";
+// V8 quotes only the first ~10 bytes of the offending input, so a leak of the
+// parse error shows up as this prefix rather than the whole marker.
+const ECHOED_PREFIX = DAMAGED_MARKER.slice(0, 10);
 
 async function getFreePort(): Promise<number> {
   const server = createNetServer();
@@ -87,10 +90,14 @@ async function openRoom(page: Page, roomId: string): Promise<string> {
   return (await page.locator("#chat-offline").textContent()) ?? "";
 }
 
+// Marker FIRST, so `JSON.parse` quotes it (@re2, msg 1307). A truncated-object
+// fixture produces a POSITIONAL error message that names no bytes at all — a
+// non-echo assertion driven by that shape cannot fail even against code that
+// surfaces `error.message`, which makes it a test that guards nothing.
 async function damage(root: string, deadUrl: string): Promise<void> {
   await writeSecureFile(
     joinedHistoryPath(root, { roomId: "damaged-room", baseUrl: deadUrl }),
-    `{"roomId":"damaged-room","messages":[{"text":"${DAMAGED_MARKER}"`
+    `${DAMAGED_MARKER} not json`
   );
 }
 
@@ -161,7 +168,17 @@ test("no byte of the damaged file reaches the screen (#293)", async () => {
 
     await openRoom(fixture.page, "damaged-room");
     const rendered = await fixture.page.content();
+    // Instrument check: this content genuinely produces an echoing parse error on
+    // this runtime, so the absence below is a fact about the page.
+    let echoed = false;
+    try {
+      JSON.parse(onDisk);
+    } catch (error) {
+      echoed = (error as Error).message.includes(ECHOED_PREFIX);
+    }
+    assert.ok(echoed, "the fixture must drive the byte-quoting parse shape");
     assert.equal(rendered.includes(DAMAGED_MARKER), false, "no byte of the damaged file may be shown");
+    assert.equal(rendered.includes(ECHOED_PREFIX), false, "not even the quoted prefix may be shown");
     assert.equal(/Unexpected token|SyntaxError|position \d+/i.test(rendered), false, "no parse detail may be shown");
     assert.equal(rendered.includes(fixture.root), false, "no filesystem path may be shown");
   } finally {
