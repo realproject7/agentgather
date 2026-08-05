@@ -9,3 +9,6 @@ coverage/
 *.tgz
 .agentgather/
 .ag-rooms/
+
+# #289 failure-only browser diagnostics (never committed)
+test-artifacts/

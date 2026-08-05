@@ -9,6 +9,7 @@ import { createBoardroom, createForumPost, createRoom, writeParticipants } from 
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 // Real port so the page origin matches the server baseUrl origin.
 function getFreePort(): Promise<number> {
@@ -66,8 +67,13 @@ async function startBoardroom(): Promise<{ baseUrl: string; hostToken: string; c
 test("boardroom shell: rail from /boardroom routes #general → chat, #review-forum → forum, overflow-0 desktop+mobile", { timeout: 120_000 }, async () => {
   const fixture = await startBoardroom();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #289: records nothing unless this test fails. One of the two CI failures was
+    // here — `waitForEvent("page")` consuming its full 30s ceiling while every
+    // other step ran at normal speed. The artifact says which branch that was.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // rail renders the two channels (types from /boardroom metadata) and marks
@@ -176,6 +182,12 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
 
     // the forum surface's rail links the chat channel back to the room surface
     assert.match(await page.locator(".channel-link:has-text('general')").getAttribute("href") ?? "", /^\.\/(#token=)?/);
+  } catch (error) {
+    // Write the artifact, then rethrow untouched: this must never convert a
+    // failure into a pass, and the assertion the runner reports stays the
+    // original one.
+    if (diagnostics !== null) await diagnostics.write("boardroom-shell-rail", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
