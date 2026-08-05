@@ -340,7 +340,11 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
     const home = page.locator("#dashboard-home");
     await home.waitFor();
     assert.equal(await home.isVisible(), true);
-    assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788/");
+    // #299 — the canonical ORIGIN, not `new URL(raw).toString()`. The old
+    // expectation carried the trailing slash `toString()` adds, which is the same
+    // pass-through that let a path, a query and a `#token=` fragment reach this
+    // href from a stored value.
+    assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788");
     assert.equal(await page.locator("#brand-static").isHidden(), true);
   } finally {
     await browser.close();
@@ -2684,12 +2688,19 @@ test("the room view offers a labelled route home and discloses no other room (#2
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     const dashboard = "http://127.0.0.1:8934/";
+    // #299 — the route home renders the CANONICAL ORIGIN of the remembered
+    // address, not the address as supplied. `?dashboard=` is attacker-influenceable
+    // and is persisted, so the path/query/fragment it may carry must not survive
+    // into an href the participant is invited to click. `#276`'s "the route home
+    // exists and says where it goes" is unchanged; what it points at is now
+    // canonical.
+    const dashboardOrigin = new URL(dashboard).origin;
 
     // Opened FROM the dashboard: the route home is present and says where it goes.
     await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboard)}#token=${fixture.hostToken}`);
     await page.waitForSelector("#dashboard-home:not([hidden])");
     const home = page.locator("#dashboard-home");
-    assert.equal(await home.getAttribute("href"), dashboard);
+    assert.equal(await home.getAttribute("href"), dashboardOrigin);
     assert.match((await home.locator(".home-label").textContent()) ?? "", /dashboard/i);
     assert.match((await home.getAttribute("aria-label")) ?? "", /dashboard/i);
 
@@ -2697,7 +2708,7 @@ test("the room view offers a labelled route home and discloses no other room (#2
     // ?dashboard=. The route home must still be there (#279's remembered address).
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await page.waitForSelector("#dashboard-home:not([hidden])");
-    assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboard);
+    assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboardOrigin);
 
     // The disclosure proof @head required. This origin must never learn about any
     // room but its own. A host that could read the participant's full inventory
@@ -3250,8 +3261,8 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
     await known.waitForSelector("text=Ship the browser room safely.");
     assert.equal(
       await known.evaluate(() => window.localStorage.getItem("agentgather.dashboard")),
-      dashboardUrl,
-      "precondition: the dashboard address is remembered for this origin"
+      new URL(dashboardUrl).origin,
+      "precondition: the dashboard ORIGIN is what gets remembered for this origin"
     );
 
     // The uncredentialed arrival: same origin, no fragment, no session token —
@@ -3370,6 +3381,31 @@ test("a remembered dashboard carrying a credential is reduced to its origin befo
     const paneHtml = await page.locator("#auth-error").innerHTML();
     assert.equal(paneHtml.includes(fixture.hostToken), false, "the token reached the rendered markup");
     assert.doesNotMatch(paneHtml, /#token=|[?&]token=/i, "a token carrier reached the rendered markup");
+
+    // #299 — the SAME stored value, on the NORMAL room view. `#dashboard-home`
+    // (#279) is the older consumer, it shipped in v0.2.1–v0.2.3, and it renders on
+    // every room page rather than only this pane — the wider half of one defect.
+    // It had no coverage at all, which is why it survived three releases.
+    // Seeded through an init script so the room gets ONE clean load with the value
+    // already in place. Setting it and then navigating to `#token=…` would differ
+    // from the current URL only by FRAGMENT — a same-document navigation that never
+    // re-runs `init()`, so `hydrateDashboardHome` would not run and this would
+    // assert against a topbar that was hydrated before the value existed.
+    const entered = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await entered.addInitScript((value) => {
+      window.localStorage.setItem("agentgather.dashboard", value as string);
+    }, poisoned);
+    await entered.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await entered.waitForSelector("#dashboard-home:not([hidden])");
+    assert.equal(
+      await entered.locator("#dashboard-home").getAttribute("href"),
+      dashboardOrigin,
+      "the topbar route home must equal the origin exactly — path, query and fragment dropped"
+    );
+    const topbarHtml = await entered.locator(".topbar").innerHTML();
+    assert.equal(topbarHtml.includes(fixture.hostToken), false, "the token reached the topbar markup");
+    assert.doesNotMatch(topbarHtml, /#token=|[?&]token=/i, "a token carrier reached the topbar markup");
+    await entered.close();
 
     // An address that cannot be parsed is not a route: no element, not a broken
     // href that fails on click.

@@ -333,7 +333,7 @@ h1::before {
    not to the whole line, because the sentence before it is still the honest
    description of why the room is closed to this tab. */
 .auth-error .auth-route {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .auth-error .auth-route[hidden] {

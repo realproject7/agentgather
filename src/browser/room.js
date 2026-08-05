@@ -241,33 +241,19 @@ async function init() {
 // on no other. With no remembered dashboard this function touches nothing at all
 // and the pane reads exactly as it did before this existed.
 //
-// The href is reduced to the ORIGIN, and that reduction is load-bearing rather
-// than tidiness. `validLoopbackDashboardUrl` checks protocol and hostname and then
-// returns `url.toString()`, so path, query and — the one that matters —
-// **fragment** survive validation. `agentgather.dashboard` is read out of
-// `localStorage`, which is editable by anything with script access to this origin,
-// so a stored value carrying `#token=…` would clear the validator and land a
-// credential in rendered markup: exactly the exposure #288 removed from the rail,
-// reintroduced by the feature whose own invariant forbids it. The origin keeps the
-// validated host and drops every carrier, matching what `sanitizeBaseUrl`
-// (`platform/http.ts:875`) already does on the other side of this codebase.
-//
-// Found by the other QuadWork instance's @re2 on the parallel #290 branch, fixed
-// there by its @dev; the reasoning is ported here, not the branch.
+// What reaches the href is an ORIGIN, and it is one before it arrives here:
+// `validLoopbackDashboardUrl` canonicalises (see #299 there). This function does no
+// stripping of its own precisely so that it cannot be the place someone forgets to.
 function offerDashboardRoute() {
   if (authDashboardRoute === null || authDashboardLink === null) return;
-  const dashboard = dashboardTarget();
-  if (dashboard === null) return;
-  let origin;
-  try {
-    origin = new URL(dashboard).origin;
-  } catch {
-    // An address that will not parse is not a route. Offering nothing is the
-    // honest outcome; rendering a broken href would be an affordance that fails
-    // on click, which is the thing this ticket exists to remove.
-    return;
-  }
-  authDashboardLink.href = origin;
+  // Already canonical: `dashboardTarget()` yields a validated loopback ORIGIN or
+  // null. An address that will not parse — or carries a scheme or host this device
+  // will not vouch for — is not a route, and offering nothing is the honest
+  // outcome; a broken href would be an affordance that fails on click, which is
+  // the thing this ticket exists to remove.
+  const dashboardOrigin = dashboardTarget();
+  if (dashboardOrigin === null) return;
+  authDashboardLink.href = dashboardOrigin;
   authDashboardRoute.hidden = false;
 }
 
@@ -279,9 +265,16 @@ function hydrateDashboardHome() {
   // an earlier open (#279), so a direct open is no longer stranded. A room this
   // device has never opened from a dashboard still has none to offer, and the
   // affordance stays hidden rather than guessing one.
-  const dashboard = dashboardTarget();
-  if (dashboard === null) return;
-  dashboardHome.href = dashboard;
+  //
+  // #299 — this link is the OLDER of the two consumers of the remembered address
+  // and shipped in v0.2.1–v0.2.3. It renders on every room page, not only the
+  // auth-error pane, so it is the wider half of the same defect: the stored value
+  // reached this `href` with its path, query and fragment intact. It is an origin
+  // now because `validLoopbackDashboardUrl` returns one — the fix lives at the
+  // boundary rather than here, so both consumers get it and a third cannot miss it.
+  const dashboardOrigin = dashboardTarget();
+  if (dashboardOrigin === null) return;
+  dashboardHome.href = dashboardOrigin;
   dashboardHome.hidden = false;
   brandStatic.hidden = true;
 }
@@ -319,9 +312,25 @@ function dashboardUrlFromQuery() {
   return validLoopbackDashboardUrl(new URLSearchParams(window.location.search).get("dashboard"));
 }
 
-// A dashboard address is only ever a same-device loopback http(s) URL. Applied to
-// the query value and, identically, to the remembered one — a stored address is
+// A dashboard address is only ever a same-device loopback http(s) ORIGIN. Applied
+// to the query value and, identically, to the remembered one — a stored address is
 // untrusted input and must clear the same bar as a fresh one.
+//
+// #299/#290 — this returns the origin, not the URL. It used to return
+// `url.toString()`, which validates the protocol and the host and then hands back
+// the path, the query and the FRAGMENT untouched. `?dashboard=` is attacker-
+// influenceable and is persisted to `localStorage`, so a stored value could carry
+// chosen parameters — and this project's own invite-token carrier is the fragment
+// — into an `href` the participant is invited to click. Two consumers already
+// rendered that value as a link.
+//
+// Canonicalising HERE rather than at each assignment is the point: a third
+// consumer cannot reintroduce the carrier by forgetting to strip it, because there
+// is nothing left to strip. Same move as sharing an invariant rather than a
+// renderer. `/joined-rooms/history` is an absolute root path on the dashboard
+// server, so the bridge's target is unchanged by this.
+//
+// The validator gap is the `telegent` lane's @re2's finding.
 function validLoopbackDashboardUrl(raw) {
   if (!raw) return null;
   let url;
@@ -332,7 +341,7 @@ function validLoopbackDashboardUrl(raw) {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (!isLoopbackHost(url.hostname)) return null;
-  return url.toString();
+  return url.origin;
 }
 
 async function startWithToken(token) {
