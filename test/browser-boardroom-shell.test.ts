@@ -78,6 +78,14 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
     assert.match(await page.locator("#channel-rail").innerText(), /chat/);
     assert.match(await page.locator("#channel-rail").innerText(), /forum/);
 
+    // #276 — the rail is a persistent nav, so it must say WHICH room it belongs to,
+    // not only list channels. Without this a participant reading the sidebar has no
+    // indication of the room currently open.
+    assert.equal((await page.locator("#channel-rail .rail-head .room").textContent())?.trim(), "ag-project");
+    // ...and the channel area reflects that room: its channels, with the open one
+    // marked. The active mark is what makes "current" a claim rather than a list.
+    assert.equal(await page.locator("#channel-rail .channel-link.on").count(), 1);
+
     // the rail carries no token text (metadata-only); token rides the href only.
     assert.equal((await page.locator("#channel-rail").innerText()).includes(fixture.hostToken), false);
 
