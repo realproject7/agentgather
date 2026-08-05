@@ -2252,11 +2252,13 @@ function applyRoomState() {
       // shown and can't be sent — is carried verbatim into every branch, because
       // it is why the notice exists at all.
       //
-      // It is a 2x2, not a pair (@re2, msg 1411). The empty-backup string is the
-      // one that reads worst with host rows on screen: "No messages are saved on
-      // this device yet" is true of the device and says nothing about a timeline
-      // that is visibly not empty. Both host-present variants name both sources;
-      // both host-absent variants are untouched.
+      // THREE reachable states, not four (@re2, msg 1418; ruled by @head). An
+      // empty backup with host-fetched rows cannot occur: the fetch loop puts
+      // every id it renders into `state.seen` before `state.earlier.loaded` is
+      // incremented, so `loaded > 0` implies `seen.size > 0`. A branch for it
+      // would be a string that can never render — worse than absent, because it
+      // reads as handled behaviour and the only test able to reach it would have
+      // to fabricate state and would prove nothing.
       const fetchedFromHost = state.earlier.loaded > 0;
       const older = `${state.earlier.loaded} older ${state.earlier.loaded === 1 ? "message" : "messages"} fetched from the host while it was reachable`;
       backupNotice.textContent =
@@ -2264,9 +2266,7 @@ function applyRoomState() {
           ? fetchedFromHost
             ? `Local backup + host history · the host server is offline. Showing ${older}, and messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
             : `Local backup · the host server is offline. Showing messages saved on this device up to #${state.backupCursor}; newer messages aren't shown and can't be sent until the host resumes.`
-          : fetchedFromHost
-            ? `Host history · the host server is offline. Showing ${older}; nothing is saved on this device yet, and newer messages aren't shown and can't be sent until the host resumes.`
-            : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
+          : "Local backup · the host server is offline. No messages are saved on this device yet; new messages can't be sent until the host resumes.";
     }
   }
 }
