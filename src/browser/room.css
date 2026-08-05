@@ -50,6 +50,20 @@ a.dashboard-home {
   margin-left: -6px;
 }
 
+/* The route home has to READ as a route home (#276). The logo alone was branding,
+   so it told a participant nothing about where it goes; only the link form carries
+   the label, so the static brand shown when no dashboard is known stays silent
+   rather than offering a destination that does not exist. */
+.home-label {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.dashboard-home.static .home-label {
+  display: none;
+}
+
 a.dashboard-home:hover,
 a.dashboard-home:focus-visible {
   background: var(--chip);

@@ -2672,3 +2672,62 @@ test("a room opened by its own URL still contributes history to the dashboard (#
     await fixture.close();
   }
 });
+
+// #276 — the room view must offer an explicit, labelled route back to the dashboard
+// however the room was opened, and it must NOT gain the dashboard's inventory of
+// other rooms. Those two are one ticket: the route home is what makes the missing
+// in-room rooms list acceptable, and the origin silo is why that list stays absent.
+test("the room view offers a labelled route home and discloses no other room (#276)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const dashboard = "http://127.0.0.1:8934/";
+
+    // Opened FROM the dashboard: the route home is present and says where it goes.
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboard)}#token=${fixture.hostToken}`);
+    await page.waitForSelector("#dashboard-home:not([hidden])");
+    const home = page.locator("#dashboard-home");
+    assert.equal(await home.getAttribute("href"), dashboard);
+    assert.match((await home.locator(".home-label").textContent()) ?? "", /dashboard/i);
+    assert.match((await home.getAttribute("aria-label")) ?? "", /dashboard/i);
+
+    // Opened by its own URL — an invite link or bookmark, which carries no
+    // ?dashboard=. The route home must still be there (#279's remembered address).
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("#dashboard-home:not([hidden])");
+    assert.equal(await page.locator("#dashboard-home").getAttribute("href"), dashboard);
+
+    // The disclosure proof @head required. This origin must never learn about any
+    // room but its own: not in the DOM, not in localStorage. A host that could read
+    // the participant's full inventory would learn every other room they are in.
+    await postMessage(fixture, fixture.reviewerToken, "a line in this room");
+    await page.waitForSelector("text=a line in this room");
+    const disclosed = await page.evaluate(() => {
+      const stored = Object.keys(window.localStorage).map((k) => `${k}=${window.localStorage.getItem(k) ?? ""}`);
+      const joined = JSON.parse(window.localStorage.getItem("agentgather.joinedRooms") ?? '{"rooms":[]}') as {
+        rooms: Array<{ baseUrl?: string }>;
+      };
+      return {
+        storedBlob: stored.join("\n"),
+        joinedBaseUrls: (joined.rooms ?? []).map((room) => room.baseUrl ?? ""),
+        domBlob: document.body?.innerHTML ?? ""
+      };
+    });
+    // Every remembered room row belongs to THIS origin — nothing from another host.
+    for (const baseUrl of disclosed.joinedBaseUrls) {
+      assert.equal(baseUrl.startsWith(fixture.baseUrl), true, `foreign room disclosed to this origin: ${baseUrl}`);
+    }
+    // The only loopback address this origin holds is the dashboard's own, which the
+    // dashboard supplied for the route home — never another room's base URL.
+    const loopbackRefs = (disclosed.storedBlob.match(/http:\/\/127\.0\.0\.1:\d+/g) ?? []).filter(
+      (url) => !dashboard.startsWith(url) && !fixture.baseUrl.startsWith(url)
+    );
+    assert.deepEqual(loopbackRefs, [], "an address that is neither this room nor the dashboard was persisted");
+    assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(disclosed.storedBlob), false);
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
