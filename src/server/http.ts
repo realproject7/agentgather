@@ -544,10 +544,44 @@ async function getMessages(context: RequestContext): Promise<void> {
     );
   }
   await touchParticipant(context, auth.participant, auth.participant.attention);
-  const sinceId = parseSinceId(context.url.searchParams.get("since_id"));
-  const messages = (await readMessages(context.options.root, context.options.roomId)).filter(
-    (message) => message.id > sinceId
-  );
+  const rawSince = context.url.searchParams.get("since_id");
+  const rawBefore = context.url.searchParams.get("before_id");
+  // A read is forward or backward, never both (#283). An undefined combination
+  // becomes an accidental contract the first time a caller sends it, so it is
+  // rejected now; a genuine range read can be specified later if one is needed.
+  if (rawSince !== null && rawBefore !== null) {
+    throw new HttpError(400, "conflicting_cursor", "since_id and before_id cannot be combined");
+  }
+  const limit = parseMessageLimit(context.url.searchParams.get("limit"));
+  const all = await readMessages(context.options.root, context.options.roomId);
+
+  // Backward read: the newest `limit` messages STRICTLY OLDER than before_id, in
+  // ascending order like every other response. It deliberately carries no
+  // `next_since_id`: that field is a FORWARD cursor, and the client assigns it to
+  // its live cursor without clamping, so a backward page emitting one would rewind
+  // the live cursor to an old id and make the next poll re-download everything
+  // after it — the cost #278 removed, reintroduced by the feature completing it.
+  // A value that must not be used is not sent.
+  if (rawBefore !== null) {
+    const beforeId = parseCursorParam(rawBefore, "before_id");
+    const older = all.filter((message) => message.id < beforeId);
+    const page = limit === null ? older : older.slice(-limit);
+    // Whether anything remains older than what this page starts at — stated, never
+    // inferred. A short page is ambiguous: it also occurs when the remainder is
+    // exactly one page, so "probably done" would be a guess landing in the one
+    // label this feature must keep honest.
+    const oldest = page.at(0)?.id;
+    sendJson(context.res, 200, {
+      ok: true,
+      messages: page,
+      has_more_before: oldest === undefined ? false : all.some((message) => message.id < oldest)
+    });
+    return;
+  }
+
+  const sinceId = parseSinceId(rawSince);
+  const forward = all.filter((message) => message.id > sinceId);
+  const messages = limit === null ? forward : forward.slice(0, limit);
   sendJson(context.res, 200, {
     ok: true,
     messages,
@@ -1202,6 +1236,29 @@ function bearerToken(req: IncomingMessage): string | null {
   if (typeof authorization !== "string") return null;
   const match = /^Bearer (.+)$/.exec(authorization);
   return match?.[1] ?? null;
+}
+
+// `before_id` and `limit` validate exactly as `since_id` does — one policy for the
+// endpoint, not two (#283). A second, looser policy is what left `platform/http.ts`
+// unable to tell "nothing saved" from "saved data damaged".
+function parseCursorParam(raw: string, name: string): number {
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new HttpError(400, `invalid_${name}`, `${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+// Absent means UNBOUNDED, and that is a contract property rather than an omission:
+// every existing caller relies on receiving the whole range, so the default cannot
+// change. A client that wants a bounded page must say so.
+function parseMessageLimit(raw: string | null): number | null {
+  if (raw === null) return null;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new HttpError(400, "invalid_limit", "limit must be a positive integer");
+  }
+  return parsed;
 }
 
 function parseSinceId(raw: string | null): number {

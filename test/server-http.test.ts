@@ -954,3 +954,87 @@ test("a pending cycle that crosses room expiry with no intervening request appen
     await fixture.close();
   }
 });
+
+// #283 — the backward read. `since_id` is a strictly forward cursor with no limit,
+// so before this the only way to reach older history was to refetch from 0, which
+// re-sends every message already on screen — the exact cost #278 removed.
+test("GET /messages reads backwards with before_id + limit, states has_more_before, and sends no forward cursor (#283)", async () => {
+  const fixture = await startFixture();
+  try {
+    for (let n = 1; n <= 10; n += 1) {
+      const posted = await jsonFetch(fixture, "POST", "/messages", fixture.hostToken, { text: `m${n}` });
+      assert.equal(posted.status, 201);
+    }
+    const all = await jsonFetch(fixture, "GET", "/messages?since_id=0", fixture.hostToken);
+    const ids = all.body.messages.map((message: { id: number }) => message.id);
+    assert.equal(ids.length, 10);
+
+    // The newest 3 strictly older than ids[6] — asserted as an exact ordered set,
+    // not "some older messages came back".
+    const page = await jsonFetch(fixture, "GET", `/messages?before_id=${ids[6]}&limit=3`, fixture.hostToken);
+    assert.equal(page.status, 200);
+    assert.deepEqual(
+      page.body.messages.map((message: { id: number }) => message.id),
+      [ids[3], ids[4], ids[5]]
+    );
+    assert.deepEqual(
+      page.body.messages.map((message: { text: string }) => message.text),
+      ["m4", "m5", "m6"]
+    );
+    // More remains older than m4 → stated, never inferred from page length.
+    assert.equal(page.body.has_more_before, true);
+    // A backward page must carry NO forward cursor: the client assigns that field
+    // to its live cursor without clamping, so emitting one would rewind it.
+    assert.equal("next_since_id" in page.body, false, "a backward read must not emit a forward cursor");
+
+    // Walking back to the start: has_more_before goes false exactly at exhaustion,
+    // and a page shorter than the limit is NOT what tells us so.
+    const rest = await jsonFetch(fixture, "GET", `/messages?before_id=${ids[3]}&limit=10`, fixture.hostToken);
+    assert.deepEqual(
+      rest.body.messages.map((message: { id: number }) => message.id),
+      [ids[0], ids[1], ids[2]]
+    );
+    assert.equal(rest.body.has_more_before, false);
+
+    // The ambiguous case the explicit field exists for: a FULL page that is also
+    // the last one. Length alone cannot distinguish this from "more remains".
+    const exact = await jsonFetch(fixture, "GET", `/messages?before_id=${ids[3]}&limit=3`, fixture.hostToken);
+    assert.equal(exact.body.messages.length, 3, "a full page");
+    assert.equal(exact.body.has_more_before, false, "…and yet nothing older remains");
+
+    // Nothing older at all.
+    const none = await jsonFetch(fixture, "GET", `/messages?before_id=${ids[0]}&limit=5`, fixture.hostToken);
+    assert.deepEqual(none.body.messages, []);
+    assert.equal(none.body.has_more_before, false);
+
+    // Forward reads are untouched, including the unbounded default.
+    const forward = await jsonFetch(fixture, "GET", `/messages?since_id=${ids[6]}`, fixture.hostToken);
+    assert.deepEqual(
+      forward.body.messages.map((message: { id: number }) => message.id),
+      [ids[7], ids[8], ids[9]]
+    );
+    assert.equal(forward.body.next_since_id, ids[9]);
+    const bounded = await jsonFetch(fixture, "GET", `/messages?since_id=${ids[6]}&limit=2`, fixture.hostToken);
+    assert.deepEqual(
+      bounded.body.messages.map((message: { id: number }) => message.id),
+      [ids[7], ids[8]]
+    );
+
+    // One validation policy for the endpoint, not two.
+    for (const [query, error] of [
+      ["before_id=abc", "invalid_before_id"],
+      ["before_id=-1", "invalid_before_id"],
+      ["before_id=1.5", "invalid_before_id"],
+      ["limit=0", "invalid_limit"],
+      ["limit=-3", "invalid_limit"],
+      ["limit=nope", "invalid_limit"],
+      ["since_id=1&before_id=5", "conflicting_cursor"]
+    ] as const) {
+      const rejected = await jsonFetch(fixture, "GET", `/messages?${query}`, fixture.hostToken);
+      assert.equal(rejected.status, 400, `${query} must be rejected`);
+      assert.equal(rejected.body.error, error, `${query} → ${error}`);
+    }
+  } finally {
+    await fixture.close();
+  }
+});

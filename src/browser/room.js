@@ -72,6 +72,12 @@ const state = {
   backupCursor: 0,
   // #278: set while a restored history still has to be confirmed against the room.
   seedUnverified: false,
+  // #283 on-demand backward read. `oldestId` is the lowest id currently ON SCREEN —
+  // what the next backward page must stop before, so nothing already rendered is
+  // refetched. `hasMore` is the host's stated answer, never inferred from a page's
+  // length. Nothing here is a cursor: the live cursor is `state.cursor` and this
+  // path never writes it.
+  earlier: { oldestId: 0, restoredLowest: 0, restoredHighest: 0, loaded: 0, hasMore: false, inFlight: false, failed: false },
   // #247 offline-history bridge: the write-only capability this open was handed in
   // its entry fragment, held in memory for the life of the tab and nowhere else.
   // Absent unless the dashboard opened this room, which is exactly when a
@@ -109,6 +115,9 @@ const briefBody = document.getElementById("brief-body");
 const briefRefresh = document.getElementById("brief-refresh");
 const emptyState = document.getElementById("empty-state");
 const timeline = document.getElementById("timeline");
+// The scrolling box the timeline sits in (#283 restores the reading position after
+// older history is inserted above the viewport).
+const timelineWrap = document.querySelector(".timeline-wrap");
 const systemFilter = document.getElementById("system-filter");
 const participantList = document.getElementById("participant-list");
 const rosterToggle = document.getElementById("roster-toggle");
@@ -734,12 +743,22 @@ function seedEntryFromBackup() {
     // exactly as it did before this existed.
     timeline.replaceChildren();
     state.seen.clear();
-    state.cursor = 0;
+    resetCursor();
     state.backupCursor = 0;
     return;
   }
-  state.cursor = highest;
+  seedCursorTo(highest);
   state.backupCursor = highest;
+  // #283 — the backup holds only the newest slice; everything the cap dropped is
+  // still on the host. `lowest > 1` is exactly the condition the divider already
+  // reports as "earlier history isn't shown", so it is also the condition under
+  // which a route to it exists. A restore that starts at #1 has nothing earlier to
+  // reach and gets no control rather than a control that can only disappoint.
+  state.earlier.restoredLowest = lowest;
+  state.earlier.restoredHighest = highest;
+  state.earlier.oldestId = lowest;
+  state.earlier.hasMore = lowest > 1;
+  if (state.earlier.hasMore) mountEarlierControl();
   // The restore is provisional until the room confirms it holds that head (#278).
   state.seedUnverified = true;
   emptyState.hidden = true;
@@ -756,13 +775,165 @@ function buildRestoredDivider(lowest, highest) {
   pill.className = "system-pill";
   const text = document.createElement("span");
   text.className = "message-text";
-  text.textContent =
-    lowest > 1
-      ? `Restored from this device · messages #${lowest}–#${highest}. Earlier history isn't saved here and isn't shown.`
-      : `Restored from this device · messages up to #${highest}.`;
+  text.textContent = restoredDividerText(lowest, highest);
   pill.append(text);
   item.append(pill);
   return item;
+}
+
+// The one label this feature must keep honest (#283). "Earlier history … isn't
+// shown" is true only until earlier history is shown; once a backward read has put
+// host-held messages above this line, the sentence describes the screen it is on
+// rather than the store it was written for. Both variants still name the restored
+// RANGE, so the divider never stops saying which rows are this device's copy.
+function restoredDividerText(lowest, highest) {
+  if (state.earlier.loaded > 0) {
+    return `Restored from this device · messages #${lowest}–#${highest}. Earlier messages above were loaded from the host.`;
+  }
+  return lowest > 1
+    ? `Restored from this device · messages #${lowest}–#${highest}. Earlier history isn't saved here and isn't shown.`
+    : `Restored from this device · messages up to #${highest}.`;
+}
+
+function refreshRestoredDivider() {
+  const text = timeline.querySelector(".restored-divider .message-text");
+  if (text === null) return;
+  text.textContent = restoredDividerText(state.earlier.restoredLowest, state.earlier.restoredHighest);
+}
+
+// ---- #283 the route to history older than this device holds ----
+//
+// #278 made a warm entry render the newest slice the local backup holds and fetch
+// only what is new. Everything the cap dropped is still on the host; what was
+// missing was any way to ask for it, which is why the divider above could only
+// state the absence. This is that route — an explicit, one-click BACKWARD read,
+// never a prefetch and never infinite scroll.
+//
+// Two properties are structural here rather than conventional:
+//
+//  1. It never touches the live cursor. It is not a poll and does not run through
+//     `pollMessages()`, so it cannot reach that function's cursor tail; the only
+//     writers of `state.cursor` remain the three named operations above. The wire
+//     contract carries the same rule from the other side — a backward response
+//     omits `next_since_id` — and neither half relies on the other.
+//  2. What it loads is DISPLAY-ONLY: not written to the local backup (#211) and
+//     not handed to the dashboard snapshot bridge (#247). Both stores are bounded
+//     to the NEWEST slice on purpose, so feeding older messages into them would
+//     evict newer ones to hold history that was asked for once — and raising those
+//     caps is explicitly out of scope for this ticket.
+const EARLIER_PAGE_SIZE = 50;
+
+function mountEarlierControl() {
+  const item = document.createElement("li");
+  item.className = "message system earlier-history";
+  item.id = "earlier-history";
+  const pill = document.createElement("div");
+  pill.className = "system-pill";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "show-earlier";
+  button.className = "earlier-btn";
+  button.textContent = "Show earlier messages";
+  button.addEventListener("click", () => void loadEarlierMessages());
+  const note = document.createElement("span");
+  note.className = "message-text earlier-note";
+  note.hidden = true;
+  pill.append(button, note);
+  item.append(pill);
+  // First row of the timeline, above the restored divider: older messages arrive
+  // between the two, so ascending order holds without re-sorting anything.
+  timeline.prepend(item);
+  renderEarlierControl();
+}
+
+// The control states its own availability AND why, in the one place the reader is
+// looking when they want older history. An affordance that is present but silently
+// does nothing is worse than one that is absent, so an unreachable host removes the
+// button and says so rather than offering a click that cannot succeed.
+function renderEarlierControl() {
+  const item = document.getElementById("earlier-history");
+  if (item === null) return;
+  const button = item.querySelector(".earlier-btn");
+  const note = item.querySelector(".earlier-note");
+  // Older history lives ONLY on the host — the local backup is what ran out. So
+  // this control follows the host's reachability, not the room's open/closed
+  // lifecycle: a closed room still serves its read-only log and keeps the route.
+  const offline = state.connection === "degraded";
+  const exhausted = !state.earlier.hasMore;
+  button.hidden = exhausted || offline;
+  button.disabled = state.earlier.inFlight;
+  note.hidden = false;
+  if (exhausted) note.textContent = "Beginning of this room's history.";
+  else if (offline) note.textContent = "Earlier history is on the host — unavailable while it's offline.";
+  else if (state.earlier.inFlight) note.textContent = "Loading earlier messages…";
+  else if (state.earlier.failed) note.textContent = "Couldn't reach the host — earlier history wasn't loaded.";
+  else note.hidden = true;
+}
+
+async function loadEarlierMessages() {
+  if (state.earlier.inFlight || !state.earlier.hasMore) return;
+  const before = state.earlier.oldestId;
+  if (before <= 1) {
+    state.earlier.hasMore = false;
+    renderEarlierControl();
+    return;
+  }
+  state.earlier.inFlight = true;
+  state.earlier.failed = false;
+  renderEarlierControl();
+  let payload;
+  try {
+    // Backward, bounded, and ALWAYS with an explicit limit: an absent limit means
+    // unbounded by contract (#283), which is the whole cost this feature exists to
+    // avoid. `before_id` is the oldest id on screen, so the page stops exactly
+    // where the rendered history starts and nothing already shown is refetched.
+    payload = await authFetch(`/messages?before_id=${before}&limit=${EARLIER_PAGE_SIZE}`);
+  } catch {
+    // One failed backward read is not evidence the room is offline — the live poll
+    // owns that verdict and has its own schedule — so this reports on the control
+    // instead of flipping the whole view into local-backup mode. In a closed room
+    // there is no poll at all, which is the other reason not to borrow its
+    // machinery: nothing here starts, restarts, or requires a timer.
+    state.earlier.inFlight = false;
+    state.earlier.failed = true;
+    renderEarlierControl();
+    return;
+  }
+  const older = Array.isArray(payload.messages) ? payload.messages : [];
+  // The restore can be discarded WHILE this fetch is in flight: the control is
+  // clickable from the moment it mounts, and #278's head verification runs during
+  // the first poll and may `replaceChildren()` the whole timeline away. There is
+  // then nothing for this page to sit above — and nothing it is needed for, since
+  // that path refetches the entire history from the start.
+  const control = document.getElementById("earlier-history");
+  if (control === null) {
+    state.earlier.inFlight = false;
+    return;
+  }
+  const anchor = control.nextSibling;
+  // Hold the reading position. These rows are inserted ABOVE the viewport and a
+  // scroll box keeps its scrollTop, so without this the view would jump down by
+  // exactly the height of what just arrived.
+  const fromBottom = timelineWrap === null ? 0 : timelineWrap.scrollHeight - timelineWrap.scrollTop;
+  for (const message of older) {
+    // Host-fetched rows are LIVE rows: they carry no restored marking, because the
+    // host served them and this device is not vouching for them (#278's classes
+    // stay distinct). The seen-set is what makes a re-render impossible.
+    if (state.seen.has(message.id)) continue;
+    state.seen.add(message.id);
+    renderMessage(message, { before: anchor });
+  }
+  if (older.length > 0) state.earlier.oldestId = older[0].id;
+  state.earlier.loaded += older.length;
+  // Stated by the host, never inferred from page length: a page shorter than the
+  // limit also occurs when the remainder is exactly one page.
+  state.earlier.hasMore = payload.has_more_before === true;
+  state.earlier.inFlight = false;
+  refreshRestoredDivider();
+  renderEarlierControl();
+  if (timelineWrap !== null) {
+    timelineWrap.scrollTo({ top: timelineWrap.scrollHeight - fromBottom, behavior: "instant" });
+  }
 }
 
 // Hand one batch of ALREADY-RENDERED messages to the dashboard that opened this
@@ -819,6 +990,33 @@ function bridgeHistoryToDashboard(messages) {
   });
 }
 
+// ---- the live cursor's one rule (#283) ----
+//
+// `state.cursor` is what the next poll asks from. It had FIVE writers under three
+// disciplines — reset, seed, bare assign, clamp — which is not an inconsistency but
+// an absent rule, and #283 would have added a sixth caller to it. The rule is: the
+// live cursor only ever moves FORWARD, except on an explicit reset. Each writer now
+// names which of the three things it is doing, so the next reader does not have to
+// infer it from the assignment.
+
+// Entry has nothing, or what we held turned out not to belong to this room: ask
+// from the beginning again.
+function resetCursor() {
+  state.cursor = 0;
+}
+
+// Entry restored a local copy: start from the highest id it actually holds.
+function seedCursorTo(id) {
+  state.cursor = id;
+}
+
+// A live message or poll batch arrived: move up to it, never back. This is what
+// makes a rewind — and an `undefined` from a response that carries no forward
+// cursor — unreachable by construction rather than by the wire contract alone.
+function advanceCursorTo(id) {
+  if (Number.isInteger(id) && id > state.cursor) state.cursor = id;
+}
+
 // #278 — a restored cursor must never sit ahead of the room. If the first poll
 // after a restore returns nothing, "nothing new" and "this backup belongs to a room
 // that no longer exists" look identical: a room recreated under the same name
@@ -851,9 +1049,13 @@ function discardRestoredHistory() {
   timeline.replaceChildren();
   state.seen.clear();
   state.messagesById.clear();
-  state.cursor = 0;
+  resetCursor();
   state.backupCursor = 0;
   state.lastMessageTs = null;
+  // The restored region is gone and with it its control (`replaceChildren` above),
+  // so the backward read has nothing to sit above. Entry refetches from the start
+  // and holds the whole history, which is the state where no earlier route exists.
+  state.earlier = { oldestId: 0, restoredLowest: 0, restoredHighest: 0, loaded: 0, hasMore: false, inFlight: false, failed: false };
   try {
     window.localStorage.removeItem(BACKUP_PREFIX + (state.roomName || "room"));
   } catch {
@@ -902,7 +1104,7 @@ async function pollMessages() {
     recordBackupBatch(fresh);
     bridgeHistoryToDashboard(fresh);
     updateLastMessage();
-    state.cursor = payload.next_since_id;
+    advanceCursorTo(payload.next_since_id);
     if (state.seedUnverified) {
       state.seedUnverified = false;
       // Only an empty first poll is ambiguous; anything returned proves the room's
@@ -1285,7 +1487,7 @@ async function submitMessage() {
   if (payload.message && !state.seen.has(payload.message.id)) {
     state.seen.add(payload.message.id);
     renderMessage(payload.message);
-    state.cursor = Math.max(state.cursor, payload.message.id);
+    advanceCursorTo(payload.message.id);
     emptyState.hidden = true;
     // Mirror the poll path so the rail "last message" KV reflects our own send
     // immediately (the poll skips this id since it is already in state.seen). (#121)
@@ -1544,6 +1746,19 @@ function participantStatusText(participant) {
 
 function renderMessage(message, options = {}) {
   const restoredRow = options.restored === true;
+  // #283 — older history is inserted ABOVE what is already on screen, in ascending
+  // order, and never scrolls the view to itself: the reader asked to see the top of
+  // the timeline, not to be moved to it. Every other caller appends and follows the
+  // newest row exactly as before.
+  const before = options.before instanceof Node ? options.before : null;
+  const place = (node) => {
+    if (before !== null) {
+      timeline.insertBefore(node, before);
+      return;
+    }
+    timeline.append(node);
+    node.scrollIntoView({ block: "nearest" });
+  };
   // Record a minimal from/text preview so a later message carrying reply_to can
   // show its replied-to context, even for a message rendered earlier (#113).
   //
@@ -1598,8 +1813,7 @@ function renderMessage(message, options = {}) {
       pill.append(flip);
     }
     item.append(pill);
-    timeline.append(item);
-    item.scrollIntoView({ block: "nearest" });
+    place(item);
     return;
   }
 
@@ -1670,8 +1884,7 @@ function renderMessage(message, options = {}) {
   if (!restoredRow) item.addEventListener("dblclick", () => setReply(message));
   item.dataset.senderKind = senderKind;
   item.append(avatar, bubble);
-  timeline.append(item);
-  item.scrollIntoView({ block: "nearest" });
+  place(item);
 }
 
 function labelFor(alias) {
@@ -1965,6 +2178,9 @@ function applyRoomState() {
   renderBanner(closed);
   renderSession(closed);
   renderHistoryStrip(closed);
+  // Older history is host-held, so the route to it follows the same reachability
+  // this function already reconciles for everything else (#283).
+  renderEarlierControl();
   // Honest read-only backup notice (#211): name the device-local snapshot + its
   // cursor so the offline view never implies complete/unseen history, and state
   // that sending is paused until the host resumes.
