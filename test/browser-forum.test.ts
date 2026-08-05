@@ -27,6 +27,7 @@ import {
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 const mkP = (alias: string, kind: Participant["kind"], token: string, extra: Partial<Participant> = {}): Participant => ({
   alias,
@@ -80,8 +81,11 @@ async function startFixture(
 test("forum UI: feed → thread → back, rail nesting, markdown body, wake badge, date divider, comment compose, overflow-0 desktop+mobile", { timeout: 120_000 }, async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum#token=${fixture.hostToken}`);
 
     // STATE A (feed): flat post rows with a status pill (no card-in-card)
@@ -142,6 +146,9 @@ test("forum UI: feed → thread → back, rail nesting, markdown body, wake badg
     const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
     assert.equal(mobileOverflow, true, "no horizontal overflow at 390");
     await page.screenshot({ path: path.join(os.tmpdir(), "forum-mobile.png"), fullPage: true });
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("forum-ui-feed-thread-back-rail-nesting-markdown", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -151,8 +158,11 @@ test("forum UI: feed → thread → back, rail nesting, markdown body, wake badg
 test("forum UI: selected post is URL-addressable — deep link + refresh reopen the thread, invalid id falls back to the feed, no token in the URL", { timeout: 120_000 }, async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
 
     // Deep link straight to a populated post: the thread opens without a click.
     await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum&post=rfc-1#token=${fixture.hostToken}`);
@@ -185,6 +195,9 @@ test("forum UI: selected post is URL-addressable — deep link + refresh reopen 
     await page.waitForSelector(".row .ti:has-text('Forum post layout — single column vs split')");
     await page.waitForSelector(".forum-shell[data-view='feed']");
     assert.equal(new URL(page.url()).searchParams.get("post"), null);
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("forum-ui-selected-post-is-url-addressable-deep-l", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -204,10 +217,16 @@ test("forum UI shows an empty state for a forum with no posts", { timeout: 120_0
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${baseUrl}/forum.html?channel=design-forum#token=${hostToken}`);
     await page.waitForSelector("text=No posts yet");
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("forum-ui-shows-an-empty-state-for-a-forum-with-n", error);
+    throw error;
   } finally {
     await browser.close();
     await closeServer(server);
@@ -219,8 +238,11 @@ test("forum UI shows an empty state for a forum with no posts", { timeout: 120_0
 test("forum disables new-post/comment when the host is offline (#211)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // The forum assets load from the host, but the posts endpoint is unreachable.
     await page.route(/\/forum\/posts(\?|$)/, (route) =>
       route.fulfill({
@@ -234,6 +256,9 @@ test("forum disables new-post/comment when the host is offline (#211)", async ()
     assert.match((await page.locator("#forum-offline").textContent()) ?? "", /read-only|can't be sent/i);
     await page.waitForFunction(() => (document.getElementById("new-post") as HTMLButtonElement).disabled === true);
     assert.equal(await page.locator("#comment-text").isDisabled(), true);
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("forum-disables-new-post-comment-when-the-host-is", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -249,8 +274,11 @@ test("forum body and comments keep authored ordered-list numbering across blank 
     commentBody: "4. verify\n\n6. merge"
   });
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/forum.html?channel=design-forum#token=${fixture.hostToken}`);
     await page.waitForSelector(".forum-shell[data-view='feed']");
     await page.click(".row");
@@ -285,6 +313,9 @@ test("forum body and comments keep authored ordered-list numbering across blank 
     // The renderer stays DOM-only on both forum paths.
     assert.equal(await page.locator("#detail-body script").count(), 0);
     assert.equal(await page.locator(".cmt .md script").count(), 0);
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("forum-body-and-comments-keep-authored-ordered-li", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
