@@ -151,9 +151,11 @@ is the first thing to do — it is a one-line-per-test change against an existin
 recorder.
 
 **That ticket now exists: #303**, *"Cover all 30-second browser waits with safe failure
-diagnostics"*, which supersedes #302 and enumerates by wait rather than by past failure. This file
-is one of the ten browser/e2e files carrying no recorder, so #303 covers it and no separate ticket
-is needed.
+diagnostics"*, which supersedes #302. Its selection rule is the **30-second-wait surface** —
+enumerate the waits, not the past failures — and this file qualifies on that rule: it has **four**
+such waits, at `test/e2e/tunnel-room.test.ts:115`, `:118`, `:130` and `:133`, none of which passes a
+timeout option, so each carries Playwright's 30 s default. #303 therefore covers this file and no
+separate ticket is needed.
 
 ## Security
 
