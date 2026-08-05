@@ -3443,3 +3443,78 @@ test("a remembered dashboard carrying a credential is reduced to its origin befo
     await fixture.close();
   }
 });
+
+// #297 — the offline notice must name BOTH sources when host-fetched rows are on
+// screen, and stay byte-for-byte unchanged when they are not.
+//
+// Ordering matters (@re2, msg 1411): `renderEarlierControl` hides the control
+// while offline, so the target state is only reachable online -> fetch earlier ->
+// then offline. A fixture built the other way round cannot construct it and would
+// assert the old text in both branches while appearing to pass — this ticket's own
+// defect, committed in the test.
+async function offlineNotice(fixture: { baseUrl: string; roomId: string; hostToken: string }, fetchEarlier: boolean) {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    const key = `agentgather.backup.${fixture.roomId}`;
+    // A backup whose lowest id is above 1, so older history exists on the host and
+    // the "show earlier" control mounts.
+    await page.addInitScript((k) => {
+      const messages = [5, 6, 7, 8].map((id) => ({
+        id,
+        from: "host",
+        ts: "2026-07-01T00:00:00.000Z",
+        type: "chat",
+        text: `seeded-${id}`
+      }));
+      window.localStorage.setItem(k, JSON.stringify({ messages }));
+    }, key);
+
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector("text=seeded-8");
+
+    if (fetchEarlier) {
+      // ONLINE: pull older rows from the host first.
+      await page.waitForSelector("#show-earlier");
+      await page.click("#show-earlier");
+      await page.waitForSelector("text=earlier-1");
+    }
+
+    // ...and only now does the host go away.
+    await page.route("**/messages*", (route) => route.abort("connectionrefused"));
+    await page.waitForSelector("#backup-notice:not([hidden])", { timeout: 20_000 });
+    const notice = (await page.locator("#backup-notice").textContent()) ?? "";
+    const earlierLoaded = await page.evaluate(() => document.querySelectorAll(".message").length);
+    return { notice, earlierLoaded };
+  } finally {
+    await browser.close();
+  }
+}
+
+test("the offline notice names both sources when host-fetched rows are on screen (#297)", async () => {
+  const fixture = await startFixture();
+  try {
+    for (let id = 1; id <= 8; id += 1) await postMessage(fixture, fixture.hostToken, `earlier-${id}`);
+
+    const withHostRows = await offlineNotice(fixture, true);
+    const localOnly = await offlineNotice(fixture, false);
+
+    // Exact text in BOTH states.
+    assert.match(withHostRows.notice, /^Local backup \+ host history · the host server is offline\. Showing \d+ older messages? fetched from the host while it was reachable, and messages saved on this device up to #\d+; newer messages aren't shown and can't be sent until the host resumes\.$/);
+    assert.equal(
+      localOnly.notice,
+      "Local backup · the host server is offline. Showing messages saved on this device up to #8; newer messages aren't shown and can't be sent until the host resumes."
+    );
+
+    // ...and the two states must READ DIFFERENTLY (@re2, msg 1411 point 4). Two
+    // separate equality assertions can both be updated to the same value by a
+    // later edit and still pass; this makes the distinction a property.
+    assert.notEqual(withHostRows.notice, localOnly.notice, "the two states must not read identically");
+    // The operative clause survives in both.
+    for (const text of [withHostRows.notice, localOnly.notice]) {
+      assert.match(text, /newer messages aren't shown and can't be sent until the host resumes\./);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
