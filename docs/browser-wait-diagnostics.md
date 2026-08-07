@@ -105,6 +105,32 @@ days or 200 CI runs*; at 14 days a trace captured early in that window expired
 before the decision it exists to inform. Artifact retention now covers the
 decision window rather than half of it.
 
+## Overhead
+
+Attaching a recorder costs listeners and in-memory events, and the ticket asks
+whether that is measurable. Measured as a same-session control: three full-suite
+runs at `0432d6f` (the pre-#303 parent) against three at the wiring commit, same
+machine, same conditions, built the same way.
+
+| | runs (s) | mean | spread |
+| --- | --- | ---: | ---: |
+| before (579 tests) | 205.8 / 207.5 / 215.3 | 209.5 | 9.5 |
+| after (586 tests) | 206.5 / 213.3 / 203.9 | 207.9 | 9.4 |
+
+The after-mean is 1.6s **lower** than before, while run-to-run spread is ~9.5s on
+both sides — and the after runs also carry seven new tests, one of which drives a
+whole extra browser. Attachment overhead is therefore **below the noise floor of
+this machine**, which is a statement about measurability and nothing more: it is
+not evidence that the overhead is zero, and none of these numbers say anything
+about the 2-core CI runner or about the lifecycle defect itself. The earlier
+202.2s ±1s figure was taken in a different session; only the paired runs above
+are a controlled comparison.
+
+Per the ticket's operational constraint: a quiet period after this lands is not
+evidence the lifecycle defect is fixed. The #289 retirement bound — no failing
+trace within 30 days or 200 CI runs — remains independent, and artifact retention
+now covers it.
+
 ## What is captured, and what cannot be
 
 Redaction by construction (#289): the recorder never reads headers or
