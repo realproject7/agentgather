@@ -53,3 +53,32 @@ test("a block that only reaches a browser through a helper", async () => {
   // call. Its coverage is the helper's coverage.
   await unwiredHelperSession();
 });
+
+// One hop further (@re2, PR #304): this helper takes its page FROM another
+// helper, so it names neither `chromium.launch(` nor `newPage(` — yet it holds a
+// ceiling wait on a live page, and its callers invoke it before their own try.
+// `browser-manage-joined`'s `startMixedFixture` is exactly this shape.
+async function unwiredIndirectSession() {
+  const session = await wiredHelperSession();
+  await session.page.waitForSelector("#ready", { timeout: 30_000 });
+}
+
+// A helper that does attach and write, so the indirect one above has something
+// to take its page from — and so the sample proves the guard separates covered
+// helpers from uncovered ones rather than flagging every helper it finds.
+async function wiredHelperSession() {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  const diagnostics = recordBrowserDiagnostics(page, page.context());
+  try {
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "wired-helper-session", error);
+    throw error;
+  }
+  return { page, browser };
+}
+
+test("a block that reaches a browser two hops away", async () => {
+  await unwiredIndirectSession();
+});

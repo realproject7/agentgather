@@ -49,6 +49,10 @@ async function syntheticTree(): Promise<string> {
   assert.match(sample, /test\("a wired block"/);
   assert.match(sample, /async function unwiredHelperSession/);
   assert.match(sample, /test\("a block that only reaches a browser through a helper"/);
+  // One hop further: a helper that takes its page FROM another helper names no
+  // browser of its own, which is the shape @re2 found in `startMixedFixture`.
+  assert.match(sample, /async function unwiredIndirectSession/);
+  assert.match(sample, /test\("a block that reaches a browser two hops away"/);
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-wait-surface-fixture-"));
   await mkdir(path.join(root, "test"), { recursive: true });
   await writeFile(path.join(root, "test", "browser-fixture-sample.test.ts"), sample, "utf8");
@@ -98,8 +102,15 @@ test("the guard catches a browser session that lives in a HELPER, not a block (#
   const result = await run([surveyScript, root]);
   assert.equal(result.code, 1);
   assert.match(result.stderr, /helper unwiredHelperSession\(\) drives a browser and writes nothing/);
-  // And the block whose only session is that helper is counted, not skipped.
-  assert.match(result.stdout, /\| 3 \|/, `the inventory must count all three blocks:\n${result.stdout}`);
+  // Transitive: a helper whose page comes from another helper is a browser
+  // helper too, and so is the block that calls it.
+  assert.match(result.stderr, /helper unwiredIndirectSession\(\) drives a browser and writes nothing/);
+  assert.match(result.stderr, /a block that only reaches a browser through a helper/);
+  assert.match(result.stderr, /a block that reaches a browser two hops away/);
+  // …while the helper that DOES attach and write is not flagged — a guard that
+  // reported every helper would pass this test while being useless.
+  assert.equal(/helper wiredHelperSession\(\)/.test(result.stderr), false, "a covered helper must not be flagged");
+  assert.match(result.stdout, /\| 4 \| 1 \| 3 \| 1 \|/, `blocks and helpers must both be counted:\n${result.stdout}`);
 });
 
 // A run record in the form node:test emits, so the status is driven by what the
@@ -213,9 +224,10 @@ test("the status names uncovered blocks AND uncovered helpers when the tree has 
   const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
   assert.match(written, /an unwired block/);
   assert.match(written, /helper unwiredHelperSession\(\)/);
-  // Two blocks (the unwired one, and the one whose only session is the unwired
-  // helper) plus the helper itself.
-  assert.match(written, /blocks with neither: \*\*3\*\*/);
+  // Three blocks (unwired, helper-reached, two-hops) plus the two uncovered
+  // helpers.
+  assert.match(written, /blocks with neither: \*\*5\*\*/);
+  assert.match(written, /helper unwiredIndirectSession\(\)/);
 });
 
 test("a green run publishes no artifact and no status noise (#303)", async () => {

@@ -40,7 +40,11 @@ Three consequences worth naming, because all three were live gaps:
   inventory **entirely** — absent, not uncovered, which is worse than silence
   (@re2, PR #304). The survey now finds every top-level function containing
   `chromium.launch(`/`newPage(`, holds it to the same attach-and-write rule, and
-  counts any block that calls one.
+  counts any block that calls one. It closes over that relation **transitively**:
+  `startMixedFixture` in `browser-manage-joined.test.ts` takes its page from
+  `startFixture()`, so it names no browser at all while reloading that page and
+  waiting on a 30-second ceiling — and its callers invoke it before their own
+  `try`. One hop is not a special case, so the closure runs to a fixed point.
 
 A block counts as covered only if it **attaches** a recorder, **writes** on
 failure, and **rethrows** the original error. A `catch` that wrote without
@@ -57,7 +61,7 @@ Regenerate with `node scripts/browser-wait-surface.mjs` (exit 1 lists any gap).
 | `browser-diagnostics.test.ts` | 3 | 3 | 0 | 0 | 3 | n/a |
 | `browser-forum.test.ts` | 6 | 6 | 0 | 0 | 31 | n/a |
 | `browser-launch.test.ts` | 1 | 1 | 0 | 0 | 3 | n/a |
-| `browser-manage-joined.test.ts` | 9 | 9 | 1 | 1 | 19 | yes |
+| `browser-manage-joined.test.ts` | 9 | 9 | 2 | 2 | 20 | yes |
 | `browser-platform.test.ts` | 38 | 38 | 0 | 0 | 135 | n/a |
 | `browser-room-lifecycle.test.ts` | 5 | 5 | 0 | 0 | 26 | n/a |
 | `browser-room.test.ts` | 55 | 55 | 1 | 1 | 207 | n/a |
@@ -66,7 +70,7 @@ Regenerate with `node scripts/browser-wait-surface.mjs` (exit 1 lists any gap).
 | `browser-snapshot-unreadable.test.ts` | 8 | 8 | 1 | 1 | 1 | yes |
 | `e2e/acceptance.test.ts` | 1 | 1 | 0 | 0 | 2 | n/a |
 | `e2e/tunnel-room.test.ts` | 1 | 1 | 0 | 0 | 4 | n/a |
-| **total** | **151** | **151** | **5** | **5** | **462** | |
+| **total** | **151** | **151** | **6** | **6** | **463** | |
 
 **Exceptions: none.** `EXCEPTIONS` in `scripts/browser-wait-surface.mjs` is the
 only place an omission can live, and an entry must name the block and a concrete

@@ -17,7 +17,7 @@ import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 import { createRoom, readJoinedRooms, recordJoinedRoom, type JoinedRoom } from "../src/storage/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics, type BrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics, type BrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-manage-joined-test-"));
@@ -386,12 +386,22 @@ function localRooms(count: number, port: number): LocalRoom[] {
 async function startMixedFixture(localCount: number): Promise<Fixture & { local: LocalRoom[] }> {
   const fixture = await startFixture();
   const local = localRooms(localCount, await getFreePort());
-  await fixture.page.evaluate(
-    ([key, rooms]) => window.localStorage.setItem(key as string, JSON.stringify({ rooms })),
-    [LOCAL_KEY, local] as const
-  );
-  await fixture.page.reload();
-  await fixture.page.waitForSelector("#manage-open:not([hidden])", { timeout: 30_000 });
+  // #303 (@re2, PR #304): the reload below re-runs entry and waits on a 30s
+  // ceiling, and every caller invokes this helper BEFORE its own try — so a
+  // timeout here reached no catch and left nothing behind. The recorder is
+  // already live on this page, so this recovers a real trace rather than an
+  // accounting entry.
+  try {
+    await fixture.page.evaluate(
+      ([key, rooms]) => window.localStorage.setItem(key as string, JSON.stringify({ rooms })),
+      [LOCAL_KEY, local] as const
+    );
+    await fixture.page.reload();
+    await fixture.page.waitForSelector("#manage-open:not([hidden])", { timeout: 30_000 });
+  } catch (error) {
+    await captureBrowserFailure(fixture.diagnostics, "manage-joined-mixed-fixture-setup", error);
+    throw error;
+  }
   return { ...fixture, local };
 }
 

@@ -86,24 +86,42 @@ function writesOnFailure(text) {
 // than on a naming convention is the point — a convention is what missed it.
 export function browserHelpers(source) {
   const lines = source.split("\n");
-  const helpers = [];
+  const candidates = [];
   for (let i = 0; i < lines.length; i += 1) {
     const name = /^(?:export )?(?:async )?function (\w+)/.exec(lines[i])?.[1] ?? /^(?:export )?const (\w+) = async/.exec(lines[i])?.[1];
     if (name === undefined) continue;
     let end = i + 1;
     while (end < lines.length && lines[end] !== "}" && lines[end] !== "};") end += 1;
-    const text = lines.slice(i, end + 1).join("\n");
-    if (!/chromium\.launch\(|\.newPage\(/.test(text)) continue;
-    helpers.push({
-      name,
-      line: i + 1,
-      text,
-      waits: countCeilingWaits(text),
-      covered: attaches(text) && writesOnFailure(text),
-      label: /(?:\.write|captureBrowserFailure)\(\s*(?:[^,)]+,\s*)?[`"]([^`"]+)/.exec(text)?.[1] ?? null
-    });
+    candidates.push({ name, line: i + 1, text: lines.slice(i, end + 1).join("\n") });
   }
-  return helpers;
+
+  // Transitively (@re2, PR #304): a helper that only takes its page FROM another
+  // helper contains neither `chromium.launch(` nor `newPage(`, so a direct test
+  // misses it — `startMixedFixture` reloads that page and waits on a 30s ceiling,
+  // and every caller invokes it before its own try. One hop is not a special
+  // case, so this closes over as many hops as the file has.
+  const selected = new Map();
+  for (;;) {
+    const before = selected.size;
+    for (const candidate of candidates) {
+      if (selected.has(candidate.name)) continue;
+      const direct = /chromium\.launch\(|\.newPage\(/.test(candidate.text);
+      const viaHelper = [...selected.keys()].some((known) => new RegExp(`\\b${known}\\(`).test(candidate.text));
+      if (direct || viaHelper) selected.set(candidate.name, candidate);
+    }
+    if (selected.size === before) break;
+  }
+
+  return [...selected.values()]
+    .sort((a, b) => a.line - b.line)
+    .map((helper) => ({
+      name: helper.name,
+      line: helper.line,
+      text: helper.text,
+      waits: countCeilingWaits(helper.text),
+      covered: attaches(helper.text) && writesOnFailure(helper.text),
+      label: /(?:\.write|captureBrowserFailure)\(\s*(?:[^,)]+,\s*)?[`"]([^`"]+)/.exec(helper.text)?.[1] ?? null
+    }));
 }
 
 // Does a `start…Fixture` helper launch the browser itself? Those files hold the
