@@ -9,7 +9,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-test-"));
@@ -90,8 +90,11 @@ test("build copies browser assets into dist", async () => {
 test("browser room joins with fragment token, sends, receives, and renders safely", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -181,6 +184,9 @@ test("browser room joins with fragment token, sends, receives, and renders safel
     });
     assert.equal(layout.composerBelowTopbar, true);
     assert.equal(layout.textareaInsideViewport, true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "browser-room-joins-with-fragment-token-sends-rec", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -261,7 +267,7 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     // Write the artifact, then rethrow untouched: this must never convert a
     // failure into a pass, and the assertion the runner reports stays the
     // original one.
-    if (diagnostics !== null) await diagnostics.write("browser-composer-dedupe", error);
+    await captureBrowserFailure(diagnostics, "browser-composer-dedupe", error);
     throw error;
   } finally {
     await browser.close();
@@ -272,8 +278,11 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
 test("browser bare URL explains invite requirement and human token claims display name", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(fixture.baseUrl);
     await page.waitForSelector("text=Invite link required");
 
@@ -295,6 +304,7 @@ test("browser bare URL explains invite requirement and human token claims displa
     ]);
 
     const guestPage = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    diagnostics?.attachPage(guestPage, "guestPage");
     await guestPage.goto(`${fixture.baseUrl}/#token=${humanToken}`);
     await guestPage.waitForSelector("text=Choose your display name");
     // #97: the join modal asks for a DISPLAY NAME and never frames the field as
@@ -310,6 +320,9 @@ test("browser bare URL explains invite requirement and human token claims displa
     await guestPage.waitForSelector("text=Ship the browser room safely.");
     // Roster continues to show the chosen display name.
     await guestPage.waitForSelector("text=Project Seven");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "browser-bare-url-explains-invite-requirement-and", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -333,13 +346,19 @@ test("browser auto-claims a missing host human display name from the alias", asy
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
 
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${baseUrl}/#token=${hostToken}`);
     await page.waitForSelector("text=Host display fallback.");
     assert.equal(await page.locator("#join-panel").isVisible(), false);
     const participants = JSON.parse(await readFile(path.join(root, "rooms", roomId, "participants.json"), "utf8")) as Participant[];
     assert.equal(participants.find((entry) => entry.alias === "ag-lead")?.display_name, "ag-lead");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "browser-auto-claims-a-missing-host-human-display", error);
+    throw error;
   } finally {
     await browser.close();
     await closeServer(server);
@@ -349,8 +368,11 @@ test("browser auto-claims a missing host human display name from the alias", asy
 test("room opened from the dashboard exposes a same-tab dashboard home link", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("http://127.0.0.1:8788")}#token=${fixture.hostToken}`);
     await page.waitForSelector("text=Ship the browser room safely.");
     const home = page.locator("#dashboard-home");
@@ -362,6 +384,9 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
     // href from a stored value.
     assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788");
     assert.equal(await page.locator("#brand-static").isHidden(), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "room-opened-from-the-dashboard-exposes-a-same-ta", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -371,8 +396,11 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
 test("browser reply affordance: per-message reply button, clearable composer indicator, reply_to send + timeline context (#113)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -417,6 +445,9 @@ test("browser reply affordance: per-message reply button, clearable composer ind
     const reply = messages.find((m) => m.text.includes("the reply body"));
     assert.ok(first && reply, "both messages persisted");
     assert.equal(reply?.reply_to, first?.id);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "browser-reply-affordance-per-message-reply-butto", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -426,8 +457,11 @@ test("browser reply affordance: per-message reply button, clearable composer ind
 test("browser roster, brief indicator, system filter, unknown mentions, and send errors update without reload", async () => {
   const fixture = await startFixture({ rateLimitPerMinute: 2 });
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -500,6 +534,9 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
     await page.waitForSelector("text=rate limit exceeded");
     // A rate-limit rejection stays an inline send error — no route banner.
     assert.equal(await page.locator("#room-banner").isHidden(), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "browser-roster-brief-indicator-system-filter-unk", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -509,8 +546,11 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
 test("composer broadcast mode sends an untargeted status message and resets to direct", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -532,6 +572,9 @@ test("composer broadcast mode sends an untargeted status message and resets to d
     await page.waitForSelector("text=starting the pricing review now");
     // ...and the composer returns to direct so the next message is not room-wide.
     assert.equal(await page.getAttribute("#composer", "data-mode"), "direct");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "composer-broadcast-mode-sends-an-untargeted-stat", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -541,8 +584,11 @@ test("composer broadcast mode sends an untargeted status message and resets to d
 test("composer autocompletes a partial @mention and warns on an unknown one with a suggestion", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -567,6 +613,9 @@ test("composer autocompletes a partial @mention and warns on an unknown one with
     await page.waitForSelector("text=@review is not in this room");
     await page.click('.warn-suggest[data-alias="reviewer"]');
     assert.match(await page.inputValue("#message-text"), /@reviewer/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "composer-autocompletes-a-partial-mention-and-war", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -576,8 +625,11 @@ test("composer autocompletes a partial @mention and warns on an unknown one with
 test("a join system line flips to 'now attending' once the participant is foreground (#74)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -598,6 +650,9 @@ test("a join system line flips to 'now attending' once the participant is foregr
     await page.waitForSelector("text=reviewer joined");
     await page.waitForSelector(".joinflip:not([hidden])");
     await page.waitForSelector("text=now attending");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-join-system-line-flips-to-now-attending-once-t", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -611,8 +666,11 @@ test("a join system line flips to 'now attending' once the participant is foregr
 test("host-offline mid-session falls back to a read-only local backup and recovers to live (#211)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await postMessage(fixture, fixture.hostToken, "backed-up hello");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
@@ -653,6 +711,9 @@ test("host-offline mid-session falls back to a read-only local backup and recove
     await page.waitForSelector("#room-banner", { state: "hidden" });
     await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === false);
     await page.waitForSelector("#backup-notice", { state: "hidden" });
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "host-offline-mid-session-falls-back-to-a-read-on", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -662,8 +723,11 @@ test("host-offline mid-session falls back to a read-only local backup and recove
 test("a quota_exceeded response shows the public-route-paused banner (#84)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -685,6 +749,9 @@ test("a quota_exceeded response shows the public-route-paused banner (#84)", asy
     await page.waitForSelector("text=Public route paused");
     await page.waitForSelector("text=local-only rooms keep working");
     await page.waitForSelector(".banner-action:not([hidden])");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-quota-exceeded-response-shows-the-public-route", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -694,8 +761,11 @@ test("a quota_exceeded response shows the public-route-paused banner (#84)", asy
 test("a closed room shows the host read-only history source and hides the composer (#83)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -720,6 +790,9 @@ test("a closed room shows the host read-only history source and hides the compos
     await page.waitForSelector("text=room closed");
     // No composer in a closed room.
     assert.equal(await page.locator("#composer").isHidden(), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-closed-room-shows-the-host-read-only-history-s", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -729,8 +802,11 @@ test("a closed room shows the host read-only history source and hides the compos
 test("a closed room with an unreachable host log shows an explicit unavailable source (#83)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -757,6 +833,9 @@ test("a closed room with an unreachable host log shows an explicit unavailable s
     await page.waitForSelector("text=history source · unavailable");
     await page.waitForSelector("text=live, cached & exported history are unavailable");
     assert.equal(await page.locator("#composer").isHidden(), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-closed-room-with-an-unreachable-host-log-shows", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -766,8 +845,11 @@ test("a closed room with an unreachable host log shows an explicit unavailable s
 test("guest browser uses fragment token without host controls and room close disables composer", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
     await page.waitForSelector("text=Ship the browser room safely.");
     assert.equal(await page.locator("#close-button").isHidden(), true);
@@ -781,6 +863,9 @@ test("guest browser uses fragment token without host controls and room close dis
     });
     await page.waitForFunction(() => document.querySelector("#room-status")?.textContent === "closed");
     assert.equal(await page.locator("#message-text").isDisabled(), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "guest-browser-uses-fragment-token-without-host-c", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -816,9 +901,12 @@ async function postMessage(fixture: { baseUrl: string }, token: string, text: st
 test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, last-message KV (#117/#115/#116/#120)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -852,6 +940,9 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
     assert.equal(await page.$$eval(".rail-state .rs[data-disabled='true']", (e) => e[0]?.textContent?.trim()), "idle");
     assert.equal(await page.locator("#auto-continue-toggle").count(), 1);
     assert.equal(await page.isDisabled("#tickets-button"), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "v5-batch-surfaces-code-block-header-copy-grouped", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -861,6 +952,7 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
 test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // an agent host (kind=agent, is_host=true) alongside a human participant
     await writeParticipants(fixture.root, fixture.roomId, [
@@ -868,6 +960,8 @@ test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)"
       participant("guest", "human", false, "guest-token")
     ]);
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -915,6 +1009,9 @@ test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)"
       true,
       "no horizontal overflow at 390"
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "an-agent-host-groups-under-agents-with-an-agent", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -924,9 +1021,12 @@ test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)"
 test("code-block copy writes the raw body only (#120/#117)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // Deterministic clipboard double so the copy path runs headless and we can
     // observe exactly what gets written. Must be installed before page scripts.
     await page.addInitScript(() => {
@@ -956,6 +1056,9 @@ test("code-block copy writes the raw body only (#120/#117)", async () => {
       { timeout: 4000 }
     );
     assert.equal(await page.textContent(".code-block .code-copy"), "copied");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "code-block-copy-writes-the-raw-body-only-120-117", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -965,9 +1068,12 @@ test("code-block copy writes the raw body only (#120/#117)", async () => {
 test("code-block omits the copy button when no clipboard API is available (#120/#117)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     await postMessage(fixture, fixture.hostToken, "guard:\n```ts\nconst ok = true;\n```");
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // Simulate a context with no Clipboard API: the header still renders, but the
     // copy affordance is omitted rather than shown as a silently-failing button.
     await page.addInitScript(() => {
@@ -984,6 +1090,9 @@ test("code-block omits the copy button when no clipboard API is available (#120/
     await page.waitForSelector("text=Ship the browser room safely.");
     await page.waitForSelector(".code-block .code-head .code-lang");
     assert.equal(await page.$$eval(".code-block .code-copy", (els) => els.length), 0);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "code-block-omits-the-copy-button-when-no-clipboa", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -993,8 +1102,11 @@ test("code-block omits the copy button when no clipboard API is available (#120/
 test("last-message rail KV updates on the sender's own send (#121/#123)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1018,6 +1130,9 @@ test("last-message rail KV updates on the sender's own send (#121/#123)", async 
       },
       { timeout: 4000 }
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "last-message-rail-kv-updates-on-the-sender-s-own", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1027,11 +1142,15 @@ test("last-message rail KV updates on the sender's own send (#121/#123)", async 
 test("host starts and ends an active chat session; the banner reflects it and non-hosts see it read-only (#183)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const hostPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(hostPage, hostPage.context());
     await hostPage.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await hostPage.waitForSelector("text=Ship the browser room safely.");
     const guestPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    diagnostics?.attachPage(guestPage, "guestPage");
     await guestPage.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
     await guestPage.waitForSelector("text=Ship the browser room safely.");
 
@@ -1071,6 +1190,9 @@ test("host starts and ends an active chat session; the banner reflects it and no
     );
     await hostPage.waitForSelector("text=Active chat session ended in #general");
     await guestPage.waitForSelector("#session-banner", { state: "hidden" });
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "host-starts-and-ends-an-active-chat-session-the", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1080,6 +1202,7 @@ test("host starts and ends an active chat session; the banner reflects it and no
 test("the active-session banner renders a host-requested attendance policy and stays clear of raw color literals (#183)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // A session started with a requested_mode (via the T11 API) surfaces that
     // policy in the banner detail for everyone.
@@ -1091,6 +1214,8 @@ test("the active-session banner renders a host-requested attendance policy and s
     assert.equal(started.status, 201);
 
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1109,6 +1234,9 @@ test("the active-session banner renders a host-requested attendance policy and s
       return el ? el.getBoundingClientRect().height : 0;
     });
     assert.ok(bannerBox > 0, "active session banner occupies vertical space");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-active-session-banner-renders-a-host-request", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1118,8 +1246,11 @@ test("the active-session banner renders a host-requested attendance policy and s
 test("markdown.js renders a hostile corpus inert — script tags, on* handlers, javascript:/data: URLs (#181)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1179,6 +1310,9 @@ test("markdown.js renders a hostile corpus inert — script tags, on* handlers, 
     // Hostile markup survives only as inert text.
     assert.match(result.text, /<script>/);
     assert.match(result.text, /javascript:alert\(1\)/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "markdown-js-renders-a-hostile-corpus-inert-scrip", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1188,6 +1322,7 @@ test("markdown.js renders a hostile corpus inert — script tags, on* handlers, 
 test("the roster shows an honest wake-tier chip derived from effective_mode (#185)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // Agents with distinct negotiated modes, plus one that declared nothing.
     await writeParticipants(fixture.root, fixture.roomId, [
@@ -1214,6 +1349,8 @@ test("the roster shows an honest wake-tier chip derived from effective_mode (#18
     ]);
 
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1248,6 +1385,9 @@ test("the roster shows an honest wake-tier chip derived from effective_mode (#18
     const chipA = page.locator('.tier-chip[data-tier="A"]');
     assert.match((await chipA.textContent()) || "", /Tier A/);
     assert.match((await chipA.getAttribute("title")) || "", /wakes on|auto/i);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-roster-shows-an-honest-wake-tier-chip-derive", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1281,8 +1421,11 @@ async function installNotificationDouble(page: import("playwright").Page, permis
 test("a mention while unfocused fires one OS notification + title badge, dedups, and clears on focus (#186)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await installNotificationDouble(page, "default");
     // #270: the brief is painted while entry is still in flight; `#notify-toggle`
     // binds in `bindEvents()` after entry's awaited first poll. Seed a message and
@@ -1337,6 +1480,9 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
     // Focusing clears the badge back to the base title.
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await page.waitForFunction(() => document.title === "Agent Gather Room");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-mention-while-unfocused-fires-one-os-notificat", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1346,8 +1492,11 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
 test("permission-denied degrades silently to the title badge with no OS notification (#186)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await installNotificationDouble(page, "denied");
     // #270: the brief is painted while entry is still in flight; `#notify-toggle`
     // binds in `bindEvents()` after entry's awaited first poll. Seed a message and
@@ -1381,6 +1530,9 @@ test("permission-denied degrades silently to the title badge with no OS notifica
     await page.waitForFunction(() => document.title.startsWith("(1) "));
     const notifs = await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length);
     assert.equal(notifs, 0);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "permission-denied-degrades-silently-to-the-title", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1390,8 +1542,11 @@ test("permission-denied degrades silently to the title badge with no OS notifica
 test("own messages and non-mentions in mentions-only scope do not notify (#186)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await installNotificationDouble(page, "default");
     // #270: the brief renders BEFORE `enterRoom` awaits its first `/messages`
     // poll, and `#notify-toggle`'s handler is attached by `bindEvents()` after
@@ -1437,6 +1592,9 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length), 0);
     assert.equal(await page.title(), "Agent Gather Room");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "own-messages-and-non-mentions-in-mentions-only-s", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1446,8 +1604,11 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
 test("a notification body never carries an invite URL or token from the message text (#186)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await installNotificationDouble(page, "default");
     // #270: the brief is painted while entry is still in flight; `#notify-toggle`
     // binds in `bindEvents()` after entry's awaited first poll. Seed a message and
@@ -1496,6 +1657,9 @@ test("a notification body never carries an invite URL or token from the message 
     assert.equal(combined.includes("tgl_"), false);
     assert.equal(combined.includes("https://"), false);
     assert.match(notif.body, /New mention from reviewer/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-notification-body-never-carries-an-invite-url", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1505,8 +1669,11 @@ test("a notification body never carries an invite URL or token from the message 
 test("a browser room join is recorded in the device-local 'Rooms I'm in' list, token-free (#178)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1530,6 +1697,9 @@ test("a browser room join is recorded in the device-local 'Rooms I'm in' list, t
     const parsed = JSON.parse(stored || "{}") as { rooms: Array<{ baseUrl: string; alias: string }> };
     assert.equal(parsed.rooms[0]?.baseUrl, fixture.baseUrl);
     assert.equal(parsed.rooms[0]?.alias, "host");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-browser-room-join-is-recorded-in-the-device-lo", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1539,8 +1709,11 @@ test("a browser room join is recorded in the device-local 'Rooms I'm in' list, t
 test("a browser join with an unreachable dashboard bridge degrades silently (#178)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(String(error)));
     // Point the same-device bridge at a dead local port: the POST fails, but the
@@ -1550,6 +1723,9 @@ test("a browser join with an unreachable dashboard bridge degrades silently (#17
     await page.waitForSelector("#joined-section:not([hidden])");
     await page.waitForSelector("#joined-list .joined-row");
     assert.deepEqual(errors, []);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-browser-join-with-an-unreachable-dashboard-bri", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1559,8 +1735,11 @@ test("a browser join with an unreachable dashboard bridge degrades silently (#17
 test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leaves the browser (#178)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const bridgePosts: string[] = [];
     page.on("request", (req) => {
       if (req.method() === "POST" && /joined-rooms/.test(req.url())) bridgePosts.push(req.url());
@@ -1575,6 +1754,9 @@ test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leav
     assert.deepEqual(bridgePosts, []);
     // The room-origin record is still kept (local-only).
     await page.waitForSelector("#joined-list .joined-row");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-non-loopback-dashboard-is-refused-no-cross-ori", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1590,9 +1772,12 @@ const HOST_ONLY_CONTROLS = ["#close-button", "#invite-button", "#session-toggle"
 test("a joined participant never sees host-only controls, live or while the host is offline; the host does (#212)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // Host-owned path: the host sees the host-controls section and every control in it.
     const hostPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(hostPage, hostPage.context());
     await hostPage.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await hostPage.waitForSelector("text=Ship the browser room safely.");
     assert.equal(await hostPage.isHidden("#host-controls"), false);
@@ -1603,6 +1788,7 @@ test("a joined participant never sees host-only controls, live or while the host
     // Joined-participant path: the non-host reviewer opens the same live room and
     // sees no host-controls section and none of the individual host-only controls.
     const guestPage = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    diagnostics?.attachPage(guestPage, "guestPage");
     await guestPage.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
     await guestPage.waitForSelector("text=Ship the browser room safely.");
     assert.equal(await guestPage.isHidden("#host-controls"), true);
@@ -1629,6 +1815,9 @@ test("a joined participant never sees host-only controls, live or while the host
     for (const control of HOST_ONLY_CONTROLS) {
       assert.equal(await guestPage.isHidden(control), true, `offline participant must not see ${control}`);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-joined-participant-never-sees-host-only-contro", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1641,10 +1830,13 @@ test("a joined participant never sees host-only controls, live or while the host
 test("a direct room URL keeps the roster right panel in one independent scroll context, no bottom clip (#218b)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // A short viewport forces the roster (room info + participants + host controls)
     // to exceed the column height.
     const page = await browser.newPage({ viewport: { width: 1180, height: 460 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1685,6 +1877,9 @@ test("a direct room URL keeps the roster right panel in one independent scroll c
       return c.bottom <= window.innerHeight + 1 && c.top >= 0;
     });
     assert.equal(controlsVisible, true, "host controls remained clipped after scrolling");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-direct-room-url-keeps-the-roster-right-panel-i", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1698,8 +1893,11 @@ test("a browser join records the boardroom display title in Rooms I'm in, token-
   const fixture = await startFixture();
   await createBoardroom(fixture.root, fixture.roomId, { name: "Agent Gather Launch" });
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1717,6 +1915,9 @@ test("a browser join records the boardroom display title in Rooms I'm in, token-
     assert.equal(entry?.title, "Agent Gather Launch"); // display title, not the slug
     assert.notEqual(entry?.title, fixture.roomId);
     assert.equal(/tgl_|token=|Bearer|host-/i.test(stored ?? ""), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-browser-join-records-the-boardroom-display-tit", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1727,8 +1928,11 @@ test("a browser join records the boardroom display title in Rooms I'm in, token-
 test("the local backup is bounded — oldest messages are dropped past the cap (#211)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const key = `agentgather.backup.${fixture.roomId}`;
     // Seed a backup already over the cap before the page scripts run.
     await page.addInitScript((k) => {
@@ -1756,6 +1960,9 @@ test("the local backup is bounded — oldest messages are dropped past the cap (
     assert.ok(backup.messages.length <= 250, `backup grew to ${backup.messages.length}`);
     assert.equal(backup.messages.some((m: { text: string }) => m.text === "newest-kept"), true);
     assert.equal(backup.messages.some((m: { text: string }) => m.text === "old-0"), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-local-backup-is-bounded-oldest-messages-are", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1766,8 +1973,11 @@ test("the local backup is bounded — oldest messages are dropped past the cap (
 test("the local backup redacts tokens and card URLs before storing (#211)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await postMessage(fixture, fixture.reviewerToken, "leak tgl_secret_abc123XYZ and https://host/card?token=tgl_zzz plus Bearer sk_live_qqq");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
@@ -1785,6 +1995,9 @@ test("the local backup redacts tokens and card URLs before storing (#211)", asyn
     });
     assert.equal(/tgl_secret_abc123XYZ|token=tgl_zzz|Bearer sk_live_qqq|\/card\?/.test(stored), false);
     assert.match(stored, /redacted/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-local-backup-redacts-tokens-and-card-urls-be", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1795,8 +2008,11 @@ test("the local backup redacts tokens and card URLs before storing (#211)", asyn
 test("host offline with no cached messages shows an empty read-only backup (#211)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -1816,6 +2032,9 @@ test("host offline with no cached messages shows an empty read-only backup (#211
     await page.waitForSelector("#backup-notice:not([hidden])");
     assert.match((await page.locator("#backup-notice").textContent()) ?? "", /No messages are saved on this device yet/);
     await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "host-offline-with-no-cached-messages-shows-an-em", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -1851,8 +2070,11 @@ const texts = (list: OrderedList): string[] => list.items.map((item) => item.tex
 test("ordered lists keep authored numbering across blank lines — ol.start / li.value (#250)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -2031,6 +2253,9 @@ test("ordered lists keep authored numbering across blank lines — ol.start / li
     assert.deepEqual(briefLists[0]?.items.map((item) => item.text), ["first", "second", "third"]);
     assert.deepEqual(briefLists[1]?.items.map((item) => item.text), ["fourth", "fifth"]);
     assert.deepEqual(briefLists[2]?.items.map((item) => item.value), [null, "3"]);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "ordered-lists-keep-authored-numbering-across-bla", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -2043,15 +2268,19 @@ test("ordered lists keep authored numbering across blank lines — ol.start / li
 test("host rail auto-continue: host-only, off by default, opt-in enables the bounded delay, pending shows truthfully (#249)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // A non-host never sees the host controls at all.
     const guest = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(guest, guest.context());
     await guest.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
     await guest.waitForSelector("text=Ship the browser room safely.");
     assert.equal(await guest.locator("#host-controls").isVisible(), false, "a non-host must not see host controls");
     await guest.close();
 
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics?.attachPage(page, "page");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // Record every main-frame navigation from here. A navigation is the defect,
@@ -2124,6 +2353,9 @@ test("host rail auto-continue: host-only, off by default, opt-in enables the bou
       const noOverflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
       assert.equal(noOverflow, true, `no horizontal overflow at ${width}`);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "host-rail-auto-continue-host-only-off-by-default", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -2141,8 +2373,11 @@ test("host rail auto-continue: host-only, off by default, opt-in enables the bou
 test("Send before entry completes cannot navigate or eject the participant (#268)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
 
     // Hold the FIRST /status only; later polls proceed normally.
     let releaseEntry = (): void => {};
@@ -2240,6 +2475,9 @@ test("Send before entry completes cannot navigate or eject the participant (#268
     // And still no navigation from either.
     assert.equal(page.url(), urlDuringEntry, "sending after entry navigated the page");
     assert.deepEqual(navigations, [], "sending after entry triggered a navigation");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "send-before-entry-completes-cannot-navigate-or-e", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -2252,9 +2490,12 @@ test("Send before entry completes cannot navigate or eject the participant (#268
 test("a second entry seeds from the local backup and fetches only what is new (#278)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const sinceIds: number[] = [];
     page.on("request", (req) => {
       const match = /\/messages\?since_id=(\d+)/.exec(req.url());
@@ -2305,6 +2546,9 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     }
     // The restored range is named, so a trimmed backup could not read as complete.
     assert.match((await page.locator(".restored-divider").textContent()) ?? "", /Restored from this device/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-second-entry-seeds-from-the-local-backup-and-f", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2314,9 +2558,12 @@ test("a second entry seeds from the local backup and fetches only what is new (#
 test("an empty or corrupt backup falls back to the full fetch and never blocks entry (#278)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const sinceIds: number[] = [];
     page.on("request", (req) => {
       const match = /\/messages\?since_id=(\d+)/.exec(req.url());
@@ -2342,6 +2589,9 @@ test("an empty or corrupt backup falls back to the full fetch and never blocks e
       assert.equal(sinceIds[0], 0, `a corrupt backup (${broken.slice(0, 12)}) refetches from the start`);
       assert.equal(await page.locator(".restored-divider").count(), 0, "nothing is claimed as restored");
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "an-empty-or-corrupt-backup-falls-back-to-the-ful", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2351,9 +2601,12 @@ test("an empty or corrupt backup falls back to the full fetch and never blocks e
 test("a tampered backup renders only as restored-from-this-device, and stays redacted (#278)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // Two real messages, so the forged records below can claim ids the room really
     // has — the case that survives the head check and therefore reaches the view.
     await postMessage(fixture, fixture.reviewerToken, "genuine line one");
@@ -2425,6 +2678,9 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     await page.waitForSelector("text=served live after entry");
     const live = page.locator(".message", { hasText: "served live after entry" }).first();
     assert.equal(await live.getAttribute("data-restored"), null);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-tampered-backup-renders-only-as-restored-from", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2437,9 +2693,12 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
 test("no restored record\'s author or text escapes into an unmarked surface (#278)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await postMessage(fixture, fixture.reviewerToken, "genuine line one");
     await postMessage(fixture, fixture.reviewerToken, "genuine line two");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
@@ -2519,6 +2778,9 @@ test("no restored record\'s author or text escapes into an unmarked surface (#27
     assert.equal(/host/i.test(context), false, `live reply quoted a forged author: ${context}`);
     assert.equal(context.includes(forgedText), false, `live reply quoted forged text: ${context}`);
     assert.equal(context, `↩ replying to #${forgedId}`);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "no-restored-record-s-author-or-text-escapes-into", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2532,9 +2794,12 @@ test("no restored record\'s author or text escapes into an unmarked surface (#27
 test("a backup whose ids run past the room is discarded instead of wedging the cursor (#278)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const sinceIds: number[] = [];
     page.on("request", (req) => {
       const match = /\/messages\?since_id=(\d+)/.exec(req.url());
@@ -2578,6 +2843,9 @@ test("a backup whose ids run past the room is discarded instead of wedging the c
       return key === undefined ? "" : (window.localStorage.getItem(key) ?? "");
     });
     assert.equal(stored.includes("line from a room that is gone"), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-backup-whose-ids-run-past-the-room-is-discarde", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2593,9 +2861,12 @@ test("a backup whose ids run past the room is discarded instead of wedging the c
 test("a host that serves its page but not its API shows the held copy, not a blank room (#279)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await postMessage(fixture, fixture.reviewerToken, "received while the host was up");
     await page.waitForSelector("text=received while the host was up");
@@ -2635,6 +2906,9 @@ test("a host that serves its page but not its API shows the held copy, not a bla
     );
     assert.match((await page.locator("#composer-identity").textContent()) ?? "", /Host/);
     assert.equal(await page.locator("#message-text").isDisabled(), false, "composer works again once live");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-host-that-serves-its-page-but-not-its-api-show", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2648,9 +2922,12 @@ test("a host that serves its page but not its API shows the held copy, not a bla
 test("a room opened by its own URL still contributes history to the dashboard (#279)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const posted: Array<{ capability: unknown; roomId: unknown; baseUrl: unknown }> = [];
     await page.route("**/joined-rooms/history", async (route) => {
       try {
@@ -2687,6 +2964,9 @@ test("a room opened by its own URL still contributes history to the dashboard (#
     // Nothing token-shaped is ever in that body.
     const raw = JSON.stringify(posted);
     assert.equal(raw.includes(fixture.hostToken), false, "no token in the bridge body");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-room-opened-by-its-own-url-still-contributes-h", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2700,9 +2980,12 @@ test("a room opened by its own URL still contributes history to the dashboard (#
 test("the room view offers a labelled route home and discloses no other room (#276)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const dashboard = "http://127.0.0.1:8934/";
     // #299 — the route home renders the CANONICAL ORIGIN of the remembered
     // address, not the address as supplied. `?dashboard=` is attacker-influenceable
@@ -2821,6 +3104,9 @@ test("the room view offers a labelled route home and discloses no other room (#2
     for (const entry of finalBlobs) {
       assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(entry.urls.join("\n")), false);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-room-view-offers-a-labelled-route-home-and-d", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2836,9 +3122,12 @@ test("the room view offers a labelled route home and discloses no other room (#2
 test("a poll response cannot rewind the live cursor (#283)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const sinceIds: string[] = [];
     let rewriteNext = false;
     await page.route(/\/messages(\?|$)/, async (route) => {
@@ -2888,6 +3177,9 @@ test("a poll response cannot rewind the live cursor (#283)", async () => {
       "second",
       "third"
     ]);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-poll-response-cannot-rewind-the-live-cursor-28", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -2914,9 +3206,12 @@ test("a poll response cannot rewind the live cursor (#283)", async () => {
 test("show earlier loads host history older than the backup without refetching or moving the live cursor (#283)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // 60 messages, posted by the host: a room whose history outruns what a trimmed
     // backup can hold. (Host, not the agent participant, so the loop guard — which
     // only counts agent posts — never enters this fixture.)
@@ -3085,6 +3380,9 @@ test("show earlier loads host history older than the backup without refetching o
     for (const query of after) {
       assert.equal(query, `?since_id=${ids.get("m60")}`, `a poll after the backward reads asked ${query}`);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "show-earlier-loads-host-history-older-than-the-b", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -3098,9 +3396,12 @@ test("show earlier loads host history older than the backup without refetching o
 test("show earlier in a closed room is a one-off fetch that leaves polling stopped (#283)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     for (let n = 1; n <= 8; n += 1) {
       await postMessage(fixture, fixture.hostToken, `c${n}`);
     }
@@ -3158,6 +3459,9 @@ test("show earlier in a closed room is a one-off fetch that leaves polling stopp
       .map((line) => line.trim())
       .filter((line) => /^c\d+$/.test(line));
     assert.deepEqual(texts, ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "show-earlier-in-a-closed-room-is-a-one-off-fetch", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -3170,9 +3474,12 @@ test("show earlier in a closed room is a one-off fetch that leaves polling stopp
 test("show earlier is withdrawn with a stated reason while the host is unreachable (#283)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     for (let n = 1; n <= 6; n += 1) {
       await postMessage(fixture, fixture.hostToken, `o${n}`);
     }
@@ -3221,6 +3528,9 @@ test("show earlier is withdrawn with a stated reason while the host is unreachab
       .map((line) => line.trim())
       .filter((line) => /^o\d+$/.test(line));
     assert.deepEqual(texts, ["o1", "o2", "o3", "o4", "o5", "o6"]);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "show-earlier-is-withdrawn-with-a-stated-reason-w", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -3243,11 +3553,14 @@ const AUTH_ERROR_COPY =
 test("an uncredentialed arrival is offered its remembered dashboard, and only then (#290)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
 
     // --- Branch A: nothing remembered. Today's pane, unchanged. ---
     const bare = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(bare, bare.context());
     await bare.goto(fixture.baseUrl);
     await bare.waitForSelector('.room-shell[data-state="auth-error"]');
     assert.equal(
@@ -3273,6 +3586,7 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
     // the test exercises the real path into `DASHBOARD_KEY`.
     const dashboardUrl = `http://127.0.0.1:${await getFreePort()}/`;
     const known = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics?.attachPage(known, "known");
     await known.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(dashboardUrl)}#token=${fixture.hostToken}`);
     await known.waitForSelector("text=Ship the browser room safely.");
     assert.equal(
@@ -3341,6 +3655,9 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
       false,
       "the token must never be persisted by this path"
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "an-uncredentialed-arrival-is-offered-its-remembe", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -3365,9 +3682,12 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
 test("a remembered dashboard carrying a credential is reduced to its origin before it reaches markup (#290)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const dashboardOrigin = `http://127.0.0.1:${await getFreePort()}`;
     // Every carrier the validator lets through, on one value: path, query and
     // fragment. The fragment is this project's own invite-token carrier.
@@ -3408,6 +3728,7 @@ test("a remembered dashboard carrying a credential is reduced to its origin befo
     // re-runs `init()`, so `hydrateDashboardHome` would not run and this would
     // assert against a topbar that was hydrated before the value existed.
     const entered = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics?.attachPage(entered, "entered");
     await entered.addInitScript((value) => {
       window.localStorage.setItem("agentgather.dashboard", value as string);
     }, poisoned);
@@ -3438,6 +3759,9 @@ test("a remembered dashboard carrying a credential is reduced to its origin befo
       AUTH_ERROR_COPY,
       "and the pane falls back to the copy that is then the true advice"
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-remembered-dashboard-carrying-a-credential-is", error);
+    throw error;
   } finally {
     await browser?.close();
     await fixture.close();
@@ -3458,8 +3782,15 @@ async function offlineNotice(
   seedBackup = true
 ) {
   const browser = await chromium.launch();
+  // #303 (@re2, PR #304): this helper launches its own browser and holds three
+  // ceiling waits, so it is a browser session in its own right — the calling
+  // block names no page and was dropped from the inventory entirely, which is
+  // worse than being reported uncovered. The recorder lives where the session
+  // lives.
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const key = `agentgather.backup.${fixture.roomId}`;
     // A backup whose lowest id is above 1, so older history exists on the host and
     // the "show earlier" control mounts.
@@ -3499,6 +3830,15 @@ async function offlineNotice(
     // number better, and a value computed and never read is a check that only
     // exists — which is this ticket's own thesis (@re2, @re1).
     return { notice: (await page.locator("#backup-notice").textContent()) ?? "" };
+  } catch (error) {
+    // The label names the helper AND which of its three call shapes was running,
+    // so an artifact identifies the session without opening the file.
+    await captureBrowserFailure(
+      diagnostics,
+      `offline-notice-helper-earlier-${fetchEarlier}-backup-${seedBackup}`,
+      error
+    );
+    throw error;
   } finally {
     await browser.close();
   }

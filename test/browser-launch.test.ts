@@ -11,6 +11,7 @@ import { runLaunchCommand } from "../src/cli/commands/launch/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
 import { VERSION } from "../src/cli/help.js";
 import { closeServer } from "./support/close-server.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-launch-"));
@@ -73,11 +74,14 @@ test("the launcher's opened URL renders the existing dashboard at desktop width 
   });
 
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     await waitFor(() => openedUrl !== "", 15_000);
     assert.equal(openedUrl, `http://127.0.0.1:${port}`);
 
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(openedUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.waitForSelector(".room-row");
@@ -87,6 +91,9 @@ test("the launcher's opened URL renders the existing dashboard at desktop width 
     // Desktop width renders without horizontal overflow.
     const noHScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
     assert.equal(noHScroll, true, "dashboard overflowed horizontally at desktop width");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-launcher-s-opened-url-renders-the-existing-d", error);
+    throw error;
   } finally {
     await browser.close();
     releaseServer();

@@ -1,0 +1,84 @@
+// #303 fixture, not a test. `diagnostics-coverage.test.ts` copies this into a
+// throwaway tree as `test/browser-fixture-sample.test.ts` to prove the coverage
+// guard can FAIL: the real tree is fully covered, so a gap has to be built.
+//
+// It is stored as `.txt` on purpose. Held inline in the coverage test, its
+// `playwright` import and page calls would make that test look like a browser
+// test to the very survey it is checking — the guard would then report its own
+// fixture as an uncovered block.
+import test from "node:test";
+import { chromium } from "playwright";
+
+// A browser session that lives in a helper, not in a test block (@re2, PR #304).
+// The block that calls it names no page at all, so a denominator built from
+// "does this block mention a page" drops it from the inventory ENTIRELY —
+// absent rather than uncovered, which is the one outcome worse than silence.
+async function unwiredHelperSession() {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.waitForSelector("#ready");
+  } finally {
+    await browser.close();
+  }
+}
+
+test("a wired block", async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-wired-block", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+test("an unwired block", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.waitForSelector("#ready");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a block that only reaches a browser through a helper", async () => {
+  // Nothing here names a browser or a page: the whole session is behind the
+  // call. Its coverage is the helper's coverage.
+  await unwiredHelperSession();
+});
+
+// One hop further (@re2, PR #304): this helper takes its page FROM another
+// helper, so it names neither `chromium.launch(` nor `newPage(` — yet it holds a
+// ceiling wait on a live page, and its callers invoke it before their own try.
+// `browser-manage-joined`'s `startMixedFixture` is exactly this shape.
+async function unwiredIndirectSession() {
+  const session = await wiredHelperSession();
+  await session.page.waitForSelector("#ready", { timeout: 30_000 });
+}
+
+// A helper that does attach and write, so the indirect one above has something
+// to take its page from — and so the sample proves the guard separates covered
+// helpers from uncovered ones rather than flagging every helper it finds.
+async function wiredHelperSession() {
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  const diagnostics = recordBrowserDiagnostics(page, page.context());
+  try {
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "wired-helper-session", error);
+    throw error;
+  }
+  return { page, browser };
+}
+
+test("a block that reaches a browser two hops away", async () => {
+  await unwiredIndirectSession();
+});

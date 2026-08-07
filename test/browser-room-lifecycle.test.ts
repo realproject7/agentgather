@@ -9,6 +9,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 // #241 room-entry lifecycle: token-fragment entry must be idempotent (post-entry
 // AND while the joining interstitial is shown), and a terminal (closed) room must
@@ -119,8 +120,12 @@ async function deliverToken(page: Page, token: string): Promise<void> {
 test("a later token-fragment re-entry after entering does not duplicate handlers or timers", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture. This file was uncovered when its #248 test
+    // produced a real 30s missing-event timeout and no artifact.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const counters = countRequests(page);
     await gotoUnauthenticated(page, fixture);
 
@@ -143,6 +148,9 @@ test("a later token-fragment re-entry after entering does not duplicate handlers
     await page.waitForSelector("text=hello exactly once");
     await page.waitForTimeout(300);
     assert.equal(counters.messagePosts, 1, "one send handler");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-later-token-fragment-re-entry-after-entering-d", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -152,8 +160,12 @@ test("a later token-fragment re-entry after entering does not duplicate handlers
 test("a token-fragment re-entry while the joining interstitial is shown claims and enters once", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture. This file was uncovered when its #248 test
+    // produced a real 30s missing-event timeout and no artifact.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const counters = countRequests(page);
     await gotoUnauthenticated(page, fixture);
 
@@ -178,6 +190,9 @@ test("a token-fragment re-entry while the joining interstitial is shown claims a
     await page.waitForSelector("text=joined once");
     await page.waitForTimeout(300);
     assert.equal(counters.messagePosts, 1, "entered exactly once");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-token-fragment-re-entry-while-the-joining-inte", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -187,9 +202,13 @@ test("a token-fragment re-entry while the joining interstitial is shown claims a
 test("overlapping poll intervals issue a single final closed-history fetch (serialized)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   const held: Array<import("playwright").Route> = [];
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture. This file was uncovered when its #248 test
+    // produced a real 30s missing-event timeout and no artifact.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
 
     // #270: seed a message BEFORE entry so the first poll has something to
     // render. The brief is painted before `enterRoom` awaits that poll, so
@@ -246,6 +265,9 @@ test("overlapping poll intervals issue a single final closed-history fetch (seri
     // issued one per interval firing.
     await page.waitForTimeout(8_000);
     assert.equal(held.length, 1, "exactly one final closed-history fetch despite overlapping intervals");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "overlapping-poll-intervals-issue-a-single-final", error);
+    throw error;
   } finally {
     for (const route of held) {
       await route.abort().catch(() => {});
@@ -258,8 +280,12 @@ test("overlapping poll intervals issue a single final closed-history fetch (seri
 test("a closed room loads its final history once and stops all polling timers", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture. This file was uncovered when its #248 test
+    // produced a real 30s missing-event timeout and no artifact.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const counters = countRequests(page);
 
     // Host enters directly (open room), so poll + status timers are running.
@@ -280,6 +306,9 @@ test("a closed room loads its final history once and stops all polling timers", 
     await page.waitForTimeout(6_000);
     assert.equal(counters.messagePolls, settled.messagePolls, "no message poll after closure");
     assert.equal(counters.statusPolls, settled.statusPolls, "no status poll after closure");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-closed-room-loads-its-final-history-once-and-s", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -321,8 +350,12 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
   });
 
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture. This file was uncovered when its #248 test
+    // produced a real 30s missing-event timeout and no artifact.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
 
     // 1) This tab is authenticated as the agent and caches that credential in its
     //    own (tab-scoped) sessionStorage.
@@ -373,6 +406,9 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
     assert.equal(local.rooms.filter((room) => room.roomId === roomId).length, 1);
     assert.equal(local.rooms.find((room) => room.roomId === roomId)?.alias, "project7");
     assert.equal(/tgl_|Bearer|token=/i.test(stored), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-dashboard-open-re-authenticates-over-a-stale-t", error);
+    throw error;
   } finally {
     await browser.close();
     await closeServer(server);

@@ -12,3 +12,6 @@ coverage/
 
 # #289 failure-only browser diagnostics (never committed)
 test-artifacts/
+
+# #303 run record consumed by scripts/diagnostics-attachment-status.mjs
+test-run.tap

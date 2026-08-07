@@ -86,6 +86,41 @@ export interface BrowserDiagnostics {
   events(): DiagnosticEvent[];
 }
 
+// #303 (@re1, PR #304): the prefix that marks a failure which happened BEFORE a
+// recorder existed. It is carried in the FILENAME so the status report can
+// classify a run without reading any artifact's contents.
+export const UNATTACHED_PREFIX = "unattached--";
+
+// A test can throw between entering its `try` and reaching `newPage()` — a
+// browser that fails to open a page, an await placed before the attach. The
+// recorder is null there, and the old catch wrote nothing at all, which is
+// exactly the absent-versus-quiet collapse #303 exists to remove. This records
+// the one fact that is knowable at that point: the test failed, and no recorder
+// had attached. It holds no page data because there was no page.
+export async function writeUnattachedFailure(label: string, error: unknown): Promise<string> {
+  const file = path.join(DIAGNOSTICS_DIR, `${UNATTACHED_PREFIX}${label.replace(/[^a-z0-9._-]+/gi, "-")}.json`);
+  await mkdir(DIAGNOSTICS_DIR, { recursive: true });
+  const report = {
+    label,
+    attached: false,
+    reached: "the test threw before a recorder was attached to a page",
+    failure: redactText(error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+  };
+  await writeFile(file, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  return file;
+}
+
+// The one call every wired catch makes. Whichever branch runs, a failed browser
+// block now leaves a record that names itself and states whether a recorder was
+// there — instead of leaving nothing and letting the run be read as quiet.
+export async function captureBrowserFailure(
+  diagnostics: BrowserDiagnostics | null,
+  label: string,
+  error: unknown
+): Promise<string> {
+  return diagnostics === null ? writeUnattachedFailure(label, error) : diagnostics.write(label, error);
+}
+
 // Attach to a page and its context. Nothing is written unless `write` is called,
 // so a passing run produces no artifact and costs only in-memory events.
 export function recordBrowserDiagnostics(page: Page, context?: BrowserContext): BrowserDiagnostics {
@@ -147,6 +182,11 @@ export function recordBrowserDiagnostics(page: Page, context?: BrowserContext): 
       });
       const report = {
         label,
+        // #303 (@re1): the artifact states the RUNTIME attachment fact. Source
+        // coverage proves a block contains attachment code, not that this
+        // execution reached it — see `writeUnattachedFailure` for the record a
+        // failure before that point produces.
+        attached: true,
         failure: redactText(error instanceof Error ? `${error.name}: ${error.message}` : String(error)),
         durationMs: Date.now() - started,
         // What was being awaited when it failed, so the window has a subject.

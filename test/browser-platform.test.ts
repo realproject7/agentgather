@@ -19,6 +19,7 @@ import { createRoomHttpServer, participantTokenHash } from "../src/server/index.
 import { writeToken } from "../src/cli/state.js";
 import type { Server } from "node:http";
 import { closeServer } from "./support/close-server.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-platform-test-"));
@@ -118,8 +119,11 @@ test("owner shell renders the room list, status, live chat, and human-vs-agent r
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
 
     await page.waitForSelector(".room-row");
@@ -156,6 +160,9 @@ test("owner shell renders the room list, status, live chat, and human-vs-agent r
       });
       assert.equal(overflow, true, `content overflowed at width ${width}`);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "owner-shell-renders-the-room-list-status-live-ch", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -166,8 +173,11 @@ test("owner shell shows a first-run welcome state when the owner has no rooms", 
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="empty"]');
     await page.waitForSelector(".welcome-title");
@@ -175,6 +185,9 @@ test("owner shell shows a first-run welcome state when the owner has no rooms", 
     // The welcome offers templates to start from and never shows a room row.
     assert.equal(await page.locator(".welcome-template").count(), 4);
     assert.equal(await page.locator(".room-row").count(), 0);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "owner-shell-shows-a-first-run-welcome-state-when", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -202,8 +215,11 @@ test("populated room list renders v5 rows with monogram, subtitle, age, and a st
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
 
@@ -221,6 +237,9 @@ test("populated room list renders v5 rows with monogram, subtitle, age, and a st
     // The status legend explains all four platform statuses.
     await page.waitForSelector(".status-legend");
     assert.equal(await page.locator('.legend-list .status-badge').count(), 4);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "populated-room-list-renders-v5-rows-with-monogra", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -232,8 +251,11 @@ test("create-room shell composes the host CLI command and keeps submit disabled"
   await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
 
@@ -252,6 +274,9 @@ test("create-room shell composes the host CLI command and keeps submit disabled"
     // No fake API: the create button is disabled and creation is via the CLI.
     assert.equal(await page.locator(".primary-btn[disabled]").count(), 1);
     await page.waitForSelector("text=Creating a room from the browser isn't available yet");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "create-room-shell-composes-the-host-cli-command", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -263,8 +288,11 @@ test("create-room command shell-quotes the goal so nothing expands on paste", as
   await createControlPlaneRoom(root, roomInput({ room_id: "alpha", title: "Alpha", status: "active" }));
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.click("#new-room");
@@ -279,6 +307,9 @@ test("create-room command shell-quotes the goal so nothing expands on paste", as
       command.includes("--brief 'pwn $(whoami) `id` $HOME \\ it'\\''s'"),
       `command did not safely single-quote the goal: ${command}`
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "create-room-command-shell-quotes-the-goal-so-not", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -302,8 +333,11 @@ test("invite cards split human (browser-first) and agent (command + safety) with
   );
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.click('.room-row[data-room-id="h402-review"]');
@@ -334,6 +368,9 @@ test("invite cards split human (browser-first) and agent (command + safety) with
     const overlayText = (await page.locator("#invite-overlay").textContent()) ?? "";
     assert.match(overlayText, /\$TOKEN/);
     assert.doesNotMatch(overlayText, /tgl_/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "invite-cards-split-human-browser-first-and-agent", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -348,8 +385,11 @@ test("history source shows the live host room and caches messages browser-locall
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const methods: string[] = [];
     page.on("request", (req) => methods.push(req.method()));
     await page.goto(platform.baseUrl);
@@ -368,6 +408,9 @@ test("history source shows the live host room and caches messages browser-locall
 
     // The shell never uploads message bodies: every request is a read (GET).
     assert.equal(methods.every((method) => method === "GET"), true, `non-GET requests: ${methods.join(",")}`);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "history-source-shows-the-live-host-room-and-cach", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -384,8 +427,11 @@ test("cached message bodies redact bearer tokens and invite/card URLs in localSt
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.click('.room-row[data-room-id="secret-room"]');
     await page.waitForSelector('#history-source[data-source="live"]');
@@ -400,6 +446,9 @@ test("cached message bodies redact bearer tokens and invite/card URLs in localSt
     }
     // The redaction marker is present, proving the body was cached but sanitized.
     assert.match(cached, /redacted/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "cached-message-bodies-redact-bearer-tokens-and-i", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -414,8 +463,11 @@ test("a live host replaces the redacted cache seed with the faithful message", a
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // Pre-seed a REDACTED cache copy for the same message id the host returns.
     await page.addInitScript(() => {
       window.localStorage.setItem(
@@ -433,6 +485,9 @@ test("a live host replaces the redacted cache seed with the faithful message", a
     // redacted provisional cache copy is replaced, not left on screen.
     await page.waitForSelector("text=tgl_LIVE_FAITHFUL");
     assert.equal(await page.locator(".shell-message-text", { hasText: "[redacted-token]" }).count(), 0);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-live-host-replaces-the-redacted-cache-seed-wit", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -453,8 +508,11 @@ test("history falls back to local cache with #81 paused copy when the host is of
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     // Seed this browser's per-room cache before the shell scripts run.
     await page.addInitScript(() => {
       window.localStorage.setItem(
@@ -478,6 +536,9 @@ test("history falls back to local cache with #81 paused copy when the host is of
     await page.waitForSelector("text=host must reopen this room");
 
     assert.equal(methods.every((method) => method === "GET"), true, `non-GET requests: ${methods.join(",")}`);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "history-falls-back-to-local-cache-with-81-paused", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -490,8 +551,11 @@ test("history shows the exported-summary label when host offline with no cache",
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.addInitScript(() => {
       window.localStorage.setItem("agentgather.exported.exported-room", "2026-06-23T00:00:00.000Z");
     });
@@ -500,6 +564,9 @@ test("history shows the exported-summary label when host offline with no cache",
     await page.waitForSelector('#history-source[data-source="exported"]');
     await page.waitForSelector("text=History: exported summary");
     await page.waitForSelector("text=exported summary is saved");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "history-shows-the-exported-summary-label-when-ho", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -516,8 +583,11 @@ test("a tokened single-room link renders one room without a multi-room list", as
   ]);
   const room = await listen(createRoomHttpServer({ root, roomId, baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1_000 }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${room.baseUrl}/#token=${hostToken}`);
     await page.waitForSelector("text=Single room only.");
     // The tokened participant view is the single-room shell, never the owner
@@ -525,6 +595,9 @@ test("a tokened single-room link renders one room without a multi-room list", as
     assert.equal(await page.locator("#room-list").count(), 0);
     assert.equal(await page.locator(".platform-shell").count(), 0);
     assert.equal(await page.locator(".room-shell").count(), 1);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-tokened-single-room-link-renders-one-room-with", error);
+    throw error;
   } finally {
     await browser.close();
     await room.close();
@@ -542,8 +615,11 @@ test("the owner shell renders the three history-source states through the platfo
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector(".room-row");
 
@@ -597,6 +673,9 @@ test("the owner shell renders the three history-source states through the platfo
     assert.equal(await forgedCache.getAttribute("data-restored"), "true");
     assert.equal((await forgedCache.locator(".shell-message-from").textContent())?.trim(), "local copy");
     assert.equal(await page.locator(".shell-message.system").count(), 0, "nothing wears the room's own voice");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-owner-shell-renders-the-three-history-source", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -620,8 +699,11 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
 
     // Same-device round-trip: the CLI-recorded join appears in "Rooms I'm in" with
@@ -665,6 +747,9 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     await page.waitForFunction(
       () => document.querySelectorAll('.joined-row[data-reachability="saved"]').length === 0
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-dashboard-shows-device-local-joined-rooms-an", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -683,8 +768,11 @@ test("the dashboard remembers tokenized root invite links as real joined rooms",
   const roomEntry = await listen(createRoomHttpServer({ root, roomId: "remember-room", baseUrl: "http://127.0.0.1:0", rateLimitPerMinute: 1000 }));
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
 
     await page.fill("#joined-input", `${roomEntry.baseUrl}/#token=${inviteToken}`);
@@ -708,6 +796,9 @@ test("the dashboard remembers tokenized root invite links as real joined rooms",
     const redirect = await fetch(openUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
     assert.match(redirect.headers.get("location") ?? "", /#token=tgl_invite_root_secret(&snapshot=[A-Za-z0-9_-]+)?$/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-dashboard-remembers-tokenized-root-invite-li", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -729,13 +820,19 @@ test("the dashboard shows joined rooms even when the user hosts no rooms (#178)"
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
 
     await page.waitForSelector("text=Joined Only");
     assert.equal(await page.locator("#welcome").isVisible(), false);
     assert.equal(await page.locator(".platform-body").isVisible(), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-dashboard-shows-joined-rooms-even-when-the-u", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -757,14 +854,21 @@ test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' toke
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
 
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // Open the tokenized invite in the browser, carrying this dashboard's origin.
     const roomPage = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(roomPage, roomPage.context());
     await roomPage.goto(`${roomEntry.baseUrl}/?dashboard=${encodeURIComponent(platform.baseUrl)}#token=${hostToken}`);
     await roomPage.waitForSelector("text=Bridge test brief.");
 
     // The join bridged token-free metadata to the platform; the dashboard lists it.
     const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303 (@re2, PR #304): the wait below runs on THIS page. A recorder bound
+    // only to roomPage would produce a trace that is blind to the page that
+    // timed out — present, and useless.
+    diagnostics?.attachPage(dashPage, "dashPage");
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForFunction(
       () => [...document.querySelectorAll("#room-list .joined-name")].some((n) => (n.textContent || "").includes("bridge-room")),
@@ -778,6 +882,9 @@ test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' toke
     assert.equal(api.rooms.some((room) => room.roomId === "bridge-room"), true);
     assert.equal(/tgl_|Bearer|token=|host-bridge-tok/i.test(JSON.stringify(api)), false);
     assert.equal(api.rooms.find((room) => room.roomId === "bridge-room")?.baseUrl, roomEntry.baseUrl);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-browser-room-join-bridges-into-the-owner-dashb", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -807,8 +914,11 @@ test("the unified shell swaps home guidance for the selected room's channel nav 
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
 
@@ -852,6 +962,9 @@ test("the unified shell swaps home guidance for the selected room's channel nav 
       rows.map((row) => (row as HTMLElement).dataset.openHref ?? "")
     );
     assert.equal(openHrefs.some((href) => /tgl_|token=|Bearer/i.test(href)), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-unified-shell-swaps-home-guidance-for-the-se", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -872,8 +985,11 @@ test("the room rail collapses a long list behind a stable overflow control and e
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.waitForSelector("#rooms-more:not([hidden])");
@@ -908,6 +1024,9 @@ test("the room rail collapses a long list behind a stable overflow control and e
     });
     assert.equal(truncation.ellipsized, true, "long room title did not ellipsize");
     assert.equal(truncation.contained, true, "long title overflowed the rail track");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-room-rail-collapses-a-long-list-behind-a-sta", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -927,8 +1046,11 @@ test("the dashboard mounts a right info panel in the three-panel state, hides it
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
 
@@ -997,6 +1119,9 @@ test("the dashboard mounts a right info panel in the three-panel state, hides it
       await page.evaluate(() => getComputedStyle(document.getElementById("info-panel")!).display),
       "none"
     );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-dashboard-mounts-a-right-info-panel-in-the-t", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1030,8 +1155,11 @@ test("the dashboard labels joined rooms by display title, not slug, with the id 
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector(".joined-row");
 
@@ -1062,6 +1190,9 @@ test("the dashboard labels joined rooms by display title, not slug, with the id 
       return getComputedStyle(name).textOverflow === "ellipsis" && rail.scrollWidth <= rail.clientWidth + 1;
     });
     assert.equal(contained, true, "long joined-room slug overflowed the rail");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-dashboard-labels-joined-rooms-by-display-tit", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1075,8 +1206,11 @@ test("the first-run empty state is a polished, responsive product screen (#213)"
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="empty"]');
     await page.waitForSelector(".welcome-template");
@@ -1120,6 +1254,9 @@ test("the first-run empty state is a polished, responsive product screen (#213)"
       });
       assert.equal(ok, true, `empty state overflowed at width ${width}`);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-first-run-empty-state-is-a-polished-responsi", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1133,8 +1270,11 @@ test("dashboard templates prefill distinct briefs + channels and compose create-
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector(".welcome-template");
 
@@ -1177,6 +1317,9 @@ test("dashboard templates prefill distinct briefs + channels and compose create-
     // No horizontal page overflow with the overlay open (long command wraps).
     const noHScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
     assert.equal(noHScroll, true, "create overlay caused horizontal overflow");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "dashboard-templates-prefill-distinct-briefs-chan", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1189,8 +1332,11 @@ test("the About screen is reachable with no rooms and states the trust boundary 
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     // First-run: no rooms — the About trigger must still be present & accessible.
     await page.waitForSelector('.platform-shell[data-view="empty"]');
@@ -1220,6 +1366,9 @@ test("the About screen is reachable with no rooms and states the trust boundary 
     // Escape closes it (keyboard accessible).
     await page.keyboard.press("Escape");
     await page.locator("#about-overlay").waitFor({ state: "hidden" });
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-about-screen-is-reachable-with-no-rooms-and", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1240,8 +1389,11 @@ test("device-local archive/delete for joined rooms — hide/restore, confirm-del
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.waitForSelector(".joined-row");
@@ -1301,6 +1453,9 @@ test("device-local archive/delete for joined rooms — hide/restore, confirm-del
     assert.equal(/tgl_|token=|Bearer/i.test(JSON.stringify(api)), false);
     assert.equal(api.rooms.some((r) => r.roomId === "room-b"), false);
     assert.equal(api.rooms.some((r) => r.roomId === "room-a"), true);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "device-local-archive-delete-for-joined-rooms-hid", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1313,8 +1468,11 @@ test("deleting one browser-local joined room keeps a sibling on the same host (#
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector(".platform-shell");
     // Two browser-local joined records that share a baseUrl but differ by roomId.
@@ -1345,6 +1503,9 @@ test("deleting one browser-local joined room keeps a sibling on the same host (#
     ) as { rooms: Array<{ roomId: string }> };
     assert.equal(stored.rooms.length, 1);
     assert.equal(stored.rooms[0]?.roomId, "room-y");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "deleting-one-browser-local-joined-room-keeps-a-s", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1360,8 +1521,11 @@ test("deleting a joined room clears its dashboard-origin cached history (#211/#2
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row:has(.joined-name:text-is("Cached Room"))');
     // Seed a dashboard-origin cached-history entry for that room.
@@ -1378,6 +1542,9 @@ test("deleting a joined room clears its dashboard-origin cached history (#211/#2
 
     // The device-local cached history for that room is cleared (disassociation).
     assert.equal(await page.evaluate(() => window.localStorage.getItem("agentgather.history.cached-room")), null);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "deleting-a-joined-room-clears-its-dashboard-orig", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1398,8 +1565,11 @@ test("the unified rail merges hosted + joined into one host-tagged list, hosted 
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.waitForSelector(".joined-row");
@@ -1435,6 +1605,9 @@ test("the unified rail merges hosted + joined into one host-tagged list, hosted 
 
     // No raw token anywhere in the merged rail.
     assert.equal(/tgl_|token=|Bearer/i.test((await page.locator(".room-rail").innerHTML()) ?? ""), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-unified-rail-merges-hosted-joined-into-one-h", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1453,8 +1626,11 @@ test("the rail keeps a ~1/3-2/3 split and view-more expands within the rooms scr
 
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.platform-shell[data-view="rooms"]');
     await page.waitForSelector("#rooms-more:not([hidden])");
@@ -1492,6 +1668,9 @@ test("the rail keeps a ~1/3-2/3 split and view-more expands within the rooms scr
     assert.match((await page.locator("#rooms-more").textContent()) ?? "", /show less/);
     const lowerTopAfter = await page.evaluate(() => Math.round((document.querySelector(".rail-lower") as HTMLElement).getBoundingClientRect().top));
     assert.equal(lowerTopAfter, layout.lowerTop, "expanding the room list shifted the lower region");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-rail-keeps-a-1-3-2-3-split-and-view-more-exp", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1504,6 +1683,7 @@ test("channel nav renders room.channels from the payload and falls back to #gene
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   const roster = [{ alias: "host", kind: "human", role: "host", status: "attending" }];
   const rooms = [
     {
@@ -1523,6 +1703,8 @@ test("channel nav renders room.channels from the payload and falls back to #gene
   ];
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.route("**/rooms**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       if (/\/rooms\/[^/]+\/messages$/.test(pathname)) {
@@ -1554,6 +1736,9 @@ test("channel nav renders room.channels from the payload and falls back to #gene
     await page.waitForSelector("#lower-room:not([hidden])");
     assert.equal(await page.locator("#channel-nav .channel-row").count(), 1);
     assert.equal((await page.locator("#channel-nav .channel-name").textContent())?.trim(), "general");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "channel-nav-renders-room-channels-from-the-paylo", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1566,11 +1751,14 @@ test("channel nav caps at 8 with a view-more control (#233)", async () => {
   const root = await makeRoot();
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   const roster = [{ alias: "host", kind: "human", role: "host", status: "attending" }];
   const channels = Array.from({ length: 10 }, (_unused, i) => ({ id: i === 0 ? "general" : `chan-${i}`, name: i === 0 ? "general" : `chan-${i}`, type: "chat" }));
   const rooms = [{ room_id: "big", title: "Big", status: "active", owner_user_id: "owner-1", roster, route_health: { reachable: true, host_connected: true }, channels }];
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.route("**/rooms**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       if (/\/rooms\/[^/]+\/messages$/.test(pathname)) {
@@ -1596,6 +1784,9 @@ test("channel nav caps at 8 with a view-more control (#233)", async () => {
     await page.click("#channels-more");
     assert.equal(await page.locator("#channel-nav > li:not(.is-collapsed)").count(), 10);
     assert.match((await page.locator("#channels-more").textContent()) ?? "", /show less/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "channel-nav-caps-at-8-with-a-view-more-control-2", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1636,10 +1827,13 @@ test("a stale agent room tab refreshes metadata but cannot overwrite the selecte
   });
 
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // The stale tab: authenticated as the agent, still carrying ?dashboard= from an
     // earlier open, so it bridges on load exactly like the reported regression.
     const stalePage = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(stalePage, stalePage.context());
     await stalePage.goto(`${roomEntry.baseUrl}/?dashboard=${encodeURIComponent(platform.baseUrl)}#token=${agentToken}`);
     await stalePage.waitForSelector("text=Identity authority brief.");
 
@@ -1674,9 +1868,15 @@ test("a stale agent room tab refreshes metadata but cannot overwrite the selecte
     const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as { rooms: unknown[] };
     assert.equal(/tgl_|Bearer|token=/i.test(JSON.stringify(api)), false);
     const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303 (@re2, PR #304): the unbounded wait below runs on THIS page; the
+    // recorder is bound to stalePage above and would otherwise miss it.
+    diagnostics?.attachPage(dashPage, "dashPage");
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForSelector(".joined-row");
     assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-rail").innerHTML()) ?? ""), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-stale-agent-room-tab-refreshes-metadata-but-ca", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1713,8 +1913,11 @@ test("an explicit invite import intentionally changes the selected joined-room i
   });
 
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector(".joined-row");
 
@@ -1742,6 +1945,9 @@ test("an explicit invite import intentionally changes the selected joined-room i
     const redirect = await fetch(openUrl, { redirect: "manual" });
     assert.equal(redirect.status, 302);
     assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${agentToken}(&snapshot=[A-Za-z0-9_-]+)?$`));
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "an-explicit-invite-import-intentionally-changes", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();
@@ -1799,6 +2005,7 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     hostStopped = true;
     await roomEntry.close();
   };
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     // The real open path mints the bridge capability; take the redirect the
@@ -1812,6 +2019,8 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     assert.match(roomUrl, /snapshot=/);
 
     const roomPage = await browser!.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(roomPage, roomPage.context());
     await roomPage.goto(roomUrl);
     await roomPage.waitForSelector("text=second saved line");
     // The capability never survives in the address bar.
@@ -1847,6 +2056,9 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     await stopHost();
 
     const dashPage = await browser!.newPage({ viewport: { width: 1280, height: 900 } });
+    // The room page is closed above; the rest of this test's waits happen here,
+    // so the recorder must follow the page the assertions are actually on.
+    diagnostics?.attachPage(dashPage, "dashPage");
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await dashPage.click(".joined-row");
@@ -1870,6 +2082,9 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     assert.equal(await dashPage.locator("#shell-timeline .shell-message").count(), 3);
     // And nothing token-shaped is rendered.
     assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-detail").innerHTML()) ?? ""), false);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-dashboard-opened-room-bridges-its-loaded-histo", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -1904,9 +2119,12 @@ test("an unreachable room with no snapshot shows an honest empty offline state, 
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
   let host: { close: () => Promise<void> } | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.click(".joined-row");
@@ -1935,6 +2153,9 @@ test("an unreachable room with no snapshot shows an honest empty offline state, 
     await page.click("#snapshot-retry");
     await page.waitForSelector('#snapshot-retry[data-live="true"]');
     assert.match((await page.locator("#snapshot-retry").textContent()) ?? "", /Host is back/);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "an-unreachable-room-with-no-snapshot-shows-an-ho", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -1985,9 +2206,12 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.click(".joined-row");
@@ -2052,6 +2276,9 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
       });
       assert.equal(fits, true, `offline snapshot content overflowed at width ${width}`);
     }
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-offline-view-is-bounded-by-its-saved-cursor", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -2093,6 +2320,7 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     lastSeen: now
   });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // Write the forged records straight into the device-local store, which is what
     // an attacker with local write access — or a compromised sender — would do.
@@ -2112,6 +2340,8 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
 
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.click(".joined-row");
@@ -2207,6 +2437,9 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     );
     assert.match(exported, /local copy/);
     assert.equal(/(^|\n)host/i.test(exported), false, "an exported transcript never attributes a saved line to the host");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-tampered-snapshot-cannot-speak-as-the-host-or", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -2224,8 +2457,11 @@ test("the dashboard sidebar keeps the rooms reachable while a room is open (#276
   await createControlPlaneRoom(root, roomInput({ room_id: "beta", title: "Beta", status: "active" }));
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage defined by the wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector(".room-row");
 
@@ -2253,6 +2489,9 @@ test("the dashboard sidebar keeps the rooms reachable while a room is open (#276
     // No credential is ever in the rail markup.
     const railHtml = (await page.locator(".rail-rooms").innerHTML()) ?? "";
     assert.equal(/tgl_|Bearer|token=/i.test(railHtml), false, "the rail stays token-free");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-dashboard-sidebar-keeps-the-rooms-reachable", error);
+    throw error;
   } finally {
     await browser.close();
     await platform.close();

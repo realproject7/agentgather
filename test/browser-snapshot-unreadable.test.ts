@@ -19,6 +19,7 @@ import {
   writeSecureFile
 } from "../src/storage/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics, type BrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 const DAMAGED_MARKER = "TRIPWIRE-SNAPSHOT-CONTENT-4c71";
 // V8 quotes only the first ~10 bytes of the offending input, so a leak of the
@@ -38,6 +39,10 @@ interface Fixture {
   page: Page;
   browser: Browser;
   deadUrl: string;
+  // #303: this file launches its browser inside the fixture, so the test body
+  // never holds the page. The recorder is created here and handed back, which
+  // also puts the fixture's OWN waits inside the covered surface.
+  diagnostics: BrowserDiagnostics;
   close: () => Promise<void>;
 }
 
@@ -62,13 +67,24 @@ async function startFixture(): Promise<Fixture> {
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await page.goto(`http://127.0.0.1:${port}`);
-  await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
+  const diagnostics = recordBrowserDiagnostics(page, page.context());
+  // The fixture's own wait can consume the 30s ceiling before any test body
+  // runs. Uncaught here, that failure would produce no artifact at all — the
+  // exact silence this ticket exists to remove — so it writes under a label
+  // that names the setup rather than a test.
+  try {
+    await page.goto(`http://127.0.0.1:${port}`);
+    await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
+  } catch (error) {
+    await diagnostics.write("snapshot-unreadable-fixture-setup", error);
+    throw error;
+  }
   return {
     root,
     page,
     browser,
     deadUrl,
+    diagnostics,
     close: async () => {
       await browser.close();
       await closeServer(server);
@@ -113,6 +129,9 @@ test("an absent snapshot renders the existing 'nothing saved' band, unchanged (#
       await fixture.page.locator("#history-source-label").textContent(),
       "Local snapshot · host offline"
     );
+  } catch (error) {
+    await fixture.diagnostics.write("an-absent-snapshot-renders-the-existing-nothing", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -126,6 +145,9 @@ test("a valid snapshot renders its transcript, unchanged (#293)", async () => {
     assert.equal(/cannot be read|unreadable/i.test(band), false);
     assert.equal(await fixture.page.locator("#shell-timeline .shell-message").count(), 1);
     assert.match((await fixture.page.locator("#shell-timeline").textContent()) ?? "", /healthy saved line/);
+  } catch (error) {
+    await fixture.diagnostics.write("a-valid-snapshot-renders-its-transcript-unchange", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -152,6 +174,9 @@ test("a damaged snapshot renders a distinct unreadable band, not the empty state
     );
     // Nothing is rendered from it: the file is unparsed data of unknown provenance.
     assert.equal(await fixture.page.locator("#shell-timeline .shell-message").count(), 0);
+  } catch (error) {
+    await fixture.diagnostics.write("a-damaged-snapshot-renders-a-distinct-unreadable", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -181,6 +206,9 @@ test("no byte of the damaged file reaches the screen (#293)", async () => {
     assert.equal(rendered.includes(ECHOED_PREFIX), false, "not even the quoted prefix may be shown");
     assert.equal(/Unexpected token|SyntaxError|position \d+/i.test(rendered), false, "no parse detail may be shown");
     assert.equal(rendered.includes(fixture.root), false, "no filesystem path may be shown");
+  } catch (error) {
+    await fixture.diagnostics.write("no-byte-of-the-damaged-file-reaches-the-screen-2", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -205,6 +233,9 @@ test("a damaged snapshot leaves the room list and the other room's snapshot work
       "Local snapshot · host offline",
       "the healthy room must not inherit the damaged room's label"
     );
+  } catch (error) {
+    await fixture.diagnostics.write("a-damaged-snapshot-leaves-the-room-list-and-the", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -246,6 +277,9 @@ test("a rejected history fetch renders 'could not check', never 'nothing saved' 
       "utf8"
     );
     assert.ok(onDisk.includes("healthy saved line"), "the snapshot must really be intact on disk");
+  } catch (error) {
+    await fixture.diagnostics.write("a-rejected-history-fetch-renders-could-not-check", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -267,6 +301,9 @@ test("an unrecognised response state stays unknown rather than becoming absent (
     const band = await openRoom(page, "healthy-room");
     assert.match(band, /could not check its saved copy/i);
     assert.equal(/nothing from this room is saved on this device yet/i.test(band), false);
+  } catch (error) {
+    await fixture.diagnostics.write("an-unrecognised-response-state-stays-unknown-rat", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -290,6 +327,9 @@ test("nothing about the failure itself reaches the screen (#293)", async () => {
     assert.equal(rendered.includes(failureMarker), false, "no failure detail may be shown");
     assert.equal(rendered.includes(fixture.root), false, "no filesystem path may be shown");
     assert.equal(/\b500\b|HTTP \d{3}/.test(rendered), false, "no status code may be shown");
+  } catch (error) {
+    await fixture.diagnostics.write("nothing-about-the-failure-itself-reaches-the-scr", error);
+    throw error;
   } finally {
     await fixture.close();
   }
