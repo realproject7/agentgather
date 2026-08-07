@@ -350,6 +350,7 @@ test("forum bridges its loaded feed and opened thread to the dashboard snapshot 
   const dashboardUrl = `http://127.0.0.1:${dashPort}`;
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // The capability exists only because the dashboard opened this room.
     const openUrl = new URL(`${dashboardUrl}/joined-rooms/open`);
@@ -363,6 +364,8 @@ test("forum bridges its loaded feed and opened thread to the dashboard snapshot 
 
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(
       `${fixture.baseUrl}/forum.html?channel=design-forum&dashboard=${encodeURIComponent(dashboardUrl)}` +
         `#token=${fixture.hostToken}&snapshot=${encodeURIComponent(capability as string)}`
@@ -401,6 +404,9 @@ test("forum bridges its loaded feed and opened thread to the dashboard snapshot 
     assert.equal(snapshot?.forumPosts.length, 1);
     // And the saved copy carries nothing credential-shaped.
     assert.equal(/tgl_|Bearer|token=|snapshot=/i.test(JSON.stringify(snapshot)), false);
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("forum-bridges-its-loaded-feed-and-opened-thread", error);
+    throw error;
   } finally {
     await browser?.close();
     await closeServer(dashboard);

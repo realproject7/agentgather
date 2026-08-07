@@ -42,6 +42,15 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # #303: on a failed run, say whether the recorder was attached. Run
+      # 31026009385 failed on a real 30s browser timeout and published nothing,
+      # and "quiet" was indistinguishable from "never attached". This writes a
+      # status file into the artifact directory before the upload, so the upload
+      # always carries an answer. Names and counts only — never contents.
+      - name: Report diagnostics attachment status
+        if: failure()
+        run: node scripts/diagnostics-attachment-status.mjs
+
       # #289: only produced when a browser test fails, and redacted by
       # construction — the recorder never reads headers or bodies, so there is
       # nothing credential-shaped to strip before this public repository serves
@@ -52,8 +61,14 @@ jobs:
         with:
           name: browser-failure-diagnostics
           path: test-artifacts/
-          if-no-files-found: ignore
-          retention-days: 14
+          # The status step above guarantees a file, so an empty upload now means
+          # the status step itself did not run — worth failing on rather than
+          # ignoring, since ignoring it is what produced this ticket.
+          if-no-files-found: error
+          # #303: must outlast the #289 retirement bound (no failing trace within
+          # 30 days or 200 CI runs). At 14 days a trace captured early in the
+          # window expired before the decision it exists to inform.
+          retention-days: 30
 
       - name: No stubs
         run: pnpm no-stub

@@ -16,6 +16,7 @@ import test from "node:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { createControlPlaneRoom, createPlatformHttpServer } from "../src/platform/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics, type BrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 const SPLIT_KEY = "agentgather.railSplit";
 const MIN_TOP = 120;
@@ -35,6 +36,9 @@ interface Fixture {
   page: Page;
   browser: Browser;
   baseUrl: string;
+  // #303: the browser is launched inside the fixture, so the recorder is created
+  // here and handed back — which also covers the fixture's own readiness waits.
+  diagnostics: BrowserDiagnostics;
   close: () => Promise<void>;
 }
 
@@ -63,19 +67,27 @@ async function startFixture(
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport });
-  if (storedSplit !== undefined) {
-    await page.addInitScript(
-      ([key, value]) => window.localStorage.setItem(key as string, value as string),
-      [SPLIT_KEY, storedSplit] as const
-    );
-  }
-  await page.goto(baseUrl);
-  // Readiness is the shell's own ready state, not first paint: the rail has no
-  // height while the loading view is up, and measuring then reports the layout
-  // that exists before any stored split can be applied.
-  await page.waitForSelector('.platform-shell[data-state="ready"]');
-  if (viewport.width >= 860) {
-    await page.waitForFunction(() => (document.querySelector(".room-rail") as HTMLElement | null)?.clientHeight! > 0);
+  const diagnostics = recordBrowserDiagnostics(page, page.context());
+  // The readiness waits below run before any test body. Uncaught here they would
+  // fail with no artifact at all, so they write under a setup label instead.
+  try {
+    if (storedSplit !== undefined) {
+      await page.addInitScript(
+        ([key, value]) => window.localStorage.setItem(key as string, value as string),
+        [SPLIT_KEY, storedSplit] as const
+      );
+    }
+    await page.goto(baseUrl);
+    // Readiness is the shell's own ready state, not first paint: the rail has no
+    // height while the loading view is up, and measuring then reports the layout
+    // that exists before any stored split can be applied.
+    await page.waitForSelector('.platform-shell[data-state="ready"]');
+    if (viewport.width >= 860) {
+      await page.waitForFunction(() => (document.querySelector(".room-rail") as HTMLElement | null)?.clientHeight! > 0);
+    }
+  } catch (error) {
+    await diagnostics.write("rail-resize-fixture-setup", error);
+    throw error;
   }
   // No further waiting: the shell binds the divider and restores the stored split
   // BEFORE it sets `data-state="ready"`, so that flag already means the restore
@@ -86,6 +98,7 @@ async function startFixture(
     page,
     browser,
     baseUrl,
+    diagnostics,
     close: async () => {
       await browser.close();
       await closeServer(server);
@@ -155,6 +168,9 @@ test("the divider is a named, oriented separator that is reachable by keyboard (
     await page.locator(".rail-rooms").click();
     const blurred = await divider.evaluate((el) => window.getComputedStyle(el).outlineStyle);
     assert.equal(blurred, "none", "the outline must belong to the focus state");
+  } catch (error) {
+    await fixture.diagnostics.write("the-divider-is-a-named-oriented-separator-that-i", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -183,6 +199,9 @@ test("arrow keys move the split by an exact step, and Shift by the large step (#
       String(300 - STEP + STEP_LARGE)
     );
     assert.equal(await page.locator("#rail-divider").getAttribute("aria-valuemin"), String(MIN_TOP));
+  } catch (error) {
+    await fixture.diagnostics.write("arrow-keys-move-the-split-by-an-exact-step-and-s", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -208,6 +227,9 @@ test("dragging the divider moves the boundary to exactly the pointer position (#
 
     // And it persisted the settled value, not the value it started from.
     assert.equal(await page.evaluate((key) => window.localStorage.getItem(key as string), SPLIT_KEY), "420");
+  } catch (error) {
+    await fixture.diagnostics.write("dragging-the-divider-moves-the-boundary-to-exact", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -244,6 +266,9 @@ test("neither region can be dragged below its minimum (#275)", async () => {
       Math.round(document.querySelector(".rail-lower")!.getBoundingClientRect().height)
     );
     assert.ok(lower >= MIN_BOTTOM, `lower region collapsed to ${lower}`);
+  } catch (error) {
+    await fixture.diagnostics.write("neither-region-can-be-dragged-below-its-minimum", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -265,6 +290,9 @@ test("keyboard resizing also stops at the minimums (#275)", async () => {
     assert.equal(await roomsHeight(page), expectedMax);
     await page.keyboard.press("ArrowDown");
     assert.equal(await roomsHeight(page), expectedMax, "already at the maximum, so it must not move further");
+  } catch (error) {
+    await fixture.diagnostics.write("keyboard-resizing-also-stops-at-the-minimums-275", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -289,6 +317,9 @@ test("the split survives a reload on the same device, at exactly the chosen size
     );
     assert.equal(await roomsHeight(page), chosen, "the reloaded split must be the exact size chosen");
     assert.equal(await page.evaluate((key) => window.localStorage.getItem(key as string), SPLIT_KEY), String(chosen));
+  } catch (error) {
+    await fixture.diagnostics.write("the-split-survives-a-reload-on-the-same-device-a", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -307,6 +338,9 @@ test("an out-of-range stored split is clamped on READ, not trusted (#275)", asyn
       Math.round(document.querySelector(".rail-lower")!.getBoundingClientRect().height)
     );
     assert.ok(lower >= MIN_BOTTOM, `lower region collapsed to ${lower} from a stored value`);
+  } catch (error) {
+    await fixture.diagnostics.write("an-out-of-range-stored-split-is-clamped-on-read", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -317,6 +351,9 @@ test("a negative stored split cannot collapse the rooms list (#275)", async () =
   try {
     const { page } = fixture;
     assert.equal(await roomsHeight(page), MIN_TOP, "a negative stored split must clamp to the minimum");
+  } catch (error) {
+    await fixture.diagnostics.write("a-negative-stored-split-cannot-collapse-the-room", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -350,6 +387,9 @@ test("non-numeric stored values are discarded and the default layout is kept (#2
         "on",
         `"${junk}": the instrument must report an applied split once one exists`
       );
+    } catch (error) {
+      await fixture.diagnostics.write("non-numeric-stored-values-are-discarded-and-the", error);
+      throw error;
     } finally {
       await fixture.close();
     }
@@ -385,6 +425,9 @@ test("the rail does not overflow at 1280 or 390 with a split applied (#275)", as
       assert.ok(metrics.dividerVisible, `the divider must be visible at ${width}`);
       assert.ok(metrics.lower > 0, `the lower region must remain laid out at ${width}`);
     }
+  } catch (error) {
+    await fixture.diagnostics.write("the-rail-does-not-overflow-at-1280-or-390-with-a", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -402,6 +445,9 @@ test("only a bare number is ever persisted — no room, alias, or token data (#2
     assert.ok(stored !== null, "a split must have been persisted");
     assert.match(stored, /^\d+$/, `the persisted split must be a bare integer, got "${stored}"`);
     assert.equal(/rail-fixture-room|owner-1|tgl_|token|alias/i.test(stored), false);
+  } catch (error) {
+    await fixture.diagnostics.write("only-a-bare-number-is-ever-persisted-no-room-ali", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -433,6 +479,9 @@ test("a stored split still applies when the rail was hidden at load (#275)", asy
     const expected = Math.min(300, await maxTop(page));
     assert.ok(expected < 300, "positive control: this viewport must actually force a clamp");
     assert.equal(await roomsHeight(page), expected, "the deferred restore must apply the clamped stored split");
+  } catch (error) {
+    await fixture.diagnostics.write("a-stored-split-still-applies-when-the-rail-was-h", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -474,6 +523,9 @@ test("a desktop split re-clamps on 1280 → 390 → open Rooms, keeping the lowe
     // maximum this viewport cannot honour.
     assert.equal(await page.locator("#rail-divider").getAttribute("aria-valuemax"), String(expectedMax));
     assert.equal(await page.locator("#rail-divider").getAttribute("aria-valuenow"), String(expectedMax));
+  } catch (error) {
+    await fixture.diagnostics.write("a-desktop-split-re-clamps-on-1280-390-open-rooms", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -500,6 +552,9 @@ test("returning to a wide viewport restores the split the user chose, not the cl
     assert.equal(await roomsHeight(page), 300, "the originally chosen split must come back");
     // And it was never persisted as the clamped value.
     assert.equal(await page.evaluate((key) => window.localStorage.getItem(key as string), SPLIT_KEY), "300");
+  } catch (error) {
+    await fixture.diagnostics.write("returning-to-a-wide-viewport-restores-the-split", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -521,6 +576,9 @@ test("a fresh profile with no stored value announces position and bounds (#275)"
     assert.equal(await divider.getAttribute("aria-valuenow"), String(measured));
     assert.equal(await divider.getAttribute("aria-valuemin"), String(MIN_TOP));
     assert.equal(await divider.getAttribute("aria-valuemax"), String(await maxTop(page)));
+  } catch (error) {
+    await fixture.diagnostics.write("a-fresh-profile-with-no-stored-value-announces-p", error);
+    throw error;
   } finally {
     await fixture.close();
   }

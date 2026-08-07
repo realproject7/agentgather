@@ -223,8 +223,11 @@ async function startBoardroomWithDisabledChat(): Promise<{ baseUrl: string; host
 test("boardroom shell: a non-#general chat channel is disabled and opens a not-active pane (V2 #167), overflow-0 desktop+mobile", { timeout: 120_000 }, async () => {
   const fixture = await startBoardroomWithDisabledChat();
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
 
     // rail renders all three channels; #general stays the active functional chat
@@ -272,6 +275,9 @@ test("boardroom shell: a non-#general chat channel is disabled and opens a not-a
       "no horizontal overflow at 390"
     );
     await page.screenshot({ path: path.join(os.tmpdir(), "chat-disabled-mobile.png"), fullPage: true });
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("boardroom-shell-a-non-general-chat-channel-is-di", error);
+    throw error;
   } finally {
     await browser.close();
     await fixture.close();
@@ -289,8 +295,11 @@ test("legacy single-channel room renders as today — no channel rail", { timeou
   const server = createRoomHttpServer({ root, roomId: "demo", baseUrl, rateLimitPerMinute: 1000 });
   await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
   const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${baseUrl}/#token=${hostToken}`);
     await page.waitForSelector(".room-shell");
     // the chat surface loads; the rail stays hidden (single channel = render as today)
@@ -301,6 +310,9 @@ test("legacy single-channel room renders as today — no channel rail", { timeou
       true,
       "no horizontal overflow at 1280"
     );
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("legacy-single-channel-room-renders-as-today-no-c", error);
+    throw error;
   } finally {
     await browser.close();
     await closeServer(server);

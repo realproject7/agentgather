@@ -17,6 +17,7 @@ import { createPlatformHttpServer } from "../src/platform/index.js";
 import { createRoomHttpServer } from "../src/server/index.js";
 import { createRoom, readJoinedRooms, recordJoinedRoom, type JoinedRoom } from "../src/storage/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics, type BrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-manage-joined-test-"));
@@ -40,6 +41,9 @@ interface Fixture {
   rooms: JoinedRoom[];
   browser: Browser;
   page: Page;
+  // #303: the browser is launched inside the fixture, so the recorder is created
+  // here and handed back — which also covers the fixture's own 30s entry wait.
+  diagnostics: BrowserDiagnostics;
   close: () => Promise<void>;
 }
 
@@ -100,10 +104,19 @@ async function startFixture(): Promise<Fixture> {
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await page.goto(baseUrl);
-  // Entry is complete when the manage entry point has been rendered from the
-  // loaded list — not when the page merely painted.
-  await page.waitForSelector("#manage-open:not([hidden])", { timeout: 30_000 });
+  const diagnostics = recordBrowserDiagnostics(page, page.context());
+  // This wait carries an explicit 30s ceiling and runs before any test body, so
+  // an entry that never completes fails here — where, until now, nothing was
+  // recorded. #277's known specimen (run 31026583592, 30961.7ms) is this shape.
+  try {
+    await page.goto(baseUrl);
+    // Entry is complete when the manage entry point has been rendered from the
+    // loaded list — not when the page merely painted.
+    await page.waitForSelector("#manage-open:not([hidden])", { timeout: 30_000 });
+  } catch (error) {
+    await diagnostics.write("manage-joined-fixture-setup", error);
+    throw error;
+  }
 
   return {
     root,
@@ -111,6 +124,7 @@ async function startFixture(): Promise<Fixture> {
     rooms,
     browser,
     page,
+    diagnostics,
     close: async () => {
       await browser.close();
       await closeServer(platform);
@@ -153,6 +167,9 @@ test("the manage view renders the complete joined-room list in the main panel (#
     });
     assert.equal(/tgl_[A-Za-z0-9]|Bearer\s|"token"/i.test(listed), false, "the backing response must be token-free");
     assert.ok(listed.includes("synthetic-dead-000"), "positive control: the response really is the room list");
+  } catch (error) {
+    await fixture.diagnostics.write("the-manage-view-renders-the-complete-joined-room", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -183,6 +200,9 @@ test("select-all shows an indeterminate state on partial selection and a live co
     await page.locator(".manage-row .manage-check").first().uncheck();
     assert.equal(await page.locator("#manage-count").textContent(), `${TOTAL - 1} selected`);
     assert.equal(await selectAll.evaluate((el: HTMLInputElement) => el.indeterminate), true);
+  } catch (error) {
+    await fixture.diagnostics.write("select-all-shows-an-indeterminate-state-on-parti", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -229,6 +249,9 @@ test("bulk delete removes exactly the selected rooms and leaves every other row 
     // had wiped the entire store.
     const survivors = before.filter((room) => !chosenKeys.has(keyOf(room)));
     assert.deepEqual(after, survivors);
+  } catch (error) {
+    await fixture.diagnostics.write("bulk-delete-removes-exactly-the-selected-rooms-a", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -259,6 +282,9 @@ test("bulk archive applies to the selection only and keeps the rows (#277)", asy
       if (chosenKeys.has(keyOf(room))) assert.equal(room.archived, true);
       else assert.equal("archived" in room, false, `${room.roomId} was not selected and must be untouched`);
     }
+  } catch (error) {
+    await fixture.diagnostics.write("bulk-archive-applies-to-the-selection-only-and-k", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -295,6 +321,9 @@ test("filters narrow the list, and select-all covers only the rows shown (#277)"
     // With nothing shown, nothing can be selected — so no action can fire.
     assert.equal(await page.locator("#manage-count").textContent(), "0 selected");
     assert.equal(await page.locator("#manage-delete").isDisabled(), true);
+  } catch (error) {
+    await fixture.diagnostics.write("filters-narrow-the-list-and-select-all-covers-on", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -318,6 +347,9 @@ test("the manage view does not overflow horizontally at 1280 or 390 (#277)", asy
       assert.ok(overflow.body <= 1, `body overflows by ${overflow.body}px at ${width}`);
       assert.ok(overflow.panel <= 1, `manage panel overflows by ${overflow.panel}px at ${width}`);
     }
+  } catch (error) {
+    await fixture.diagnostics.write("the-manage-view-does-not-overflow-horizontally-a", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -407,6 +439,9 @@ test("a failed platform write leaves the browser-local half applied and SAYS so,
     // removed — the honest partial the message describes.
     assert.deepEqual(await readJoinedRooms(root), before, "the platform store must be untouched");
     assert.deepEqual(await readLocalRooms(page), [], "the browser-local half committed, as reported");
+  } catch (error) {
+    await fixture.diagnostics.write("a-failed-platform-write-leaves-the-browser-local", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -438,6 +473,9 @@ test("a failed browser-local write is reported rather than swallowed (#277)", as
     assert.match(message, new RegExp(`Deleted ${TOTAL} rooms\\.`), `got: ${message}`);
     // The platform half did commit, exactly as the message says.
     assert.equal((await readJoinedRooms(root)).length, 0);
+  } catch (error) {
+    await fixture.diagnostics.write("a-failed-browser-local-write-is-reported-rather", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -476,6 +514,9 @@ test("a platform-only selection still commits normally when no browser rows are 
     // A platform-only selection must leave the browser-owned store untouched —
     // same rows, same contents, including the absence of `archived`.
     assert.deepEqual(await readLocalRooms(page), localBefore, "browser-local rows must be untouched");
+  } catch (error) {
+    await fixture.diagnostics.write("a-platform-only-selection-still-commits-normally", error);
+    throw error;
   } finally {
     await fixture.close();
   }

@@ -1998,6 +1998,7 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     hostStopped = true;
     await roomEntry.close();
   };
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     // The real open path mints the bridge capability; take the redirect the
@@ -2011,6 +2012,8 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     assert.match(roomUrl, /snapshot=/);
 
     const roomPage = await browser!.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(roomPage, roomPage.context());
     await roomPage.goto(roomUrl);
     await roomPage.waitForSelector("text=second saved line");
     // The capability never survives in the address bar.
@@ -2046,6 +2049,9 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     await stopHost();
 
     const dashPage = await browser!.newPage({ viewport: { width: 1280, height: 900 } });
+    // The room page is closed above; the rest of this test's waits happen here,
+    // so the recorder must follow the page the assertions are actually on.
+    diagnostics?.attachPage(dashPage, "dashPage");
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await dashPage.click(".joined-row");
@@ -2069,6 +2075,9 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     assert.equal(await dashPage.locator("#shell-timeline .shell-message").count(), 3);
     // And nothing token-shaped is rendered.
     assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-detail").innerHTML()) ?? ""), false);
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("a-dashboard-opened-room-bridges-its-loaded-histo", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -2103,9 +2112,12 @@ test("an unreachable room with no snapshot shows an honest empty offline state, 
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
   let host: { close: () => Promise<void> } | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.click(".joined-row");
@@ -2134,6 +2146,9 @@ test("an unreachable room with no snapshot shows an honest empty offline state, 
     await page.click("#snapshot-retry");
     await page.waitForSelector('#snapshot-retry[data-live="true"]');
     assert.match((await page.locator("#snapshot-retry").textContent()) ?? "", /Host is back/);
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("an-unreachable-room-with-no-snapshot-shows-an-ho", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -2184,9 +2199,12 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
   const platform = await listen(createPlatformHttpServer({ root, ownerUserId: "owner-1" }));
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.click(".joined-row");
@@ -2251,6 +2269,9 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
       });
       assert.equal(fits, true, `offline snapshot content overflowed at width ${width}`);
     }
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("the-offline-view-is-bounded-by-its-saved-cursor", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();
@@ -2292,6 +2313,7 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     lastSeen: now
   });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // Write the forged records straight into the device-local store, which is what
     // an attacker with local write access — or a compromised sender — would do.
@@ -2311,6 +2333,8 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
 
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(platform.baseUrl);
     await page.waitForSelector('.joined-row[data-reachability="unreachable"]');
     await page.click(".joined-row");
@@ -2406,6 +2430,9 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     );
     assert.match(exported, /local copy/);
     assert.equal(/(^|\n)host/i.test(exported), false, "an exported transcript never attributes a saved line to the host");
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("a-tampered-snapshot-cannot-speak-as-the-host-or", error);
+    throw error;
   } finally {
     await browser?.close();
     await platform.close();

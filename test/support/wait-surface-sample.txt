@@ -1,0 +1,35 @@
+// #303 fixture, not a test. `diagnostics-coverage.test.ts` copies this into a
+// throwaway tree as `test/browser-fixture-sample.test.ts` to prove the coverage
+// guard can FAIL: the real tree is fully covered, so a gap has to be built.
+//
+// It is stored as `.txt` on purpose. Held inline in the coverage test, its
+// `playwright` import and page calls would make that test look like a browser
+// test to the very survey it is checking — the guard would then report its own
+// fixture as an uncovered block.
+import test from "node:test";
+import { chromium } from "playwright";
+
+test("a wired block", async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("a-wired-block", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+test("an unwired block", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.waitForSelector("#ready");
+  } finally {
+    await browser.close();
+  }
+});

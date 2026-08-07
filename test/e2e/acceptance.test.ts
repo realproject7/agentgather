@@ -12,6 +12,7 @@ import { runRoomCommand } from "../../src/cli/commands/room/index.js";
 import { runWatchCommand } from "../../src/cli/commands/watch/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
 import { closeServer } from "../support/close-server.js";
+import { recordBrowserDiagnostics } from "../support/browser-diagnostics.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -84,6 +85,10 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
   });
 
   const browser = await chromium.launch();
+  // #303: the wait surface is defined by what drives a browser, not by a
+  // `browser-` filename — this file drives one, and #291 investigated a timeout
+  // in its sibling.
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     await runRoomCommand(
       ["join", "dogfood-room", "--alias", "reviewer", "--token", reviewerInvite.token, "--url", baseUrl],
@@ -144,6 +149,7 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
     assert.equal(host.stdout.json<{ messages: Array<{ text: string }> }>().messages.some((message) => message.text === "Room brief updated to v2"), true);
 
     const page = await browser.newPage({ viewport: { width: 980, height: 720 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${baseUrl}/#token=${started.token}`);
     // The host human token auto-claims the alias as its display name; guests
     // still use the display-name chooser in the browser-focused tests.
@@ -175,6 +181,9 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
     assert.equal(closedBody.room_status, "closed");
     assert.equal(closedBody.keep_waiting, false);
     await closeIssued;
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("e2e-dogfood-local-cli-agent-no-install-curl-agen", error);
+    throw error;
   } finally {
     await browser.close();
     await closeServer(server);

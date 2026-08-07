@@ -12,6 +12,7 @@ import { runTunnelCommand } from "../../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
 import { createBrokerHttpServer, readPublicBaseUrl, TunnelBroker } from "../../src/tunnel/index.js";
 import { closeServer } from "../support/close-server.js";
+import { recordBrowserDiagnostics } from "../support/browser-diagnostics.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -81,6 +82,10 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
   assert.equal(publicBaseUrl, `${brokerBaseUrl}/tunnel-room`);
 
   const browser = await chromium.launch();
+  // #303: this is the file #291 investigated for a 30s-shaped timeout, and it
+  // was outside the instrumented set because its name does not start with
+  // `browser-`. The rule is what drives a browser, not what a file is called.
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     // Invite card generated after tunnel start uses the broker URL.
     stdout.reset();
@@ -111,6 +116,7 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
 
     // Browser human joins and sends through the broker, loading shell + assets.
     const page = await browser.newPage({ viewport: { width: 980, height: 720 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.goto(`${publicBaseUrl}/#token=${humanToken}`);
     await page.waitForSelector("text=Choose your display name");
     await page.fill("#display-name", "Remote Human");
@@ -151,6 +157,9 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     assert.equal(closed.room_status, "closed");
     assert.equal(closed.keep_waiting, false);
     await closeIssued;
+  } catch (error) {
+    if (diagnostics !== null) await diagnostics.write("e2e-tunnel-browser-human-and-curl-agent-reach-th", error);
+    throw error;
   } finally {
     await browser.close();
     await closeServer(brokerServer);

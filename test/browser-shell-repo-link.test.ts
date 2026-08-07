@@ -14,6 +14,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { VERSION } from "../src/cli/help.js";
 import { createControlPlaneRoom, createPlatformHttpServer } from "../src/platform/index.js";
 import { closeServer } from "./support/close-server.js";
+import { recordBrowserDiagnostics, type BrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 const REPO_URL = "https://github.com/realproject7/agentgather";
 
@@ -29,6 +30,9 @@ interface Fixture {
   page: Page;
   browser: Browser;
   requested: string[];
+  // #303: the browser is launched inside the fixture, so the recorder is created
+  // here and handed back — which also covers the fixture's own readiness waits.
+  diagnostics: BrowserDiagnostics;
   close: () => Promise<void>;
 }
 
@@ -55,17 +59,28 @@ async function startFixture(): Promise<Fixture> {
   // rather than asserted from reading the markup.
   const requested: string[] = [];
   page.on("request", (request) => requested.push(request.url()));
-  await page.goto(`http://127.0.0.1:${port}`);
-  // The footer is populated from ./version; wait for that rather than for paint,
-  // and for the sidebar to actually have been laid out.
-  await page.waitForFunction(
-    () => (document.getElementById("platform-version-value")?.textContent ?? "").startsWith("v")
-  );
-  await page.waitForFunction(() => (document.getElementById("platform-repo-link")?.getBoundingClientRect().width ?? 0) > 0);
+  const diagnostics = recordBrowserDiagnostics(page, page.context());
+  // The readiness waits below run before any test body. Uncaught here they would
+  // fail with no artifact at all, so they write under a setup label instead.
+  try {
+    await page.goto(`http://127.0.0.1:${port}`);
+    // The footer is populated from ./version; wait for that rather than for paint,
+    // and for the sidebar to actually have been laid out.
+    await page.waitForFunction(
+      () => (document.getElementById("platform-version-value")?.textContent ?? "").startsWith("v")
+    );
+    await page.waitForFunction(
+      () => (document.getElementById("platform-repo-link")?.getBoundingClientRect().width ?? 0) > 0
+    );
+  } catch (error) {
+    await diagnostics.write("repo-link-fixture-setup", error);
+    throw error;
+  }
   return {
     page,
     browser,
     requested,
+    diagnostics,
     close: async () => {
       await browser.close();
       await closeServer(server);
@@ -99,6 +114,9 @@ test("the repository link renders beside the version value with a hardcoded targ
     const valueMid = valueBox.y + valueBox.height / 2;
     const linkMid = linkBox.y + linkBox.height / 2;
     assert.ok(Math.abs(valueMid - linkMid) <= 4, `same row expected, centres differ by ${Math.abs(valueMid - linkMid)}px`);
+  } catch (error) {
+    await fixture.diagnostics.write("the-repository-link-renders-beside-the-version-v", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -125,6 +143,9 @@ test("the link carries its own accessible name — the icon is decorative (#280)
       ((await link.evaluate((el) => el.getAttribute("aria-label"))) ?? "").includes("GitHub"),
       "the computed name must mention GitHub"
     );
+  } catch (error) {
+    await fixture.diagnostics.write("the-link-carries-its-own-accessible-name-the-ico", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -158,6 +179,9 @@ test("the link is keyboard reachable and shows a visible focus state (#280)", as
     await page.locator("#platform-version-value").click();
     const blurred = await link.evaluate((el) => window.getComputedStyle(el).outlineStyle);
     assert.equal(blurred, "none", "the outline must belong to the focus state");
+  } catch (error) {
+    await fixture.diagnostics.write("the-link-is-keyboard-reachable-and-shows-a-visib", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -197,6 +221,9 @@ test("the page fetches nothing from a remote host — the mark is inline (#280)"
     assert.equal(marks, 0, "the inline mark must not reference an external sprite");
     const fill = await page.locator("#platform-repo-link svg path").getAttribute("fill");
     assert.equal(fill, "currentColor", "the mark must inherit its colour from the token-driven text colour");
+  } catch (error) {
+    await fixture.diagnostics.write("the-page-fetches-nothing-from-a-remote-host-the", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -246,6 +273,9 @@ test("the footer keeps the version legible and does not overflow at 1280 or 390 
         `version text is clipped at ${width} (${metrics.valueScrollWidth} > ${metrics.valueClientWidth})`
       );
     }
+  } catch (error) {
+    await fixture.diagnostics.write("the-footer-keeps-the-version-legible-and-does-no", error);
+    throw error;
   } finally {
     await fixture.close();
   }
@@ -266,6 +296,9 @@ test("the version's own presentation is unchanged by the new row wrapper (#280)"
       .evaluate((el) => window.getComputedStyle(el).textTransform);
     assert.equal(brand, "uppercase", "positive control: the brand label is still uppercased");
     assert.equal(value, "none", "the version value must not inherit the brand label's treatment");
+  } catch (error) {
+    await fixture.diagnostics.write("the-version-s-own-presentation-is-unchanged-by-t", error);
+    throw error;
   } finally {
     await fixture.close();
   }
