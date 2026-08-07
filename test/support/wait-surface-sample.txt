@@ -9,6 +9,20 @@
 import test from "node:test";
 import { chromium } from "playwright";
 
+// A browser session that lives in a helper, not in a test block (@re2, PR #304).
+// The block that calls it names no page at all, so a denominator built from
+// "does this block mention a page" drops it from the inventory ENTIRELY —
+// absent rather than uncovered, which is the one outcome worse than silence.
+async function unwiredHelperSession() {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.waitForSelector("#ready");
+  } finally {
+    await browser.close();
+  }
+}
+
 test("a wired block", async () => {
   const browser = await chromium.launch();
   let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
@@ -17,7 +31,7 @@ test("a wired block", async () => {
     diagnostics = recordBrowserDiagnostics(page, page.context());
     await page.waitForSelector("#ready");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-wired-block", error);
+    await captureBrowserFailure(diagnostics, "a-wired-block", error);
     throw error;
   } finally {
     await browser.close();
@@ -32,4 +46,10 @@ test("an unwired block", async () => {
   } finally {
     await browser.close();
   }
+});
+
+test("a block that only reaches a browser through a helper", async () => {
+  // Nothing here names a browser or a page: the whole session is behind the
+  // call. Its coverage is the helper's coverage.
+  await unwiredHelperSession();
 });

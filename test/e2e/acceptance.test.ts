@@ -12,7 +12,7 @@ import { runRoomCommand } from "../../src/cli/commands/room/index.js";
 import { runWatchCommand } from "../../src/cli/commands/watch/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
 import { closeServer } from "../support/close-server.js";
-import { recordBrowserDiagnostics } from "../support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "../support/browser-diagnostics.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -182,7 +182,7 @@ test("e2e dogfood: local CLI agent, no-install curl agent, browser human, brief 
     assert.equal(closedBody.keep_waiting, false);
     await closeIssued;
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("e2e-dogfood-local-cli-agent-no-install-curl-agen", error);
+    await captureBrowserFailure(diagnostics, "e2e-dogfood-local-cli-agent-no-install-curl-agen", error);
     throw error;
   } finally {
     await browser.close();

@@ -27,7 +27,7 @@ import {
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 const mkP = (alias: string, kind: Participant["kind"], token: string, extra: Partial<Participant> = {}): Participant => ({
   alias,
@@ -147,7 +147,7 @@ test("forum UI: feed → thread → back, rail nesting, markdown body, wake badg
     assert.equal(mobileOverflow, true, "no horizontal overflow at 390");
     await page.screenshot({ path: path.join(os.tmpdir(), "forum-mobile.png"), fullPage: true });
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("forum-ui-feed-thread-back-rail-nesting-markdown", error);
+    await captureBrowserFailure(diagnostics, "forum-ui-feed-thread-back-rail-nesting-markdown", error);
     throw error;
   } finally {
     await browser.close();
@@ -196,7 +196,7 @@ test("forum UI: selected post is URL-addressable — deep link + refresh reopen 
     await page.waitForSelector(".forum-shell[data-view='feed']");
     assert.equal(new URL(page.url()).searchParams.get("post"), null);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("forum-ui-selected-post-is-url-addressable-deep-l", error);
+    await captureBrowserFailure(diagnostics, "forum-ui-selected-post-is-url-addressable-deep-l", error);
     throw error;
   } finally {
     await browser.close();
@@ -225,7 +225,7 @@ test("forum UI shows an empty state for a forum with no posts", { timeout: 120_0
     await page.goto(`${baseUrl}/forum.html?channel=design-forum#token=${hostToken}`);
     await page.waitForSelector("text=No posts yet");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("forum-ui-shows-an-empty-state-for-a-forum-with-n", error);
+    await captureBrowserFailure(diagnostics, "forum-ui-shows-an-empty-state-for-a-forum-with-n", error);
     throw error;
   } finally {
     await browser.close();
@@ -257,7 +257,7 @@ test("forum disables new-post/comment when the host is offline (#211)", async ()
     await page.waitForFunction(() => (document.getElementById("new-post") as HTMLButtonElement).disabled === true);
     assert.equal(await page.locator("#comment-text").isDisabled(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("forum-disables-new-post-comment-when-the-host-is", error);
+    await captureBrowserFailure(diagnostics, "forum-disables-new-post-comment-when-the-host-is", error);
     throw error;
   } finally {
     await browser.close();
@@ -314,7 +314,7 @@ test("forum body and comments keep authored ordered-list numbering across blank 
     assert.equal(await page.locator("#detail-body script").count(), 0);
     assert.equal(await page.locator(".cmt .md script").count(), 0);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("forum-body-and-comments-keep-authored-ordered-li", error);
+    await captureBrowserFailure(diagnostics, "forum-body-and-comments-keep-authored-ordered-li", error);
     throw error;
   } finally {
     await browser.close();
@@ -405,7 +405,7 @@ test("forum bridges its loaded feed and opened thread to the dashboard snapshot 
     // And the saved copy carries nothing credential-shaped.
     assert.equal(/tgl_|Bearer|token=|snapshot=/i.test(JSON.stringify(snapshot)), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("forum-bridges-its-loaded-feed-and-opened-thread", error);
+    await captureBrowserFailure(diagnostics, "forum-bridges-its-loaded-feed-and-opened-thread", error);
     throw error;
   } finally {
     await browser?.close();

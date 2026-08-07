@@ -19,7 +19,7 @@ import { createRoomHttpServer, participantTokenHash } from "../src/server/index.
 import { writeToken } from "../src/cli/state.js";
 import type { Server } from "node:http";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-platform-test-"));
@@ -161,7 +161,7 @@ test("owner shell renders the room list, status, live chat, and human-vs-agent r
       assert.equal(overflow, true, `content overflowed at width ${width}`);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("owner-shell-renders-the-room-list-status-live-ch", error);
+    await captureBrowserFailure(diagnostics, "owner-shell-renders-the-room-list-status-live-ch", error);
     throw error;
   } finally {
     await browser.close();
@@ -186,7 +186,7 @@ test("owner shell shows a first-run welcome state when the owner has no rooms", 
     assert.equal(await page.locator(".welcome-template").count(), 4);
     assert.equal(await page.locator(".room-row").count(), 0);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("owner-shell-shows-a-first-run-welcome-state-when", error);
+    await captureBrowserFailure(diagnostics, "owner-shell-shows-a-first-run-welcome-state-when", error);
     throw error;
   } finally {
     await browser.close();
@@ -238,7 +238,7 @@ test("populated room list renders v5 rows with monogram, subtitle, age, and a st
     await page.waitForSelector(".status-legend");
     assert.equal(await page.locator('.legend-list .status-badge').count(), 4);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("populated-room-list-renders-v5-rows-with-monogra", error);
+    await captureBrowserFailure(diagnostics, "populated-room-list-renders-v5-rows-with-monogra", error);
     throw error;
   } finally {
     await browser.close();
@@ -275,7 +275,7 @@ test("create-room shell composes the host CLI command and keeps submit disabled"
     assert.equal(await page.locator(".primary-btn[disabled]").count(), 1);
     await page.waitForSelector("text=Creating a room from the browser isn't available yet");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("create-room-shell-composes-the-host-cli-command", error);
+    await captureBrowserFailure(diagnostics, "create-room-shell-composes-the-host-cli-command", error);
     throw error;
   } finally {
     await browser.close();
@@ -308,7 +308,7 @@ test("create-room command shell-quotes the goal so nothing expands on paste", as
       `command did not safely single-quote the goal: ${command}`
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("create-room-command-shell-quotes-the-goal-so-not", error);
+    await captureBrowserFailure(diagnostics, "create-room-command-shell-quotes-the-goal-so-not", error);
     throw error;
   } finally {
     await browser.close();
@@ -369,7 +369,7 @@ test("invite cards split human (browser-first) and agent (command + safety) with
     assert.match(overlayText, /\$TOKEN/);
     assert.doesNotMatch(overlayText, /tgl_/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("invite-cards-split-human-browser-first-and-agent", error);
+    await captureBrowserFailure(diagnostics, "invite-cards-split-human-browser-first-and-agent", error);
     throw error;
   } finally {
     await browser.close();
@@ -409,7 +409,7 @@ test("history source shows the live host room and caches messages browser-locall
     // The shell never uploads message bodies: every request is a read (GET).
     assert.equal(methods.every((method) => method === "GET"), true, `non-GET requests: ${methods.join(",")}`);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("history-source-shows-the-live-host-room-and-cach", error);
+    await captureBrowserFailure(diagnostics, "history-source-shows-the-live-host-room-and-cach", error);
     throw error;
   } finally {
     await browser.close();
@@ -447,7 +447,7 @@ test("cached message bodies redact bearer tokens and invite/card URLs in localSt
     // The redaction marker is present, proving the body was cached but sanitized.
     assert.match(cached, /redacted/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("cached-message-bodies-redact-bearer-tokens-and-i", error);
+    await captureBrowserFailure(diagnostics, "cached-message-bodies-redact-bearer-tokens-and-i", error);
     throw error;
   } finally {
     await browser.close();
@@ -486,7 +486,7 @@ test("a live host replaces the redacted cache seed with the faithful message", a
     await page.waitForSelector("text=tgl_LIVE_FAITHFUL");
     assert.equal(await page.locator(".shell-message-text", { hasText: "[redacted-token]" }).count(), 0);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-live-host-replaces-the-redacted-cache-seed-wit", error);
+    await captureBrowserFailure(diagnostics, "a-live-host-replaces-the-redacted-cache-seed-wit", error);
     throw error;
   } finally {
     await browser.close();
@@ -537,7 +537,7 @@ test("history falls back to local cache with #81 paused copy when the host is of
 
     assert.equal(methods.every((method) => method === "GET"), true, `non-GET requests: ${methods.join(",")}`);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("history-falls-back-to-local-cache-with-81-paused", error);
+    await captureBrowserFailure(diagnostics, "history-falls-back-to-local-cache-with-81-paused", error);
     throw error;
   } finally {
     await browser.close();
@@ -565,7 +565,7 @@ test("history shows the exported-summary label when host offline with no cache",
     await page.waitForSelector("text=History: exported summary");
     await page.waitForSelector("text=exported summary is saved");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("history-shows-the-exported-summary-label-when-ho", error);
+    await captureBrowserFailure(diagnostics, "history-shows-the-exported-summary-label-when-ho", error);
     throw error;
   } finally {
     await browser.close();
@@ -596,7 +596,7 @@ test("a tokened single-room link renders one room without a multi-room list", as
     assert.equal(await page.locator(".platform-shell").count(), 0);
     assert.equal(await page.locator(".room-shell").count(), 1);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-tokened-single-room-link-renders-one-room-with", error);
+    await captureBrowserFailure(diagnostics, "a-tokened-single-room-link-renders-one-room-with", error);
     throw error;
   } finally {
     await browser.close();
@@ -674,7 +674,7 @@ test("the owner shell renders the three history-source states through the platfo
     assert.equal((await forgedCache.locator(".shell-message-from").textContent())?.trim(), "local copy");
     assert.equal(await page.locator(".shell-message.system").count(), 0, "nothing wears the room's own voice");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-owner-shell-renders-the-three-history-source", error);
+    await captureBrowserFailure(diagnostics, "the-owner-shell-renders-the-three-history-source", error);
     throw error;
   } finally {
     await browser.close();
@@ -748,7 +748,7 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
       () => document.querySelectorAll('.joined-row[data-reachability="saved"]').length === 0
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-dashboard-shows-device-local-joined-rooms-an", error);
+    await captureBrowserFailure(diagnostics, "the-dashboard-shows-device-local-joined-rooms-an", error);
     throw error;
   } finally {
     await browser.close();
@@ -797,7 +797,7 @@ test("the dashboard remembers tokenized root invite links as real joined rooms",
     assert.equal(redirect.status, 302);
     assert.match(redirect.headers.get("location") ?? "", /#token=tgl_invite_root_secret(&snapshot=[A-Za-z0-9_-]+)?$/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-dashboard-remembers-tokenized-root-invite-li", error);
+    await captureBrowserFailure(diagnostics, "the-dashboard-remembers-tokenized-root-invite-li", error);
     throw error;
   } finally {
     await browser.close();
@@ -831,7 +831,7 @@ test("the dashboard shows joined rooms even when the user hosts no rooms (#178)"
     assert.equal(await page.locator("#welcome").isVisible(), false);
     assert.equal(await page.locator(".platform-body").isVisible(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-dashboard-shows-joined-rooms-even-when-the-u", error);
+    await captureBrowserFailure(diagnostics, "the-dashboard-shows-joined-rooms-even-when-the-u", error);
     throw error;
   } finally {
     await browser.close();
@@ -865,6 +865,10 @@ test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' toke
 
     // The join bridged token-free metadata to the platform; the dashboard lists it.
     const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303 (@re2, PR #304): the wait below runs on THIS page. A recorder bound
+    // only to roomPage would produce a trace that is blind to the page that
+    // timed out — present, and useless.
+    diagnostics?.attachPage(dashPage, "dashPage");
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForFunction(
       () => [...document.querySelectorAll("#room-list .joined-name")].some((n) => (n.textContent || "").includes("bridge-room")),
@@ -879,7 +883,7 @@ test("a browser room join bridges into the owner dashboard's 'Rooms I'm in' toke
     assert.equal(/tgl_|Bearer|token=|host-bridge-tok/i.test(JSON.stringify(api)), false);
     assert.equal(api.rooms.find((room) => room.roomId === "bridge-room")?.baseUrl, roomEntry.baseUrl);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-browser-room-join-bridges-into-the-owner-dashb", error);
+    await captureBrowserFailure(diagnostics, "a-browser-room-join-bridges-into-the-owner-dashb", error);
     throw error;
   } finally {
     await browser.close();
@@ -959,7 +963,7 @@ test("the unified shell swaps home guidance for the selected room's channel nav 
     );
     assert.equal(openHrefs.some((href) => /tgl_|token=|Bearer/i.test(href)), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-unified-shell-swaps-home-guidance-for-the-se", error);
+    await captureBrowserFailure(diagnostics, "the-unified-shell-swaps-home-guidance-for-the-se", error);
     throw error;
   } finally {
     await browser.close();
@@ -1021,7 +1025,7 @@ test("the room rail collapses a long list behind a stable overflow control and e
     assert.equal(truncation.ellipsized, true, "long room title did not ellipsize");
     assert.equal(truncation.contained, true, "long title overflowed the rail track");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-room-rail-collapses-a-long-list-behind-a-sta", error);
+    await captureBrowserFailure(diagnostics, "the-room-rail-collapses-a-long-list-behind-a-sta", error);
     throw error;
   } finally {
     await browser.close();
@@ -1116,7 +1120,7 @@ test("the dashboard mounts a right info panel in the three-panel state, hides it
       "none"
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-dashboard-mounts-a-right-info-panel-in-the-t", error);
+    await captureBrowserFailure(diagnostics, "the-dashboard-mounts-a-right-info-panel-in-the-t", error);
     throw error;
   } finally {
     await browser.close();
@@ -1187,7 +1191,7 @@ test("the dashboard labels joined rooms by display title, not slug, with the id 
     });
     assert.equal(contained, true, "long joined-room slug overflowed the rail");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-dashboard-labels-joined-rooms-by-display-tit", error);
+    await captureBrowserFailure(diagnostics, "the-dashboard-labels-joined-rooms-by-display-tit", error);
     throw error;
   } finally {
     await browser.close();
@@ -1251,7 +1255,7 @@ test("the first-run empty state is a polished, responsive product screen (#213)"
       assert.equal(ok, true, `empty state overflowed at width ${width}`);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-first-run-empty-state-is-a-polished-responsi", error);
+    await captureBrowserFailure(diagnostics, "the-first-run-empty-state-is-a-polished-responsi", error);
     throw error;
   } finally {
     await browser.close();
@@ -1314,7 +1318,7 @@ test("dashboard templates prefill distinct briefs + channels and compose create-
     const noHScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
     assert.equal(noHScroll, true, "create overlay caused horizontal overflow");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("dashboard-templates-prefill-distinct-briefs-chan", error);
+    await captureBrowserFailure(diagnostics, "dashboard-templates-prefill-distinct-briefs-chan", error);
     throw error;
   } finally {
     await browser.close();
@@ -1363,7 +1367,7 @@ test("the About screen is reachable with no rooms and states the trust boundary 
     await page.keyboard.press("Escape");
     await page.locator("#about-overlay").waitFor({ state: "hidden" });
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-about-screen-is-reachable-with-no-rooms-and", error);
+    await captureBrowserFailure(diagnostics, "the-about-screen-is-reachable-with-no-rooms-and", error);
     throw error;
   } finally {
     await browser.close();
@@ -1450,7 +1454,7 @@ test("device-local archive/delete for joined rooms — hide/restore, confirm-del
     assert.equal(api.rooms.some((r) => r.roomId === "room-b"), false);
     assert.equal(api.rooms.some((r) => r.roomId === "room-a"), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("device-local-archive-delete-for-joined-rooms-hid", error);
+    await captureBrowserFailure(diagnostics, "device-local-archive-delete-for-joined-rooms-hid", error);
     throw error;
   } finally {
     await browser.close();
@@ -1500,7 +1504,7 @@ test("deleting one browser-local joined room keeps a sibling on the same host (#
     assert.equal(stored.rooms.length, 1);
     assert.equal(stored.rooms[0]?.roomId, "room-y");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("deleting-one-browser-local-joined-room-keeps-a-s", error);
+    await captureBrowserFailure(diagnostics, "deleting-one-browser-local-joined-room-keeps-a-s", error);
     throw error;
   } finally {
     await browser.close();
@@ -1539,7 +1543,7 @@ test("deleting a joined room clears its dashboard-origin cached history (#211/#2
     // The device-local cached history for that room is cleared (disassociation).
     assert.equal(await page.evaluate(() => window.localStorage.getItem("agentgather.history.cached-room")), null);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("deleting-a-joined-room-clears-its-dashboard-orig", error);
+    await captureBrowserFailure(diagnostics, "deleting-a-joined-room-clears-its-dashboard-orig", error);
     throw error;
   } finally {
     await browser.close();
@@ -1602,7 +1606,7 @@ test("the unified rail merges hosted + joined into one host-tagged list, hosted 
     // No raw token anywhere in the merged rail.
     assert.equal(/tgl_|token=|Bearer/i.test((await page.locator(".room-rail").innerHTML()) ?? ""), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-unified-rail-merges-hosted-joined-into-one-h", error);
+    await captureBrowserFailure(diagnostics, "the-unified-rail-merges-hosted-joined-into-one-h", error);
     throw error;
   } finally {
     await browser.close();
@@ -1665,7 +1669,7 @@ test("the rail keeps a ~1/3-2/3 split and view-more expands within the rooms scr
     const lowerTopAfter = await page.evaluate(() => Math.round((document.querySelector(".rail-lower") as HTMLElement).getBoundingClientRect().top));
     assert.equal(lowerTopAfter, layout.lowerTop, "expanding the room list shifted the lower region");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-rail-keeps-a-1-3-2-3-split-and-view-more-exp", error);
+    await captureBrowserFailure(diagnostics, "the-rail-keeps-a-1-3-2-3-split-and-view-more-exp", error);
     throw error;
   } finally {
     await browser.close();
@@ -1733,7 +1737,7 @@ test("channel nav renders room.channels from the payload and falls back to #gene
     assert.equal(await page.locator("#channel-nav .channel-row").count(), 1);
     assert.equal((await page.locator("#channel-nav .channel-name").textContent())?.trim(), "general");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("channel-nav-renders-room-channels-from-the-paylo", error);
+    await captureBrowserFailure(diagnostics, "channel-nav-renders-room-channels-from-the-paylo", error);
     throw error;
   } finally {
     await browser.close();
@@ -1781,7 +1785,7 @@ test("channel nav caps at 8 with a view-more control (#233)", async () => {
     assert.equal(await page.locator("#channel-nav > li:not(.is-collapsed)").count(), 10);
     assert.match((await page.locator("#channels-more").textContent()) ?? "", /show less/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("channel-nav-caps-at-8-with-a-view-more-control-2", error);
+    await captureBrowserFailure(diagnostics, "channel-nav-caps-at-8-with-a-view-more-control-2", error);
     throw error;
   } finally {
     await browser.close();
@@ -1864,11 +1868,14 @@ test("a stale agent room tab refreshes metadata but cannot overwrite the selecte
     const api = (await (await fetch(`${platform.baseUrl}/joined-rooms`)).json()) as { rooms: unknown[] };
     assert.equal(/tgl_|Bearer|token=/i.test(JSON.stringify(api)), false);
     const dashPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303 (@re2, PR #304): the unbounded wait below runs on THIS page; the
+    // recorder is bound to stalePage above and would otherwise miss it.
+    diagnostics?.attachPage(dashPage, "dashPage");
     await dashPage.goto(platform.baseUrl);
     await dashPage.waitForSelector(".joined-row");
     assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-rail").innerHTML()) ?? ""), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-stale-agent-room-tab-refreshes-metadata-but-ca", error);
+    await captureBrowserFailure(diagnostics, "a-stale-agent-room-tab-refreshes-metadata-but-ca", error);
     throw error;
   } finally {
     await browser.close();
@@ -1939,7 +1946,7 @@ test("an explicit invite import intentionally changes the selected joined-room i
     assert.equal(redirect.status, 302);
     assert.match(redirect.headers.get("location") ?? "", new RegExp(`#token=${agentToken}(&snapshot=[A-Za-z0-9_-]+)?$`));
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("an-explicit-invite-import-intentionally-changes", error);
+    await captureBrowserFailure(diagnostics, "an-explicit-invite-import-intentionally-changes", error);
     throw error;
   } finally {
     await browser.close();
@@ -2076,7 +2083,7 @@ test("a dashboard-opened room bridges its loaded history, and the unreachable ro
     // And nothing token-shaped is rendered.
     assert.equal(/tgl_|Bearer|token=/i.test((await dashPage.locator(".room-detail").innerHTML()) ?? ""), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-dashboard-opened-room-bridges-its-loaded-histo", error);
+    await captureBrowserFailure(diagnostics, "a-dashboard-opened-room-bridges-its-loaded-histo", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2147,7 +2154,7 @@ test("an unreachable room with no snapshot shows an honest empty offline state, 
     await page.waitForSelector('#snapshot-retry[data-live="true"]');
     assert.match((await page.locator("#snapshot-retry").textContent()) ?? "", /Host is back/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("an-unreachable-room-with-no-snapshot-shows-an-ho", error);
+    await captureBrowserFailure(diagnostics, "an-unreachable-room-with-no-snapshot-shows-an-ho", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2270,7 +2277,7 @@ test("the offline view is bounded by its saved cursor and holds up at narrow wid
       assert.equal(fits, true, `offline snapshot content overflowed at width ${width}`);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-offline-view-is-bounded-by-its-saved-cursor", error);
+    await captureBrowserFailure(diagnostics, "the-offline-view-is-bounded-by-its-saved-cursor", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2431,7 +2438,7 @@ test("a tampered snapshot cannot speak as the host or the room in the dashboard 
     assert.match(exported, /local copy/);
     assert.equal(/(^|\n)host/i.test(exported), false, "an exported transcript never attributes a saved line to the host");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-tampered-snapshot-cannot-speak-as-the-host-or", error);
+    await captureBrowserFailure(diagnostics, "a-tampered-snapshot-cannot-speak-as-the-host-or", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2483,7 +2490,7 @@ test("the dashboard sidebar keeps the rooms reachable while a room is open (#276
     const railHtml = (await page.locator(".rail-rooms").innerHTML()) ?? "";
     assert.equal(/tgl_|Bearer|token=/i.test(railHtml), false, "the rail stays token-free");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-dashboard-sidebar-keeps-the-rooms-reachable", error);
+    await captureBrowserFailure(diagnostics, "the-dashboard-sidebar-keeps-the-rooms-reachable", error);
     throw error;
   } finally {
     await browser.close();

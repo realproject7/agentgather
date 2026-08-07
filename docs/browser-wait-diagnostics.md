@@ -19,7 +19,7 @@ states that rule once; `test/diagnostics-coverage.test.ts` runs the script rathe
 than re-implementing the rule, so the two cannot drift into agreeing with each
 other while both being wrong.
 
-Two consequences worth naming, because both were live gaps:
+Three consequences worth naming, because all three were live gaps:
 
 - **The surface is not `browser-*.test.ts`.** `test/e2e/acceptance.test.ts` and
   `test/e2e/tunnel-room.test.ts` drive a browser under a different name, and #291
@@ -33,6 +33,15 @@ Two consequences worth naming, because both were live gaps:
   recorder is created in the fixture and handed back on the fixture object, and
   the fixture writes under its own `…-fixture-setup` label.
 
+- **A browser session can live in a helper.** `offlineNotice()` in
+  `browser-room.test.ts` launches its own browser three times per call site and
+  holds three ceiling waits; the block that calls it names no page, so a
+  denominator built from "does this block mention a page" dropped it from the
+  inventory **entirely** — absent, not uncovered, which is worse than silence
+  (@re2, PR #304). The survey now finds every top-level function containing
+  `chromium.launch(`/`newPage(`, holds it to the same attach-and-write rule, and
+  counts any block that calls one.
+
 A block counts as covered only if it **attaches** a recorder, **writes** on
 failure, and **rethrows** the original error. A `catch` that wrote without
 rethrowing would turn a failure into a pass; a recorder attached and never
@@ -42,22 +51,22 @@ written is the same silence with more code.
 
 Regenerate with `node scripts/browser-wait-surface.mjs` (exit 1 lists any gap).
 
-| file | browser blocks | covered | 30s-ceiling waits | fixture setup wired |
-| --- | ---: | ---: | ---: | --- |
-| `browser-boardroom-shell.test.ts` | 3 | 3 | 14 | n/a |
-| `browser-diagnostics.test.ts` | 3 | 3 | 3 | n/a |
-| `browser-forum.test.ts` | 6 | 6 | 31 | n/a |
-| `browser-launch.test.ts` | 1 | 1 | 3 | n/a |
-| `browser-manage-joined.test.ts` | 9 | 9 | 18 | yes |
-| `browser-platform.test.ts` | 38 | 38 | 135 | n/a |
-| `browser-room-lifecycle.test.ts` | 5 | 5 | 26 | n/a |
-| `browser-room.test.ts` | 54 | 54 | 206 | n/a |
-| `browser-shell-rail-resize.test.ts` | 14 | 14 | 11 | yes |
-| `browser-shell-repo-link.test.ts` | 5 | 5 | 2 | yes |
-| `browser-snapshot-unreadable.test.ts` | 8 | 8 | 0 | yes |
-| `e2e/acceptance.test.ts` | 1 | 1 | 2 | n/a |
-| `e2e/tunnel-room.test.ts` | 1 | 1 | 4 | n/a |
-| **total** | **148** | **148** | **455** | |
+| file | browser blocks | covered | browser helpers | covered | 30s-ceiling waits | fixture setup wired |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `browser-boardroom-shell.test.ts` | 3 | 3 | 0 | 0 | 14 | n/a |
+| `browser-diagnostics.test.ts` | 3 | 3 | 0 | 0 | 3 | n/a |
+| `browser-forum.test.ts` | 6 | 6 | 0 | 0 | 31 | n/a |
+| `browser-launch.test.ts` | 1 | 1 | 0 | 0 | 3 | n/a |
+| `browser-manage-joined.test.ts` | 9 | 9 | 1 | 1 | 19 | yes |
+| `browser-platform.test.ts` | 38 | 38 | 0 | 0 | 135 | n/a |
+| `browser-room-lifecycle.test.ts` | 5 | 5 | 0 | 0 | 26 | n/a |
+| `browser-room.test.ts` | 55 | 55 | 1 | 1 | 207 | n/a |
+| `browser-shell-rail-resize.test.ts` | 15 | 15 | 1 | 1 | 13 | yes |
+| `browser-shell-repo-link.test.ts` | 6 | 6 | 1 | 1 | 4 | yes |
+| `browser-snapshot-unreadable.test.ts` | 8 | 8 | 1 | 1 | 1 | yes |
+| `e2e/acceptance.test.ts` | 1 | 1 | 0 | 0 | 2 | n/a |
+| `e2e/tunnel-room.test.ts` | 1 | 1 | 0 | 0 | 4 | n/a |
+| **total** | **151** | **151** | **5** | **5** | **462** | |
 
 **Exceptions: none.** `EXCEPTIONS` in `scripts/browser-wait-surface.mjs` is the
 only place an omission can live, and an entry must name the block and a concrete
@@ -83,20 +92,41 @@ cannot characterise a missing event, which is what the recorder is for.
 ## What a failed CI run now says
 
 `if-no-files-found: ignore` made "the recorder was quiet" and "the recorder was
-never attached" identical from outside. On a failed run CI now runs
-`scripts/diagnostics-attachment-status.mjs` **before** the upload, which writes
-`attachment-status.md` into the artifact directory and echoes it to the job
-summary. Three branches, and the artifact always exists:
+never attached" identical from outside. The first fix for that was a source
+survey — and a source survey proves a block *contains* attachment code, not that
+this execution *reached* it (@re1, PR #304). A test that throws before
+`newPage()`, or before its `try` in fixture setup or `chromium.launch()`,
+attaches nothing and writes nothing; calling that "attached and quiet" is the
+same collapse in new wording.
 
-- artifacts present → the recorder attached and wrote; the files are named.
-- none, and the surface is fully covered → attached and quiet; the run failed
-  outside the browser wait surface, or before the awaited `catch`.
-- none, with uncovered blocks → the blocks are listed by file, line and title.
+So the verdict is built from **runtime evidence**, in three parts:
 
-It reports **names and counts only** — never artifact contents — so it cannot
-leak what the recorder is built never to collect. With a file guaranteed,
-`if-no-files-found` is now `error`: an empty upload means the status step itself
-did not run, which is worth failing on.
+1. `pnpm test` writes a TAP run record (`test-run.tap`, gitignored) alongside its
+   normal output. It says which tests actually failed.
+2. Every wired catch calls `captureBrowserFailure`, which writes the recorder's
+   report when one attached and an `unattached--<label>.json` record when none
+   did. The distinction is carried in the **filename**, so the status can
+   classify without reading any artifact's contents.
+3. On a failed run CI runs `scripts/diagnostics-attachment-status.mjs` **before**
+   the upload. It matches each failing test to the record it produced and reports
+   one of:
+
+   - *recorder ATTACHED and wrote* — the trace is in the artifact, named.
+   - *NOT attached — it threw before a recorder reached a page* — the unattached
+     record says so.
+   - *NOT attached — no record at all* — it failed before its catch (fixture
+     setup, browser launch, a path outside the wired try).
+   - *outside the browser wait surface* — the failing test drives no browser.
+   - *the suite did not run* — no run record, so the job died in lint or
+     typecheck and no attachment claim is possible.
+
+Nothing in that list says "quiet". Absence is now attributed to *where* the
+failure happened, and when the evidence does not support a claim the report says
+so instead of guessing.
+
+It reports **names and counts only** — never artifact contents. With a status
+file guaranteed, `if-no-files-found` is now `error`: an empty upload means the
+status step itself did not run, which is worth failing on.
 
 ## Retention
 
@@ -152,9 +182,18 @@ assertions has a reassuring failure mode:
   would survive a probe that never reached the browser. The injection is placed
   after entry has rendered, so the artifact describes a live session rather than
   an empty one.
+- `diagnostics-forced-failure.test.ts` also forces the two **pre-attachment**
+  failures: one inside the try before the recorder exists (expects exactly the
+  `unattached--` record, with no session data in it) and one before the try
+  entirely (expects *no* record at all, and asserts the status then reads
+  `NOT attached — no record at all` naming the test). Driving that second probe
+  is what caught a real parser bug: TAP escapes `#` in a description, and nearly
+  every test here carries a `(#nnn)` reference, so the unescaped reader had been
+  reporting the whole surface as "outside" it.
 - `diagnostics-coverage.test.ts` drives the guard over a synthetic tree with a
-  deliberate gap. Without it, `exit 0` on the real tree would be equally
-  consistent with a guard that can never fail.
+  deliberate gap — an unwired block, an unwired browser *helper*, and a block
+  whose only session is that helper. Without it, `exit 0` on the real tree would
+  be equally consistent with a guard that can never fail.
 - The green-run assertion drives a live recorder and then asserts no artifact
   directory exists — with an event count first, so "no files" is a statement
   about a working recorder rather than a dead one.

@@ -12,7 +12,7 @@ import { runTunnelCommand } from "../../src/cli/commands/tunnel/index.js";
 import { createRoomHttpServer } from "../../src/server/index.js";
 import { createBrokerHttpServer, readPublicBaseUrl, TunnelBroker } from "../../src/tunnel/index.js";
 import { closeServer } from "../support/close-server.js";
-import { recordBrowserDiagnostics } from "../support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "../support/browser-diagnostics.js";
 
 class Capture extends Writable {
   chunks: string[] = [];
@@ -158,7 +158,7 @@ test("e2e tunnel: browser human and curl agent reach the room through the broker
     assert.equal(closed.keep_waiting, false);
     await closeIssued;
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("e2e-tunnel-browser-human-and-curl-agent-reach-th", error);
+    await captureBrowserFailure(diagnostics, "e2e-tunnel-browser-human-and-curl-agent-reach-th", error);
     throw error;
   } finally {
     await browser.close();

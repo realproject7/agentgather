@@ -47,6 +47,8 @@ async function syntheticTree(): Promise<string> {
   // would make the guard-fails test below vacuous.
   assert.match(sample, /test\("an unwired block"/);
   assert.match(sample, /test\("a wired block"/);
+  assert.match(sample, /async function unwiredHelperSession/);
+  assert.match(sample, /test\("a block that only reaches a browser through a helper"/);
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-wait-surface-fixture-"));
   await mkdir(path.join(root, "test"), { recursive: true });
   await writeFile(path.join(root, "test", "browser-fixture-sample.test.ts"), sample, "utf8");
@@ -64,9 +66,12 @@ test("every browser test block in the 30s wait surface writes a diagnostic on fa
   // POSITIVE CONTROL on the instrument, not on the tree: a survey that found no
   // blocks at all would also exit 0, and an empty inventory is the reassuring
   // shape of a broken scanner. The real tree has many blocks and many waits.
-  const total = /\| \*\*total\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\*/.exec(result.stdout);
+  const total =
+    /\| \*\*total\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\*/.exec(result.stdout);
   assert.ok(total, `the inventory must report a total row:\n${result.stdout}`);
-  const [, blocks, covered, waits] = total;
+  const [, blocks, covered, helpers, helpersCovered, waits] = total;
+  assert.ok(Number(helpers) > 0, "browser helpers are part of the denominator");
+  assert.equal(helpersCovered, helpers, "every browser helper must attach and write too");
   assert.ok(Number(blocks) > 100, `expected the real browser surface, got ${blocks} blocks`);
   assert.equal(covered, blocks, "every block in the surface must be covered");
   assert.ok(Number(waits) > 100, `expected the real wait surface, got ${waits} waits`);
@@ -84,55 +89,133 @@ test("the coverage guard FAILS on a block that opens a page and writes nothing (
   assert.equal(/- .*a wired block/.test(result.stderr), false, "the wired block must not be reported");
 });
 
-test("a failed run with no artifact states that the recorder was attached and quiet (#303)", async () => {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-attachment-status-quiet-"));
+test("the guard catches a browser session that lives in a HELPER, not a block (#303)", async () => {
+  // @re2 on PR #304: `offlineNotice()` ran three browser sessions and held three
+  // ceiling waits, and the block calling it named no page — so a denominator
+  // built from "does this block mention a page" dropped it from the inventory
+  // entirely. Absent is worse than uncovered: the guard reported full coverage.
+  const root = await syntheticTree();
+  const result = await run([surveyScript, root]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /helper unwiredHelperSession\(\) drives a browser and writes nothing/);
+  // And the block whose only session is that helper is counted, not skipped.
+  assert.match(result.stdout, /\| 3 \|/, `the inventory must count all three blocks:\n${result.stdout}`);
+});
+
+// A run record in the form node:test emits, so the status is driven by what the
+// run actually reported rather than by what the sources contain.
+async function runRecord(workspace: string, failing: string[], passing = 1): Promise<void> {
+  const lines: string[] = ["TAP version 13"];
+  let n = 0;
+  // TAP escapes `#` and `\` in a description, and nearly every test here carries
+  // a `(#nnn)` reference — so the fixture escapes too. Written unescaped, these
+  // tests would pass against a reader that cannot parse the real thing.
+  const tap = (name: string): string => name.replace(/([#\\])/g, "\\$1");
+  for (let i = 0; i < passing; i += 1) lines.push(`ok ${(n += 1)} - a test that passed ${i}`);
+  for (const name of failing) lines.push(`not ok ${(n += 1)} - ${tap(name)}`);
+  await writeFile(path.join(workspace, "test-run.tap"), `${lines.join("\n")}\n`, "utf8");
+}
+
+test("with no run record at all, the status says the suite did not run (#303)", async () => {
+  // A job that dies in lint or typecheck never reaches the tests. Saying
+  // anything about the recorder there would be a claim with no evidence behind
+  // it — which is the whole finding this rewrite answers (@re1, PR #304).
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-no-run-"));
   const result = await run([statusScript], { cwd: workspace });
   assert.equal(result.code, 0, result.stderr);
 
   const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
-  assert.match(written, /diagnostic artifacts written this run: \*\*0\*\*/);
-  assert.match(written, /The recorder was attached and quiet/);
-  assert.match(written, /blocks with neither: \*\*0\*\*/);
+  assert.match(written, /run record: \*\*absent\*\*/);
+  assert.match(written, /The suite did not run/);
+  assert.equal(/attached and quiet/i.test(written), false, "no attachment claim is possible without a run");
   // The upload step is `if-no-files-found: error`, which is only safe because
   // this file always exists on a failed run.
   assert.ok(written.length > 200, "the status must be a real report, not an empty file");
-  // Credential-free by construction: it reports names and counts, never contents.
-  assert.equal(/tgl_[A-Za-z0-9]|Bearer\s|token=/i.test(written), false, "the status must carry nothing credential-shaped");
+  assert.equal(/tgl_[A-Za-z0-9]|Bearer\s|token=/i.test(written), false, "nothing credential-shaped");
 });
 
-test("a failed run WITH artifacts names them, and nothing else (#303)", async () => {
-  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-attachment-status-wrote-"));
+test("a failing browser test WITH its artifact reads as attached, and its contents are never echoed (#303)", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-attached-"));
   await mkdir(path.join(workspace, "test-artifacts"), { recursive: true });
-  // Contents that would be catastrophic to echo. The status must name the file
-  // and never read it.
+  // A real title from the surface, and the label that block writes under.
+  const title = "a poll response cannot rewind the live cursor (#283)";
   await writeFile(
-    path.join(workspace, "test-artifacts", "a-failing-lifecycle-test.json"),
-    JSON.stringify({ label: "x", failure: "tgl_never_echo_this_secret" }),
+    path.join(workspace, "test-artifacts", "a-poll-response-cannot-rewind-the-live-cursor-28.json"),
+    // Contents that would be catastrophic to echo. The status names files; it
+    // must never read one.
+    JSON.stringify({ label: "x", attached: true, failure: "tgl_never_echo_this_secret" }),
     "utf8"
   );
+  await runRecord(workspace, [title]);
   const result = await run([statusScript], { cwd: workspace });
   assert.equal(result.code, 0, result.stderr);
 
   const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
-  assert.match(written, /diagnostic artifacts written this run: \*\*1\*\*/);
-  assert.match(written, /The recorder attached and wrote/);
-  assert.match(written, /a-failing-lifecycle-test\.json/);
+  assert.match(written, /recorder ATTACHED and wrote/);
+  assert.match(written, /a-poll-response-cannot-rewind-the-live-cursor-28\.json/);
   assert.equal(written.includes("tgl_never_echo_this_secret"), false, "the status must not read artifact contents");
 });
 
-test("the status names the uncovered blocks when the recorder is NOT attached (#303)", async () => {
-  // The third branch, and the one that cannot be produced from the real tree
-  // because the tree is fully covered. Driven over the synthetic tree so the
-  // prose is proven reachable rather than assumed.
+test("a failing browser test with an unattached record reads as NOT attached (#303)", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-unattached-"));
+  await mkdir(path.join(workspace, "test-artifacts"), { recursive: true });
+  const title = "a poll response cannot rewind the live cursor (#283)";
+  await writeFile(
+    path.join(workspace, "test-artifacts", "unattached--a-poll-response-cannot-rewind-the-live-cursor-28.json"),
+    JSON.stringify({ attached: false }),
+    "utf8"
+  );
+  await runRecord(workspace, [title]);
+  const result = await run([statusScript], { cwd: workspace });
+  assert.equal(result.code, 0, result.stderr);
+
+  const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
+  assert.match(written, /NOT attached — it threw before a recorder reached a page/);
+  assert.equal(/attached and quiet/i.test(written), false);
+  assert.match(written, /artifacts recording a failure with NO recorder attached: \*\*1\*\*/);
+});
+
+test("a failing browser test with NO record at all reads as NOT attached, not as quiet (#303)", async () => {
+  // The exact case @re1 found: the failure happened before the block's catch —
+  // fixture setup, `chromium.launch()`, anything outside the wired try — so
+  // nothing was written. The old wording called this "attached and quiet".
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-norecord-"));
+  const title = "a poll response cannot rewind the live cursor (#283)";
+  await runRecord(workspace, [title]);
+  const result = await run([statusScript], { cwd: workspace });
+  assert.equal(result.code, 0, result.stderr);
+
+  const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
+  assert.match(written, /NOT attached — no record at all/);
+  assert.match(written, /fixture setup, browser launch/);
+  assert.equal(/attached and quiet/i.test(written), false, "absence must never be reported as quiet");
+});
+
+test("a failing test outside the browser surface is named as such (#303)", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-outside-"));
+  await runRecord(workspace, ["cli room create writes a room directory"]);
+  const result = await run([statusScript], { cwd: workspace });
+  assert.equal(result.code, 0, result.stderr);
+
+  const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
+  assert.match(written, /outside the browser wait surface/);
+  assert.equal(/NOT attached/.test(written), false, "a non-browser failure says nothing about attachment");
+});
+
+test("the status names uncovered blocks AND uncovered helpers when the tree has gaps (#303)", async () => {
+  // Driven over the synthetic tree: the real tree is fully covered, so this
+  // branch is only reachable against a tree built to have a gap.
   const root = await syntheticTree();
-  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-attachment-status-gap-"));
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-gap-"));
   const result = await run([statusScript], { cwd: workspace, env: { BROWSER_SURFACE_ROOT: root } });
   assert.equal(result.code, 0, result.stderr);
 
   const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
-  assert.match(written, /The recorder was NOT attached everywhere/);
   assert.match(written, /an unwired block/);
-  assert.match(written, /blocks with neither: \*\*1\*\*/);
+  assert.match(written, /helper unwiredHelperSession\(\)/);
+  // Two blocks (the unwired one, and the one whose only session is the unwired
+  // helper) plus the helper itself.
+  assert.match(written, /blocks with neither: \*\*3\*\*/);
 });
 
 test("a green run publishes no artifact and no status noise (#303)", async () => {

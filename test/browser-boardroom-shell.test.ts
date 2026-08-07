@@ -9,7 +9,7 @@ import { createBoardroom, createForumPost, createRoom, writeParticipants } from 
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import type { Participant } from "../src/protocol/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 // Real port so the page origin matches the server baseUrl origin.
 function getFreePort(): Promise<number> {
@@ -191,7 +191,7 @@ test("boardroom shell: rail from /boardroom routes #general → chat, #review-fo
     // Write the artifact, then rethrow untouched: this must never convert a
     // failure into a pass, and the assertion the runner reports stays the
     // original one.
-    if (diagnostics !== null) await diagnostics.write("boardroom-shell-rail", error);
+    await captureBrowserFailure(diagnostics, "boardroom-shell-rail", error);
     throw error;
   } finally {
     await browser.close();
@@ -276,7 +276,7 @@ test("boardroom shell: a non-#general chat channel is disabled and opens a not-a
     );
     await page.screenshot({ path: path.join(os.tmpdir(), "chat-disabled-mobile.png"), fullPage: true });
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("boardroom-shell-a-non-general-chat-channel-is-di", error);
+    await captureBrowserFailure(diagnostics, "boardroom-shell-a-non-general-chat-channel-is-di", error);
     throw error;
   } finally {
     await browser.close();
@@ -311,7 +311,7 @@ test("legacy single-channel room renders as today — no channel rail", { timeou
       "no horizontal overflow at 1280"
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("legacy-single-channel-room-renders-as-today-no-c", error);
+    await captureBrowserFailure(diagnostics, "legacy-single-channel-room-renders-as-today-no-c", error);
     throw error;
   } finally {
     await browser.close();

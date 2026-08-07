@@ -47,6 +47,12 @@ jobs:
       # and "quiet" was indistinguishable from "never attached". This writes a
       # status file into the artifact directory before the upload, so the upload
       # always carries an answer. Names and counts only — never contents.
+      #
+      # The verdict is built from RUNTIME evidence, not from a source survey
+      # (@re1, PR #304): `test-run.tap` — written by the Test step above — says
+      # which tests actually failed, and each is then matched against the record
+      # it did or did not produce. A test that throws before the recorder
+      # attaches is reported as NOT attached, never as quiet.
       - name: Report diagnostics attachment status
         if: failure()
         run: node scripts/diagnostics-attachment-status.mjs

@@ -11,7 +11,7 @@ import { runLaunchCommand } from "../src/cli/commands/launch/index.js";
 import { createControlPlaneRoom } from "../src/platform/index.js";
 import { VERSION } from "../src/cli/help.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-launch-"));
@@ -92,7 +92,7 @@ test("the launcher's opened URL renders the existing dashboard at desktop width 
     const noHScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
     assert.equal(noHScroll, true, "dashboard overflowed horizontally at desktop width");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-launcher-s-opened-url-renders-the-existing-d", error);
+    await captureBrowserFailure(diagnostics, "the-launcher-s-opened-url-renders-the-existing-d", error);
     throw error;
   } finally {
     await browser.close();

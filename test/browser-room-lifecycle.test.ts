@@ -9,7 +9,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 // #241 room-entry lifecycle: token-fragment entry must be idempotent (post-entry
 // AND while the joining interstitial is shown), and a terminal (closed) room must
@@ -149,7 +149,7 @@ test("a later token-fragment re-entry after entering does not duplicate handlers
     await page.waitForTimeout(300);
     assert.equal(counters.messagePosts, 1, "one send handler");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-later-token-fragment-re-entry-after-entering-d", error);
+    await captureBrowserFailure(diagnostics, "a-later-token-fragment-re-entry-after-entering-d", error);
     throw error;
   } finally {
     await browser.close();
@@ -191,7 +191,7 @@ test("a token-fragment re-entry while the joining interstitial is shown claims a
     await page.waitForTimeout(300);
     assert.equal(counters.messagePosts, 1, "entered exactly once");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-token-fragment-re-entry-while-the-joining-inte", error);
+    await captureBrowserFailure(diagnostics, "a-token-fragment-re-entry-while-the-joining-inte", error);
     throw error;
   } finally {
     await browser.close();
@@ -266,7 +266,7 @@ test("overlapping poll intervals issue a single final closed-history fetch (seri
     await page.waitForTimeout(8_000);
     assert.equal(held.length, 1, "exactly one final closed-history fetch despite overlapping intervals");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("overlapping-poll-intervals-issue-a-single-final", error);
+    await captureBrowserFailure(diagnostics, "overlapping-poll-intervals-issue-a-single-final", error);
     throw error;
   } finally {
     for (const route of held) {
@@ -307,7 +307,7 @@ test("a closed room loads its final history once and stops all polling timers", 
     assert.equal(counters.messagePolls, settled.messagePolls, "no message poll after closure");
     assert.equal(counters.statusPolls, settled.statusPolls, "no status poll after closure");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-closed-room-loads-its-final-history-once-and-s", error);
+    await captureBrowserFailure(diagnostics, "a-closed-room-loads-its-final-history-once-and-s", error);
     throw error;
   } finally {
     await browser.close();
@@ -407,7 +407,7 @@ test("a dashboard open re-authenticates over a stale tab credential and every id
     assert.equal(local.rooms.find((room) => room.roomId === roomId)?.alias, "project7");
     assert.equal(/tgl_|Bearer|token=/i.test(stored), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-dashboard-open-re-authenticates-over-a-stale-t", error);
+    await captureBrowserFailure(diagnostics, "a-dashboard-open-re-authenticates-over-a-stale-t", error);
     throw error;
   } finally {
     await browser.close();

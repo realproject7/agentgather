@@ -17,7 +17,7 @@ import { createRoomHttpServer, participantTokenHash } from "../src/server/index.
 import { createRoom, writeParticipants } from "../src/storage/index.js";
 import type { Participant } from "../src/protocol/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics, redactUrl } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics, redactUrl } from "./support/browser-diagnostics.js";
 
 const SECRET = "tgl_diagnostics_secret_9f2c";
 
@@ -105,7 +105,7 @@ test("a captured failure artifact contains no credential, in any of its fields (
     assert.equal(/authorization/i.test(captured), false, "no header material may appear");
     assert.equal(captured.includes(root), false, "no filesystem path may appear");
   } catch (error) {
-    if (live !== null) await live.write("redaction-proof-failed", error);
+    await captureBrowserFailure(live, "redaction-proof-failed", error);
     throw error;
   } finally {
     await browser.close();
@@ -182,7 +182,7 @@ test("the artifact distinguishes never-requested from blocked from crashed (#289
     // And the three are mutually distinguishable from their summaries alone.
     assert.notDeepEqual(idleReport.branches, blockedReport.branches);
   } catch (error) {
-    if (latest !== null) written.push(await latest.write("branch-discrimination-failed", error));
+    written.push(await captureBrowserFailure(latest, "branch-discrimination-failed", error));
     throw error;
   } finally {
     await browser.close();
@@ -247,7 +247,7 @@ test("a loaded page whose action issues nothing still reads as never-requested (
     assert.equal(report.branches.requestsIssued, 0, "the action window must show no request for the action");
     assert.equal(report.awaiting, "an action that never reaches a handler", "the window must name its subject");
   } catch (error) {
-    if (live !== null) await live.write("window-never-requested-failed", error);
+    await captureBrowserFailure(live, "window-never-requested-failed", error);
     throw error;
   } finally {
     await browser.close();

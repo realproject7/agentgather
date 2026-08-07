@@ -9,7 +9,7 @@ import type { Participant } from "../src/protocol/index.js";
 import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
-import { recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
+import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-test-"));
@@ -185,7 +185,7 @@ test("browser room joins with fragment token, sends, receives, and renders safel
     assert.equal(layout.composerBelowTopbar, true);
     assert.equal(layout.textareaInsideViewport, true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("browser-room-joins-with-fragment-token-sends-rec", error);
+    await captureBrowserFailure(diagnostics, "browser-room-joins-with-fragment-token-sends-rec", error);
     throw error;
   } finally {
     await browser.close();
@@ -267,7 +267,7 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
     // Write the artifact, then rethrow untouched: this must never convert a
     // failure into a pass, and the assertion the runner reports stays the
     // original one.
-    if (diagnostics !== null) await diagnostics.write("browser-composer-dedupe", error);
+    await captureBrowserFailure(diagnostics, "browser-composer-dedupe", error);
     throw error;
   } finally {
     await browser.close();
@@ -321,7 +321,7 @@ test("browser bare URL explains invite requirement and human token claims displa
     // Roster continues to show the chosen display name.
     await guestPage.waitForSelector("text=Project Seven");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("browser-bare-url-explains-invite-requirement-and", error);
+    await captureBrowserFailure(diagnostics, "browser-bare-url-explains-invite-requirement-and", error);
     throw error;
   } finally {
     await browser.close();
@@ -357,7 +357,7 @@ test("browser auto-claims a missing host human display name from the alias", asy
     const participants = JSON.parse(await readFile(path.join(root, "rooms", roomId, "participants.json"), "utf8")) as Participant[];
     assert.equal(participants.find((entry) => entry.alias === "ag-lead")?.display_name, "ag-lead");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("browser-auto-claims-a-missing-host-human-display", error);
+    await captureBrowserFailure(diagnostics, "browser-auto-claims-a-missing-host-human-display", error);
     throw error;
   } finally {
     await browser.close();
@@ -385,7 +385,7 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
     assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788");
     assert.equal(await page.locator("#brand-static").isHidden(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("room-opened-from-the-dashboard-exposes-a-same-ta", error);
+    await captureBrowserFailure(diagnostics, "room-opened-from-the-dashboard-exposes-a-same-ta", error);
     throw error;
   } finally {
     await browser.close();
@@ -446,7 +446,7 @@ test("browser reply affordance: per-message reply button, clearable composer ind
     assert.ok(first && reply, "both messages persisted");
     assert.equal(reply?.reply_to, first?.id);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("browser-reply-affordance-per-message-reply-butto", error);
+    await captureBrowserFailure(diagnostics, "browser-reply-affordance-per-message-reply-butto", error);
     throw error;
   } finally {
     await browser.close();
@@ -535,7 +535,7 @@ test("browser roster, brief indicator, system filter, unknown mentions, and send
     // A rate-limit rejection stays an inline send error — no route banner.
     assert.equal(await page.locator("#room-banner").isHidden(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("browser-roster-brief-indicator-system-filter-unk", error);
+    await captureBrowserFailure(diagnostics, "browser-roster-brief-indicator-system-filter-unk", error);
     throw error;
   } finally {
     await browser.close();
@@ -573,7 +573,7 @@ test("composer broadcast mode sends an untargeted status message and resets to d
     // ...and the composer returns to direct so the next message is not room-wide.
     assert.equal(await page.getAttribute("#composer", "data-mode"), "direct");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("composer-broadcast-mode-sends-an-untargeted-stat", error);
+    await captureBrowserFailure(diagnostics, "composer-broadcast-mode-sends-an-untargeted-stat", error);
     throw error;
   } finally {
     await browser.close();
@@ -614,7 +614,7 @@ test("composer autocompletes a partial @mention and warns on an unknown one with
     await page.click('.warn-suggest[data-alias="reviewer"]');
     assert.match(await page.inputValue("#message-text"), /@reviewer/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("composer-autocompletes-a-partial-mention-and-war", error);
+    await captureBrowserFailure(diagnostics, "composer-autocompletes-a-partial-mention-and-war", error);
     throw error;
   } finally {
     await browser.close();
@@ -651,7 +651,7 @@ test("a join system line flips to 'now attending' once the participant is foregr
     await page.waitForSelector(".joinflip:not([hidden])");
     await page.waitForSelector("text=now attending");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-join-system-line-flips-to-now-attending-once-t", error);
+    await captureBrowserFailure(diagnostics, "a-join-system-line-flips-to-now-attending-once-t", error);
     throw error;
   } finally {
     await browser.close();
@@ -712,7 +712,7 @@ test("host-offline mid-session falls back to a read-only local backup and recove
     await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === false);
     await page.waitForSelector("#backup-notice", { state: "hidden" });
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("host-offline-mid-session-falls-back-to-a-read-on", error);
+    await captureBrowserFailure(diagnostics, "host-offline-mid-session-falls-back-to-a-read-on", error);
     throw error;
   } finally {
     await browser.close();
@@ -750,7 +750,7 @@ test("a quota_exceeded response shows the public-route-paused banner (#84)", asy
     await page.waitForSelector("text=local-only rooms keep working");
     await page.waitForSelector(".banner-action:not([hidden])");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-quota-exceeded-response-shows-the-public-route", error);
+    await captureBrowserFailure(diagnostics, "a-quota-exceeded-response-shows-the-public-route", error);
     throw error;
   } finally {
     await browser.close();
@@ -791,7 +791,7 @@ test("a closed room shows the host read-only history source and hides the compos
     // No composer in a closed room.
     assert.equal(await page.locator("#composer").isHidden(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-closed-room-shows-the-host-read-only-history-s", error);
+    await captureBrowserFailure(diagnostics, "a-closed-room-shows-the-host-read-only-history-s", error);
     throw error;
   } finally {
     await browser.close();
@@ -834,7 +834,7 @@ test("a closed room with an unreachable host log shows an explicit unavailable s
     await page.waitForSelector("text=live, cached & exported history are unavailable");
     assert.equal(await page.locator("#composer").isHidden(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-closed-room-with-an-unreachable-host-log-shows", error);
+    await captureBrowserFailure(diagnostics, "a-closed-room-with-an-unreachable-host-log-shows", error);
     throw error;
   } finally {
     await browser.close();
@@ -864,7 +864,7 @@ test("guest browser uses fragment token without host controls and room close dis
     await page.waitForFunction(() => document.querySelector("#room-status")?.textContent === "closed");
     assert.equal(await page.locator("#message-text").isDisabled(), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("guest-browser-uses-fragment-token-without-host-c", error);
+    await captureBrowserFailure(diagnostics, "guest-browser-uses-fragment-token-without-host-c", error);
     throw error;
   } finally {
     await browser.close();
@@ -941,7 +941,7 @@ test("v5 batch surfaces: code-block header/copy, grouped rail, host controls, la
     assert.equal(await page.locator("#auto-continue-toggle").count(), 1);
     assert.equal(await page.isDisabled("#tickets-button"), true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("v5-batch-surfaces-code-block-header-copy-grouped", error);
+    await captureBrowserFailure(diagnostics, "v5-batch-surfaces-code-block-header-copy-grouped", error);
     throw error;
   } finally {
     await browser.close();
@@ -1010,7 +1010,7 @@ test("an agent host groups under AGENTS with an `agent · host` badge (V2 #169)"
       "no horizontal overflow at 390"
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("an-agent-host-groups-under-agents-with-an-agent", error);
+    await captureBrowserFailure(diagnostics, "an-agent-host-groups-under-agents-with-an-agent", error);
     throw error;
   } finally {
     await browser.close();
@@ -1057,7 +1057,7 @@ test("code-block copy writes the raw body only (#120/#117)", async () => {
     );
     assert.equal(await page.textContent(".code-block .code-copy"), "copied");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("code-block-copy-writes-the-raw-body-only-120-117", error);
+    await captureBrowserFailure(diagnostics, "code-block-copy-writes-the-raw-body-only-120-117", error);
     throw error;
   } finally {
     await browser.close();
@@ -1091,7 +1091,7 @@ test("code-block omits the copy button when no clipboard API is available (#120/
     await page.waitForSelector(".code-block .code-head .code-lang");
     assert.equal(await page.$$eval(".code-block .code-copy", (els) => els.length), 0);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("code-block-omits-the-copy-button-when-no-clipboa", error);
+    await captureBrowserFailure(diagnostics, "code-block-omits-the-copy-button-when-no-clipboa", error);
     throw error;
   } finally {
     await browser.close();
@@ -1131,7 +1131,7 @@ test("last-message rail KV updates on the sender's own send (#121/#123)", async 
       { timeout: 4000 }
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("last-message-rail-kv-updates-on-the-sender-s-own", error);
+    await captureBrowserFailure(diagnostics, "last-message-rail-kv-updates-on-the-sender-s-own", error);
     throw error;
   } finally {
     await browser.close();
@@ -1191,7 +1191,7 @@ test("host starts and ends an active chat session; the banner reflects it and no
     await hostPage.waitForSelector("text=Active chat session ended in #general");
     await guestPage.waitForSelector("#session-banner", { state: "hidden" });
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("host-starts-and-ends-an-active-chat-session-the", error);
+    await captureBrowserFailure(diagnostics, "host-starts-and-ends-an-active-chat-session-the", error);
     throw error;
   } finally {
     await browser.close();
@@ -1235,7 +1235,7 @@ test("the active-session banner renders a host-requested attendance policy and s
     });
     assert.ok(bannerBox > 0, "active session banner occupies vertical space");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-active-session-banner-renders-a-host-request", error);
+    await captureBrowserFailure(diagnostics, "the-active-session-banner-renders-a-host-request", error);
     throw error;
   } finally {
     await browser.close();
@@ -1311,7 +1311,7 @@ test("markdown.js renders a hostile corpus inert — script tags, on* handlers, 
     assert.match(result.text, /<script>/);
     assert.match(result.text, /javascript:alert\(1\)/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("markdown-js-renders-a-hostile-corpus-inert-scrip", error);
+    await captureBrowserFailure(diagnostics, "markdown-js-renders-a-hostile-corpus-inert-scrip", error);
     throw error;
   } finally {
     await browser.close();
@@ -1386,7 +1386,7 @@ test("the roster shows an honest wake-tier chip derived from effective_mode (#18
     assert.match((await chipA.textContent()) || "", /Tier A/);
     assert.match((await chipA.getAttribute("title")) || "", /wakes on|auto/i);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-roster-shows-an-honest-wake-tier-chip-derive", error);
+    await captureBrowserFailure(diagnostics, "the-roster-shows-an-honest-wake-tier-chip-derive", error);
     throw error;
   } finally {
     await browser.close();
@@ -1481,7 +1481,7 @@ test("a mention while unfocused fires one OS notification + title badge, dedups,
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await page.waitForFunction(() => document.title === "Agent Gather Room");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-mention-while-unfocused-fires-one-os-notificat", error);
+    await captureBrowserFailure(diagnostics, "a-mention-while-unfocused-fires-one-os-notificat", error);
     throw error;
   } finally {
     await browser.close();
@@ -1531,7 +1531,7 @@ test("permission-denied degrades silently to the title badge with no OS notifica
     const notifs = await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length);
     assert.equal(notifs, 0);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("permission-denied-degrades-silently-to-the-title", error);
+    await captureBrowserFailure(diagnostics, "permission-denied-degrades-silently-to-the-title", error);
     throw error;
   } finally {
     await browser.close();
@@ -1593,7 +1593,7 @@ test("own messages and non-mentions in mentions-only scope do not notify (#186)"
     assert.equal(await page.evaluate(() => (window as unknown as { __notifs: unknown[] }).__notifs.length), 0);
     assert.equal(await page.title(), "Agent Gather Room");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("own-messages-and-non-mentions-in-mentions-only-s", error);
+    await captureBrowserFailure(diagnostics, "own-messages-and-non-mentions-in-mentions-only-s", error);
     throw error;
   } finally {
     await browser.close();
@@ -1658,7 +1658,7 @@ test("a notification body never carries an invite URL or token from the message 
     assert.equal(combined.includes("https://"), false);
     assert.match(notif.body, /New mention from reviewer/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-notification-body-never-carries-an-invite-url", error);
+    await captureBrowserFailure(diagnostics, "a-notification-body-never-carries-an-invite-url", error);
     throw error;
   } finally {
     await browser.close();
@@ -1698,7 +1698,7 @@ test("a browser room join is recorded in the device-local 'Rooms I'm in' list, t
     assert.equal(parsed.rooms[0]?.baseUrl, fixture.baseUrl);
     assert.equal(parsed.rooms[0]?.alias, "host");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-browser-room-join-is-recorded-in-the-device-lo", error);
+    await captureBrowserFailure(diagnostics, "a-browser-room-join-is-recorded-in-the-device-lo", error);
     throw error;
   } finally {
     await browser.close();
@@ -1724,7 +1724,7 @@ test("a browser join with an unreachable dashboard bridge degrades silently (#17
     await page.waitForSelector("#joined-list .joined-row");
     assert.deepEqual(errors, []);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-browser-join-with-an-unreachable-dashboard-bri", error);
+    await captureBrowserFailure(diagnostics, "a-browser-join-with-an-unreachable-dashboard-bri", error);
     throw error;
   } finally {
     await browser.close();
@@ -1755,7 +1755,7 @@ test("a non-loopback ?dashboard= is refused — no cross-origin bridge POST leav
     // The room-origin record is still kept (local-only).
     await page.waitForSelector("#joined-list .joined-row");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-non-loopback-dashboard-is-refused-no-cross-ori", error);
+    await captureBrowserFailure(diagnostics, "a-non-loopback-dashboard-is-refused-no-cross-ori", error);
     throw error;
   } finally {
     await browser.close();
@@ -1816,7 +1816,7 @@ test("a joined participant never sees host-only controls, live or while the host
       assert.equal(await guestPage.isHidden(control), true, `offline participant must not see ${control}`);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-joined-participant-never-sees-host-only-contro", error);
+    await captureBrowserFailure(diagnostics, "a-joined-participant-never-sees-host-only-contro", error);
     throw error;
   } finally {
     await browser.close();
@@ -1878,7 +1878,7 @@ test("a direct room URL keeps the roster right panel in one independent scroll c
     });
     assert.equal(controlsVisible, true, "host controls remained clipped after scrolling");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-direct-room-url-keeps-the-roster-right-panel-i", error);
+    await captureBrowserFailure(diagnostics, "a-direct-room-url-keeps-the-roster-right-panel-i", error);
     throw error;
   } finally {
     await browser.close();
@@ -1916,7 +1916,7 @@ test("a browser join records the boardroom display title in Rooms I'm in, token-
     assert.notEqual(entry?.title, fixture.roomId);
     assert.equal(/tgl_|token=|Bearer|host-/i.test(stored ?? ""), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-browser-join-records-the-boardroom-display-tit", error);
+    await captureBrowserFailure(diagnostics, "a-browser-join-records-the-boardroom-display-tit", error);
     throw error;
   } finally {
     await browser.close();
@@ -1961,7 +1961,7 @@ test("the local backup is bounded — oldest messages are dropped past the cap (
     assert.equal(backup.messages.some((m: { text: string }) => m.text === "newest-kept"), true);
     assert.equal(backup.messages.some((m: { text: string }) => m.text === "old-0"), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-local-backup-is-bounded-oldest-messages-are", error);
+    await captureBrowserFailure(diagnostics, "the-local-backup-is-bounded-oldest-messages-are", error);
     throw error;
   } finally {
     await browser.close();
@@ -1996,7 +1996,7 @@ test("the local backup redacts tokens and card URLs before storing (#211)", asyn
     assert.equal(/tgl_secret_abc123XYZ|token=tgl_zzz|Bearer sk_live_qqq|\/card\?/.test(stored), false);
     assert.match(stored, /redacted/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-local-backup-redacts-tokens-and-card-urls-be", error);
+    await captureBrowserFailure(diagnostics, "the-local-backup-redacts-tokens-and-card-urls-be", error);
     throw error;
   } finally {
     await browser.close();
@@ -2033,7 +2033,7 @@ test("host offline with no cached messages shows an empty read-only backup (#211
     assert.match((await page.locator("#backup-notice").textContent()) ?? "", /No messages are saved on this device yet/);
     await page.waitForFunction(() => (document.getElementById("message-text") as HTMLTextAreaElement).disabled === true);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("host-offline-with-no-cached-messages-shows-an-em", error);
+    await captureBrowserFailure(diagnostics, "host-offline-with-no-cached-messages-shows-an-em", error);
     throw error;
   } finally {
     await browser.close();
@@ -2254,7 +2254,7 @@ test("ordered lists keep authored numbering across blank lines — ol.start / li
     assert.deepEqual(briefLists[1]?.items.map((item) => item.text), ["fourth", "fifth"]);
     assert.deepEqual(briefLists[2]?.items.map((item) => item.value), [null, "3"]);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("ordered-lists-keep-authored-numbering-across-bla", error);
+    await captureBrowserFailure(diagnostics, "ordered-lists-keep-authored-numbering-across-bla", error);
     throw error;
   } finally {
     await browser.close();
@@ -2354,7 +2354,7 @@ test("host rail auto-continue: host-only, off by default, opt-in enables the bou
       assert.equal(noOverflow, true, `no horizontal overflow at ${width}`);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("host-rail-auto-continue-host-only-off-by-default", error);
+    await captureBrowserFailure(diagnostics, "host-rail-auto-continue-host-only-off-by-default", error);
     throw error;
   } finally {
     await browser.close();
@@ -2476,7 +2476,7 @@ test("Send before entry completes cannot navigate or eject the participant (#268
     assert.equal(page.url(), urlDuringEntry, "sending after entry navigated the page");
     assert.deepEqual(navigations, [], "sending after entry triggered a navigation");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("send-before-entry-completes-cannot-navigate-or-e", error);
+    await captureBrowserFailure(diagnostics, "send-before-entry-completes-cannot-navigate-or-e", error);
     throw error;
   } finally {
     await browser.close();
@@ -2547,7 +2547,7 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     // The restored range is named, so a trimmed backup could not read as complete.
     assert.match((await page.locator(".restored-divider").textContent()) ?? "", /Restored from this device/);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-second-entry-seeds-from-the-local-backup-and-f", error);
+    await captureBrowserFailure(diagnostics, "a-second-entry-seeds-from-the-local-backup-and-f", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2590,7 +2590,7 @@ test("an empty or corrupt backup falls back to the full fetch and never blocks e
       assert.equal(await page.locator(".restored-divider").count(), 0, "nothing is claimed as restored");
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("an-empty-or-corrupt-backup-falls-back-to-the-ful", error);
+    await captureBrowserFailure(diagnostics, "an-empty-or-corrupt-backup-falls-back-to-the-ful", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2679,7 +2679,7 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     const live = page.locator(".message", { hasText: "served live after entry" }).first();
     assert.equal(await live.getAttribute("data-restored"), null);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-tampered-backup-renders-only-as-restored-from", error);
+    await captureBrowserFailure(diagnostics, "a-tampered-backup-renders-only-as-restored-from", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2779,7 +2779,7 @@ test("no restored record\'s author or text escapes into an unmarked surface (#27
     assert.equal(context.includes(forgedText), false, `live reply quoted forged text: ${context}`);
     assert.equal(context, `↩ replying to #${forgedId}`);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("no-restored-record-s-author-or-text-escapes-into", error);
+    await captureBrowserFailure(diagnostics, "no-restored-record-s-author-or-text-escapes-into", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2844,7 +2844,7 @@ test("a backup whose ids run past the room is discarded instead of wedging the c
     });
     assert.equal(stored.includes("line from a room that is gone"), false);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-backup-whose-ids-run-past-the-room-is-discarde", error);
+    await captureBrowserFailure(diagnostics, "a-backup-whose-ids-run-past-the-room-is-discarde", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2907,7 +2907,7 @@ test("a host that serves its page but not its API shows the held copy, not a bla
     assert.match((await page.locator("#composer-identity").textContent()) ?? "", /Host/);
     assert.equal(await page.locator("#message-text").isDisabled(), false, "composer works again once live");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-host-that-serves-its-page-but-not-its-api-show", error);
+    await captureBrowserFailure(diagnostics, "a-host-that-serves-its-page-but-not-its-api-show", error);
     throw error;
   } finally {
     await browser?.close();
@@ -2965,7 +2965,7 @@ test("a room opened by its own URL still contributes history to the dashboard (#
     const raw = JSON.stringify(posted);
     assert.equal(raw.includes(fixture.hostToken), false, "no token in the bridge body");
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-room-opened-by-its-own-url-still-contributes-h", error);
+    await captureBrowserFailure(diagnostics, "a-room-opened-by-its-own-url-still-contributes-h", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3105,7 +3105,7 @@ test("the room view offers a labelled route home and discloses no other room (#2
       assert.equal(/agentgather\.history\.|joined-rooms\.json/.test(entry.urls.join("\n")), false);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("the-room-view-offers-a-labelled-route-home-and-d", error);
+    await captureBrowserFailure(diagnostics, "the-room-view-offers-a-labelled-route-home-and-d", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3178,7 +3178,7 @@ test("a poll response cannot rewind the live cursor (#283)", async () => {
       "third"
     ]);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-poll-response-cannot-rewind-the-live-cursor-28", error);
+    await captureBrowserFailure(diagnostics, "a-poll-response-cannot-rewind-the-live-cursor-28", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3381,7 +3381,7 @@ test("show earlier loads host history older than the backup without refetching o
       assert.equal(query, `?since_id=${ids.get("m60")}`, `a poll after the backward reads asked ${query}`);
     }
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("show-earlier-loads-host-history-older-than-the-b", error);
+    await captureBrowserFailure(diagnostics, "show-earlier-loads-host-history-older-than-the-b", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3460,7 +3460,7 @@ test("show earlier in a closed room is a one-off fetch that leaves polling stopp
       .filter((line) => /^c\d+$/.test(line));
     assert.deepEqual(texts, ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"]);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("show-earlier-in-a-closed-room-is-a-one-off-fetch", error);
+    await captureBrowserFailure(diagnostics, "show-earlier-in-a-closed-room-is-a-one-off-fetch", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3529,7 +3529,7 @@ test("show earlier is withdrawn with a stated reason while the host is unreachab
       .filter((line) => /^o\d+$/.test(line));
     assert.deepEqual(texts, ["o1", "o2", "o3", "o4", "o5", "o6"]);
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("show-earlier-is-withdrawn-with-a-stated-reason-w", error);
+    await captureBrowserFailure(diagnostics, "show-earlier-is-withdrawn-with-a-stated-reason-w", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3656,7 +3656,7 @@ test("an uncredentialed arrival is offered its remembered dashboard, and only th
       "the token must never be persisted by this path"
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("an-uncredentialed-arrival-is-offered-its-remembe", error);
+    await captureBrowserFailure(diagnostics, "an-uncredentialed-arrival-is-offered-its-remembe", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3760,7 +3760,7 @@ test("a remembered dashboard carrying a credential is reduced to its origin befo
       "and the pane falls back to the copy that is then the true advice"
     );
   } catch (error) {
-    if (diagnostics !== null) await diagnostics.write("a-remembered-dashboard-carrying-a-credential-is", error);
+    await captureBrowserFailure(diagnostics, "a-remembered-dashboard-carrying-a-credential-is", error);
     throw error;
   } finally {
     await browser?.close();
@@ -3782,8 +3782,15 @@ async function offlineNotice(
   seedBackup = true
 ) {
   const browser = await chromium.launch();
+  // #303 (@re2, PR #304): this helper launches its own browser and holds three
+  // ceiling waits, so it is a browser session in its own right — the calling
+  // block names no page and was dropped from the inventory entirely, which is
+  // worse than being reported uncovered. The recorder lives where the session
+  // lives.
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
     const key = `agentgather.backup.${fixture.roomId}`;
     // A backup whose lowest id is above 1, so older history exists on the host and
     // the "show earlier" control mounts.
@@ -3823,6 +3830,15 @@ async function offlineNotice(
     // number better, and a value computed and never read is a check that only
     // exists — which is this ticket's own thesis (@re2, @re1).
     return { notice: (await page.locator("#backup-notice").textContent()) ?? "" };
+  } catch (error) {
+    // The label names the helper AND which of its three call shapes was running,
+    // so an artifact identifies the session without opening the file.
+    await captureBrowserFailure(
+      diagnostics,
+      `offline-notice-helper-earlier-${fetchEarlier}-backup-${seedBackup}`,
+      error
+    );
+    throw error;
   } finally {
     await browser.close();
   }

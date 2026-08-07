@@ -18,7 +18,12 @@ import path from "node:path";
 export const EXCEPTIONS = [];
 
 const WAIT_CALL = /\.(waitFor|waitForSelector|waitForFunction|waitForEvent|waitForURL|waitForResponse|waitForRequest|waitForLoadState|waitForTimeout)\(/g;
-const DRIVES_BROWSER = /chromium\.launch|\.newPage\(|\bpage\.|fixture\.page/;
+// Direct evidence a block drives a browser. `\bpage\.` alone is not enough, and
+// deliberately so: @re2 found a block whose three browser sessions all live in a
+// helper it calls, so it names no page and was dropped from the inventory
+// ENTIRELY — not reported uncovered, absent. Reaching a browser helper counts as
+// driving a browser (see `browserHelpers`).
+const DRIVES_BROWSER = /chromium\.launch|\.newPage\(|\bpage\b|fixture\.diagnostics/;
 
 // Split a test file into its top-level `test(...)` blocks. A block runs from the
 // line beginning `test(` to the next line that is exactly `});`.
@@ -68,9 +73,37 @@ function attaches(text) {
 function writesOnFailure(text) {
   for (const match of text.matchAll(/\} catch \(error\) \{/g)) {
     const clause = text.slice(match.index, match.index + 400);
-    if (/\.write\(/.test(clause) && /throw error;/.test(clause)) return true;
+    if (/\.write\(|captureBrowserFailure\(/.test(clause) && /throw error;/.test(clause)) return true;
   }
   return false;
+}
+
+// Every top-level function in the file that launches a browser or opens a page,
+// with the same attach-and-write test a test block gets. A helper is a browser
+// session that happens to have a name: `offlineNotice` ran three of them, held
+// three ceiling waits, and was outside the denominator because it is not spelled
+// `test(` and not spelled `startFixture`. Matching on `chromium.launch(` rather
+// than on a naming convention is the point — a convention is what missed it.
+export function browserHelpers(source) {
+  const lines = source.split("\n");
+  const helpers = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const name = /^(?:export )?(?:async )?function (\w+)/.exec(lines[i])?.[1] ?? /^(?:export )?const (\w+) = async/.exec(lines[i])?.[1];
+    if (name === undefined) continue;
+    let end = i + 1;
+    while (end < lines.length && lines[end] !== "}" && lines[end] !== "};") end += 1;
+    const text = lines.slice(i, end + 1).join("\n");
+    if (!/chromium\.launch\(|\.newPage\(/.test(text)) continue;
+    helpers.push({
+      name,
+      line: i + 1,
+      text,
+      waits: countCeilingWaits(text),
+      covered: attaches(text) && writesOnFailure(text),
+      label: /(?:\.write|captureBrowserFailure)\(\s*(?:[^,)]+,\s*)?[`"]([^`"]+)/.exec(text)?.[1] ?? null
+    });
+  }
+  return helpers;
 }
 
 // Does a `start…Fixture` helper launch the browser itself? Those files hold the
@@ -116,9 +149,13 @@ export function surveyBrowserWaitSurface(repoRoot) {
   const inventory = [];
   for (const name of files) {
     const source = readFileSync(path.join(testDir, name), "utf8");
+    const helpers = browserHelpers(source);
+    // A block that calls a browser helper drives a browser, even though it names
+    // no page of its own.
+    const reachesHelper = (text) => helpers.some((helper) => new RegExp(`\\b${helper.name}\\(`).test(text));
     const blocks = [];
     for (const block of testBlocks(source)) {
-      if (!DRIVES_BROWSER.test(block.text)) continue;
+      if (!DRIVES_BROWSER.test(block.text) && !reachesHelper(block.text)) continue;
       const exception = EXCEPTIONS.find((entry) => entry.file === name && entry.title === block.title);
       blocks.push({
         title: block.title,
@@ -128,7 +165,19 @@ export function surveyBrowserWaitSurface(repoRoot) {
         // written when the test throws is the same silence with more code, and a
         // catch that writes without rethrowing would convert a failure into a
         // pass — so both halves are checked, not just the import.
-        covered: attaches(block.text) && writesOnFailure(block.text),
+        // A block whose only browser session lives in a helper is covered by that
+        // helper's own attach-and-write, not by code the block does not contain.
+        // "Opens its own session" is decided by `chromium.launch(`/`newPage(` and
+        // not by the looser inventory test, so the word "page" in a comment
+        // cannot make a block look like it holds a session it does not.
+        covered:
+          (attaches(block.text) && writesOnFailure(block.text)) ||
+          (!/chromium\.launch\(|\.newPage\(/.test(block.text) &&
+            reachesHelper(block.text) &&
+            helpers.every((helper) => !new RegExp(`\\b${helper.name}\\(`).test(block.text) || helper.covered)),
+        // The artifact name this block writes under, so a failing test reported
+        // by the run can be matched to the record it should have produced.
+        label: /(?:\.write|captureBrowserFailure)\((?:[^,)]+,\s*)?"([^"]+)"/.exec(block.text)?.[1] ?? null,
         exception: exception?.reason ?? null
       });
     }
@@ -138,7 +187,9 @@ export function surveyBrowserWaitSurface(repoRoot) {
     inventory.push({
       file: name,
       blocks,
-      waits: blocks.reduce((sum, block) => sum + block.waits, 0),
+      helpers,
+      uncoveredHelpers: helpers.filter((helper) => !helper.covered),
+      waits: blocks.reduce((sum, block) => sum + block.waits, 0) + helpers.reduce((sum, helper) => sum + helper.waits, 0),
       covered: blocks.filter((block) => block.covered).length,
       uncovered: blocks.filter((block) => !block.covered && block.exception === null),
       excepted: blocks.filter((block) => !block.covered && block.exception !== null),
@@ -151,22 +202,29 @@ export function surveyBrowserWaitSurface(repoRoot) {
 
 export function formatInventory(inventory) {
   const rows = [
-    "| file | browser blocks | covered | 30s-ceiling waits | fixture setup wired |",
-    "| --- | ---: | ---: | ---: | --- |"
+    "| file | browser blocks | covered | browser helpers | covered | 30s-ceiling waits | fixture setup wired |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | --- |"
   ];
   for (const entry of inventory) {
     const setup = entry.launchesInFixture ? (entry.setupCovered ? "yes" : "NO") : "n/a";
-    rows.push(`| \`${entry.file}\` | ${entry.blocks.length} | ${entry.covered} | ${entry.waits} | ${setup} |`);
+    const helpersCovered = entry.helpers.filter((helper) => helper.covered).length;
+    rows.push(
+      `| \`${entry.file}\` | ${entry.blocks.length} | ${entry.covered} | ${entry.helpers.length} | ${helpersCovered} | ${entry.waits} | ${setup} |`
+    );
   }
   const totals = inventory.reduce(
     (acc, entry) => ({
       blocks: acc.blocks + entry.blocks.length,
       covered: acc.covered + entry.covered,
+      helpers: acc.helpers + entry.helpers.length,
+      helpersCovered: acc.helpersCovered + entry.helpers.filter((helper) => helper.covered).length,
       waits: acc.waits + entry.waits
     }),
-    { blocks: 0, covered: 0, waits: 0 }
+    { blocks: 0, covered: 0, helpers: 0, helpersCovered: 0, waits: 0 }
   );
-  rows.push(`| **total** | **${totals.blocks}** | **${totals.covered}** | **${totals.waits}** | |`);
+  rows.push(
+    `| **total** | **${totals.blocks}** | **${totals.covered}** | **${totals.helpers}** | **${totals.helpersCovered}** | **${totals.waits}** | |`
+  );
   return rows.join("\n");
 }
 
@@ -182,9 +240,14 @@ if (import.meta.filename === process.argv[1]) {
   const setupGaps = inventory
     .filter((entry) => entry.launchesInFixture && !entry.setupCovered)
     .map((entry) => `${entry.file}: startFixture launches a browser but its own waits write nothing`);
-  if (gaps.length > 0 || setupGaps.length > 0) {
+  const helperGaps = inventory.flatMap((entry) =>
+    entry.uncoveredHelpers.map(
+      (helper) => `${entry.file}:${helper.line} helper ${helper.name}() drives a browser and writes nothing on failure`
+    )
+  );
+  if (gaps.length > 0 || setupGaps.length > 0 || helperGaps.length > 0) {
     console.error("\nUNCOVERED:");
-    for (const gap of [...gaps, ...setupGaps]) console.error("  - " + gap);
+    for (const gap of [...gaps, ...helperGaps, ...setupGaps]) console.error("  - " + gap);
     process.exit(1);
   }
 }
