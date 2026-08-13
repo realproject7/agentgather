@@ -413,6 +413,23 @@ test("a room held under both kinds offers a visible, reversible Join as choice t
 
     // Choosing a seat must not open the room — the row is itself a link.
     assert.equal(new URL(page.url()).pathname, "/");
+
+    // The control's VISIBLE CAPTION is part of the same row link (@re1). Clicking
+    // it while only trying to pick a seat opened the room, so click the caption
+    // itself — not the select — and require the dashboard to still be here.
+    await bothRow.locator(".joined-seat-caption").click();
+    await page.waitForSelector('.joined-row:has-text("Both Room") select.joined-seat-select');
+    assert.equal(new URL(page.url()).pathname, "/", "clicking the Join as caption opened the room");
+    // "Both Room" is unreachable, so opening it swaps the detail pane into the
+    // offline snapshot view — that mode flag is what actually proves the row link
+    // did not fire, rather than a URL that a same-page view would not change.
+    assert.equal(await page.locator('[data-mode="snapshot"]').count(), 0, "clicking the caption opened the room");
+    // The row is still usable afterwards: the caption click changed no seat.
+    assert.equal(await page.locator('.joined-row:has-text("Both Room") select.joined-seat-select').inputValue(), "project7");
+    assert.equal(
+      await page.locator('.joined-row:has-text("Both Room")').first().getAttribute("aria-label"),
+      seatLabel("Both Room", "human")
+    );
     assert.equal(/tgl_/.test(await page.content()), false, "a token reached the dashboard");
   } catch (error) {
     await captureBrowserFailure(diagnostics, "joined-seat-join-as-choice", error);

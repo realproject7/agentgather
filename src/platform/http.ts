@@ -983,23 +983,6 @@ function isInviteToken(value: string | null): value is string {
   return typeof value === "string" && /^tgl_[A-Za-z0-9_-]{12,}$/.test(value);
 }
 
-// The invited alias's own kind, read from the roster the host already returns on
-// `GET /status` (#311). It is taken from the entry whose alias IS `me` and nowhere
-// else — not from a default, not from the room's majority, not from the alias's
-// spelling. A host that returns no roster, or a roster with no matching entry,
-// yields `undefined`, and the row stays honestly unknown.
-function inviteSeatKind(participants: unknown, me: string): JoinedRoomKind | undefined {
-  if (!Array.isArray(participants)) return undefined;
-  for (const entry of participants) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const candidate = entry as { alias?: unknown; kind?: unknown };
-    if (candidate.alias !== me) continue;
-    if (candidate.kind === "human" || candidate.kind === "agent") return candidate.kind;
-    return undefined;
-  }
-  return undefined;
-}
-
 async function fetchInviteStatus(
   baseUrl: string,
   token: string
@@ -1024,7 +1007,18 @@ async function fetchInviteStatus(
     const me = shortString(payload.me);
     if (payload.ok !== true || room === undefined || me === undefined || !isSafeRoomId(room) || !isSafeAlias(me)) return null;
     const name = shortString(payload.boardroom?.name);
-    const kind = inviteSeatKind(payload.participants, me);
+    // The invited alias's own kind, from the roster the host already returns here
+    // (#311). Taken from the entry whose alias IS `me` and nowhere else — not a
+    // default, not the room's majority, not the alias's spelling. No roster, no
+    // matching entry, or an unrecognised value leaves it undefined and the row
+    // stays honestly unknown.
+    const seat = Array.isArray(payload.participants)
+      ? (payload.participants as Array<{ alias?: unknown; kind?: unknown }>).find(
+          (entry) => typeof entry === "object" && entry !== null && entry.alias === me
+        )
+      : undefined;
+    const kind: JoinedRoomKind | undefined =
+      seat?.kind === "human" || seat?.kind === "agent" ? seat.kind : undefined;
     return {
       room,
       me,

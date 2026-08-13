@@ -790,9 +790,14 @@ function buildSeatChoice(entry) {
     if (active !== null && seat.alias === active.alias) option.selected = true;
     select.append(option);
   }
-  // The row itself is a link: without these, choosing a seat would open the room.
-  for (const type of ["click", "keydown", "mousedown"]) {
-    select.addEventListener(type, (event) => event.stopPropagation());
+  // The row itself is a link, so every event this control raises has to stop at the
+  // control. These sit on the WRAPPER, not the select: the visible "Join as"
+  // caption is part of the label, and a click on it bubbles to the row exactly like
+  // a click on the row's own text would — which opened the room while the user was
+  // only trying to pick a seat (@re1). Listening at the wrapper covers the caption,
+  // the select, and the padding between them in one place.
+  for (const type of ["click", "keydown", "mousedown", "pointerdown"]) {
+    wrap.addEventListener(type, (event) => event.stopPropagation());
   }
   select.addEventListener("change", (event) => {
     event.stopPropagation();
