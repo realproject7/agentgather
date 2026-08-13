@@ -31,11 +31,34 @@ export interface DefaultEndpointHit {
   text: string;
 }
 
-const SURFACE_DIRS = ["test", path.join("test", "e2e"), path.join("test", "support")];
+// `test/browser-*.test.ts` at the top level, plus EVERY `.ts` beneath `test/e2e`
+// and `test/support` at any depth. The depth matters even though both are flat
+// today (@re1, PR #316): a guard that claims `**` and walks one level deep is a
+// coverage hole that only shows up when someone adds the first nested file, which
+// is the same class of silent gap this ticket exists to close.
+const SURFACE: Array<{ dir: string; recursive: boolean; match: (entry: string) => boolean }> = [
+  { dir: "test", recursive: false, match: (entry) => /^browser-.*\.test\.ts$/.test(entry) },
+  { dir: path.join("test", "e2e"), recursive: true, match: (entry) => entry.endsWith(".ts") },
+  { dir: path.join("test", "support"), recursive: true, match: (entry) => entry.endsWith(".ts") }
+];
 
-function inSurface(dir: string, entry: string): boolean {
-  if (dir === "test") return /^browser-.*\.test\.ts$/.test(entry);
-  return entry.endsWith(".ts");
+async function walk(root: string, dir: string, recursive: boolean, match: (entry: string) => boolean): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(path.join(root, dir), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const rel = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (recursive) files.push(...(await walk(root, rel, true, match)));
+      continue;
+    }
+    if (match(entry.name)) files.push(rel);
+  }
+  return files;
 }
 
 /**
@@ -47,16 +70,8 @@ function inSurface(dir: string, entry: string): boolean {
  */
 export async function findDefaultEndpointUses(repoRoot: string): Promise<DefaultEndpointHit[]> {
   const hits: DefaultEndpointHit[] = [];
-  for (const dir of SURFACE_DIRS) {
-    let entries: string[];
-    try {
-      entries = await readdir(path.join(repoRoot, dir));
-    } catch {
-      continue;
-    }
-    for (const entry of entries.sort()) {
-      if (!inSurface(dir, entry)) continue;
-      const file = path.join(dir, entry);
+  for (const surface of SURFACE) {
+    for (const file of await walk(repoRoot, surface.dir, surface.recursive, surface.match)) {
       const text = await readFile(path.join(repoRoot, file), "utf8");
       text.split("\n").forEach((line, index) => {
         if (!DEFAULT_ENDPOINT_PATTERN.test(line)) return;

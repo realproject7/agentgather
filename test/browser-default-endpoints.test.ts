@@ -9,6 +9,8 @@
 // remembering to use a fixture URL and that is precisely the state that produced
 // the rows.
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -52,4 +54,39 @@ test("the scan detects a default endpoint in code and ignores one in a comment (
   // ...and the replacements it steers towards are not themselves hits.
   assert.equal(DEFAULT_ENDPOINT_PATTERN.test(`const dashboard = "http://${host}:9";`), false);
   assert.equal(DEFAULT_ENDPOINT_PATTERN.test("const dashboard = fixture.baseUrl;"), false);
+});
+
+// @re1, PR #316 — the guard claims `test/e2e/**` and `test/support/**`. Both are
+// flat today, so a one-level walk would pass every assertion above while silently
+// missing the first nested file anyone adds. That is the same shape of gap this
+// ticket exists to close, so recursion is proven against a real tree rather than
+// asserted in a comment.
+test("the scan walks e2e and support to any depth (#305)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-scan-"));
+  const write = async (rel: string, body: string): Promise<void> => {
+    await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
+    await writeFile(path.join(root, rel), body, "utf8");
+  };
+  const host = "127.0.0.1";
+  const port = 8788;
+  const offending = `const dashboard = "http://${host}:${port}";\n`;
+
+  await write(path.join("test", "browser-x.test.ts"), offending);
+  await write(path.join("test", "e2e", "nested", "deep.test.ts"), offending);
+  await write(path.join("test", "support", "a", "b", "helper.ts"), offending);
+  // Not in the surface: a top-level `test/*.ts` that is not a browser test.
+  await write(path.join("test", "cli-thing.test.ts"), offending);
+  // A comment naming a default is allowed anywhere in the surface.
+  await write(path.join("test", "support", "note.ts"), `// see http://${host}:${port} — never use it\n`);
+
+  const hits = await findDefaultEndpointUses(root);
+  assert.deepEqual(
+    hits.map((hit) => hit.file).sort(),
+    [
+      path.join("test", "browser-x.test.ts"),
+      path.join("test", "e2e", "nested", "deep.test.ts"),
+      path.join("test", "support", "a", "b", "helper.ts")
+    ].sort(),
+    "the scan missed a nested file, or reached outside its surface"
+  );
 });
