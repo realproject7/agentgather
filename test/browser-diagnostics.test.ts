@@ -7,7 +7,9 @@
 // the file on disk is read back and searched. Asserting on config would prove the
 // intent; only reading the artifact proves the outcome.
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -254,4 +256,127 @@ test("a loaded page whose action issues nothing still reads as never-requested (
     await closeServer(server);
     if (artifact) await rm(artifact, { force: true });
   }
+});
+
+// ---- #318: the classifier must decide by the RUNTIME test name ----------------
+//
+// #303's inventory kept each block's title as raw source text, so a title spelled
+// `record\'s` never equalled the name node reports at runtime. The status then
+// fell through to "outside the browser wait surface" for a block that IS in the
+// surface, IS covered, and whose recorder had just written the artifact listed in
+// the same report — the instrument lying about its own coverage.
+//
+// The fixture lives in its own `.txt` beside the guard's gap sample rather than
+// inside it: that sample's block counts are asserted by another file's tests, and
+// this ticket does not own them.
+
+const diagRepoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const attachmentStatusScript = path.join(diagRepoRoot, "scripts", "diagnostics-attachment-status.mjs");
+
+function runNode(args: string[], env: NodeJS.ProcessEnv, cwd: string): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, { cwd, env: { ...process.env, ...env } });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stderr }));
+  });
+}
+
+// A tree holding only the escaped-title fixture, so the status classifies against
+// titles whose source spelling differs from their runtime name.
+async function escapedTitleTree(): Promise<string> {
+  const fixture = await readFile(path.join(diagRepoRoot, "test", "support", "wait-surface-escaped-titles.txt"), "utf8");
+  // The fixture must really carry the escapes; one that lost them would make
+  // every assertion below vacuous.
+  assert.match(fixture, /an escaped \\'quote\\'/, "the fixture lost its escaped quote");
+  assert.match(fixture, /\\u00e9/, "the fixture lost its unicode escape");
+  assert.match(fixture, /\\x41/, "the fixture lost its hex escape");
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-escaped-title-tree-"));
+  await mkdir(path.join(root, "test"), { recursive: true });
+  await writeFile(path.join(root, "test", "browser-escaped-sample.test.ts"), fixture, "utf8");
+  return root;
+}
+
+// The TAP form node:test emits: `#` and `\` are escaped in a description.
+async function writeRunRecord(workspace: string, failing: string[]): Promise<void> {
+  const lines = ["TAP version 13", "ok 1 - a test that passed"];
+  failing.forEach((name, index) => lines.push(`not ok ${index + 2} - ${name.replace(/([#\\])/g, "\\$1")}`));
+  await writeFile(path.join(workspace, "test-run.tap"), `${lines.join("\n")}\n`, "utf8");
+}
+
+test("an instrumented failure whose title carries escaped source syntax reads as attached, never outside the surface (#318)", async () => {
+  const root = await escapedTitleTree();
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-escaped-title-status-"));
+  await mkdir(path.join(workspace, "test-artifacts"), { recursive: true });
+  await writeFile(
+    path.join(workspace, "test-artifacts", "a-wired-block-with-an-escaped-title.json"),
+    JSON.stringify({ attached: true, failure: SECRET }),
+    "utf8"
+  );
+
+  // The RUNTIME names. The source spells the first `...escaped \'quote\', a
+  // \u00e9, and a \x41...`; a classifier comparing against that spelling is the
+  // failure this test exists for.
+  const instrumented = "a wired block with an escaped 'quote', a \u00e9, and a A (#318)";
+  const backticked = "a wired block titled with a backtick and a \u2019quote\u2019 (#318)";
+  const uninstrumented = "cli room create writes a room directory";
+  await writeRunRecord(workspace, [instrumented, backticked, uninstrumented]);
+
+  const result = await runNode([attachmentStatusScript], { BROWSER_SURFACE_ROOT: root }, workspace);
+  assert.equal(result.code, 0, result.stderr);
+  const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
+
+  // Read each verdict by name. Matching the whole document would let these three
+  // failures satisfy one another's assertions.
+  const verdictFor = (name: string): string => {
+    const line = written.split("\n").find((entry) => entry.startsWith(`- \`${name}\``));
+    assert.ok(line !== undefined, `no verdict line for ${name} in:\n${written}`);
+    return line;
+  };
+
+  assert.match(verdictFor(instrumented), /recorder ATTACHED and wrote/);
+  assert.match(verdictFor(instrumented), /a-wired-block-with-an-escaped-title\.json/);
+  assert.doesNotMatch(
+    verdictFor(instrumented),
+    /outside the browser wait surface/,
+    "an attached artifact was reported as outside the surface"
+  );
+
+  // A backtick-quoted title is a different AST node and must resolve the same way.
+  // It wrote no artifact, so its honest verdict is NOT attached — but it is still
+  // inside the surface, which is the part the old reader got wrong.
+  assert.match(verdictFor(backticked), /NOT attached/);
+  assert.doesNotMatch(verdictFor(backticked), /outside the browser wait surface/);
+
+  // NEGATIVE CONTROL: without this, a classifier that called everything "inside"
+  // would satisfy every assertion above.
+  assert.match(verdictFor(uninstrumented), /outside the browser wait surface/);
+  assert.doesNotMatch(verdictFor(uninstrumented), /ATTACHED/);
+
+  // The redaction contract is unchanged: the status names files, never reads one.
+  assert.equal(written.includes(SECRET), false, "the status must not read artifact contents");
+});
+
+test("the inventory reads a block title as its parsed value, across every escape form (#318)", async () => {
+  // A newline cannot be proved through the run record — a real newline would break
+  // TAP's one-line `not ok N - <name>` form — so the contract is checked directly
+  // on the reader. Imported by absolute URL because this file runs from `dist`.
+  const surface = (await import(
+    pathToFileURL(path.join(diagRepoRoot, "scripts", "browser-wait-surface.mjs")).href
+  )) as { testBlocks: (source: string) => Array<{ title: string }> };
+  const fixture = await readFile(path.join(diagRepoRoot, "test", "support", "wait-surface-escaped-titles.txt"), "utf8");
+  const titles = surface.testBlocks(fixture).map((block) => block.title);
+
+  assert.deepEqual(titles, [
+    "a wired block with an escaped 'quote', a \u00e9, and a A (#318)",
+    "a wired block titled with a backtick and a \u2019quote\u2019 (#318)",
+    "a wired block whose title has a \n newline (#318)"
+  ]);
+  // Spelled out rather than trusted to the array above: these are the exact
+  // characters the escapes must resolve to, not the escapes themselves.
+  assert.ok(titles[0]?.includes("'") && !titles[0]?.includes("\\'"), "an escaped quote must resolve");
+  assert.ok(titles[0]?.includes("\u00e9") && !titles[0]?.includes("u00e9"), "a unicode escape must resolve");
+  assert.ok(titles[0]?.includes("A") && !titles[0]?.includes("x41"), "a hex escape must resolve");
+  assert.ok(titles[2]?.includes("\n") && !titles[2]?.includes("\\n"), "a newline escape must resolve");
 });

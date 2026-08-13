@@ -1,0 +1,68 @@
+// #318 fixture, not a test. `browser-diagnostics.test.ts` copies this into a
+// throwaway tree so the status classifier can be driven over titles whose SOURCE
+// spelling differs from their RUNTIME name.
+//
+// Kept separate from `wait-surface-sample.txt` on purpose: that sample is the
+// coverage guard's gap fixture and its block counts are asserted elsewhere.
+// Adding blocks to it would have made this ticket edit a test file it does not
+// own. Stored as `.txt` for the same reason the other sample is — its playwright
+// import would otherwise make the file that reads it look like a browser test to
+// the survey it is checking.
+import test from "node:test";
+import { chromium } from "playwright";
+
+// An escaped quote, a unicode escape, and a hex escape in one title. At runtime
+// node names this block:
+//   a wired block with an escaped 'quote', a \u00e9, and a A (#318)
+test("a wired block with an escaped \'quote\', a \u00e9, and a \x41 (#318)", async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-wired-block-with-an-escaped-title", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+// A second literal kind. A no-substitution template is a different AST node from
+// a string literal, and its runtime name is its parsed text just the same — so a
+// reader has to handle both or it will call this block unnamed and drop its
+// failures out of the surface entirely.
+test(`a wired block titled with a backtick and a \u2019quote\u2019 (#318)`, async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-wired-block-titled-with-a-backtick", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+// A newline escape. This one is exercised at the parser level only: a real
+// newline in a TAP description would break the one-line `not ok N - <name>`
+// record, so proving it through the run record is not possible — but the reader
+// must still resolve it the way the runtime does.
+test("a wired block whose title has a \n newline (#318)", async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-wired-block-with-a-newline-title", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
