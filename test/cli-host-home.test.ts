@@ -6,7 +6,7 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 import type { CliContext } from "../src/cli/context.js";
-import { runRoomCommand } from "../src/cli/commands/room/index.js";
+import { runRoomCommand, type RoomCommandHooks } from "../src/cli/commands/room/index.js";
 import { recordJoinedRoom, writeCurrent } from "../src/cli/state.js";
 import { readParticipants, readRoomState, roomPaths } from "../src/storage/index.js";
 
@@ -71,10 +71,24 @@ async function reserveRefusedPort(): Promise<number> {
   return port;
 }
 
-// The complete host-only family named by #310. The order is also a valid order to
-// run them in against a real host home, which the last test does: the forum
-// mutations follow the post they act on, and `close` comes last.
-const HOST_ONLY_FAMILY: ReadonlyArray<{ command: string; argv: string[] }> = [
+// A bind failure injected into `room serve`, using the same seam #240 gave the
+// listen path. In the host-home run below, `serve` must reach its listen step and
+// then stop there — a real bind would hold the port and block on SIGINT forever.
+const SERVE_BIND_FAILURE: RoomCommandHooks = {
+  listen: async () => ({ ok: false, error: Object.assign(new Error("listen failed"), { code: "EADDRNOTAVAIL" }) })
+};
+
+// The complete host-only family: the twelve subcommands #310 names, plus the three
+// host-runtime commands @re1 identified in review. `serve` is the reason they
+// belong here — it does not read host files, it stands the host's room server up
+// over this home's room store and rewrites `current-room.json` on a successful
+// bind, so from a participant home it would bind a port and then serve a room
+// whose state is not there.
+//
+// The order is also a valid order to run them in against a real host home, which
+// the last test does: the forum mutations follow the post they act on, the runtime
+// commands precede `close`, and `close` comes last.
+const HOST_ONLY_FAMILY: ReadonlyArray<{ command: string; argv: string[]; hooks?: RoomCommandHooks }> = [
   { command: "room invite", argv: ["invite", "project7", "--kind", "human"] },
   { command: "room invite-card", argv: ["invite-card", "project7"] },
   { command: "room channel-create", argv: ["channel-create", "design", "--type", "chat"] },
@@ -86,6 +100,9 @@ const HOST_ONLY_FAMILY: ReadonlyArray<{ command: string; argv: string[] }> = [
   { command: "room attendance set", argv: ["attendance", "set", "manual-ok"] },
   { command: "room session start", argv: ["session", "start", "--duration-m", "15"] },
   { command: "room session end", argv: ["session", "end"] },
+  { command: "room launch", argv: ["launch", "--json"] },
+  { command: "room runtime-status", argv: ["runtime-status", "--json"] },
+  { command: "room serve", argv: ["serve"], hooks: SERVE_BIND_FAILURE },
   { command: "room close", argv: ["close"] }
 ];
 
@@ -117,9 +134,9 @@ function noCurrentRoomError(command: string): string {
   ].join("\n");
 }
 
-async function runFailing(argv: string[], context: CliContext): Promise<Error> {
+async function runFailing(argv: string[], context: CliContext, hooks: RoomCommandHooks = {}): Promise<Error> {
   try {
-    await runRoomCommand(argv, context);
+    await runRoomCommand(argv, context, hooks);
   } catch (error) {
     assert.ok(error instanceof Error, `expected an Error from room ${argv.join(" ")}`);
     return error;
@@ -180,8 +197,8 @@ test("the reported case: room invite in a participant-only home names the condit
 
 test("every host-only room command reports a participant-only home with the participant text (#310)", async () => {
   const { participant } = await hostAndParticipantHomes();
-  for (const { command, argv } of HOST_ONLY_FAMILY) {
-    const error = await runFailing(argv, participant.context);
+  for (const { command, argv, hooks } of HOST_ONLY_FAMILY) {
+    const error = await runFailing(argv, participant.context, hooks);
     assert.equal(error.message, participantCopyError(command, ROOM), `wrong text for ${command}`);
     assert.notEqual(error.message, unknownRoomError(command, ROOM));
     assert.notEqual(error.message, noCurrentRoomError(command));
@@ -202,8 +219,8 @@ test("every host-only room command reports a room unknown to this home with the 
   });
   await assert.rejects(() => stat(roomPaths(home.context.home, ROOM).room));
 
-  for (const { command, argv } of HOST_ONLY_FAMILY) {
-    const error = await runFailing(argv, home.context);
+  for (const { command, argv, hooks } of HOST_ONLY_FAMILY) {
+    const error = await runFailing(argv, home.context, hooks);
     assert.equal(error.message, unknownRoomError(command, ROOM), `wrong text for ${command}`);
     assert.notEqual(error.message, participantCopyError(command, ROOM));
     assert.notEqual(error.message, noCurrentRoomError(command));
@@ -214,8 +231,8 @@ test("every host-only room command reports a room unknown to this home with the 
 
 test("every host-only room command reports a home with no current room with its own text (#310)", async () => {
   const home = await makeHome();
-  for (const { command, argv } of HOST_ONLY_FAMILY) {
-    const error = await runFailing(argv, home.context);
+  for (const { command, argv, hooks } of HOST_ONLY_FAMILY) {
+    const error = await runFailing(argv, home.context, hooks);
     assert.equal(error.message, noCurrentRoomError(command), `wrong text for ${command}`);
     assert.notEqual(error.message, participantCopyError(command, ROOM));
     assert.notEqual(error.message, unknownRoomError(command, ROOM));
@@ -264,10 +281,17 @@ test("a host home whose room.json was removed is not reported as a participant c
 
 test("a host-owned home still runs the whole host-only family unchanged (#310)", async () => {
   const { host } = await hostAndParticipantHomes();
-  for (const { command, argv } of HOST_ONLY_FAMILY) {
+  for (const { command, argv, hooks } of HOST_ONLY_FAMILY) {
     host.stdout.chunks = [];
-    assert.equal(await runRoomCommand(argv, host.context), 0, `${command} did not succeed in the host home`);
+    const code = await runRoomCommand(argv, host.context, hooks);
+    // `serve` is the one member that cannot succeed here without holding a port
+    // and blocking on SIGINT, so it runs with an injected bind failure. Exit 1
+    // from the bind path is still proof it got past the classification — a
+    // participant home never reaches `listen` at all.
+    const expected = command === "room serve" ? 1 : 0;
+    assert.equal(code, expected, `${command} did not get past classification in the host home`);
   }
+  assert.match(host.stderr.text(), /Cannot bind 127\.0\.0\.1:\d+: address not available/);
 
   // Not just exit codes: the host home's own files carry what the family wrote.
   const paths = roomPaths(host.context.home, ROOM);

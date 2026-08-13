@@ -804,7 +804,7 @@ async function roomDashboard(argv: string[], context: CliContext): Promise<numbe
 // plan carries no tokens.
 async function roomLaunch(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room launch");
   const currentUrl = new URL(current.baseUrl);
   const port = Number(flagString(args, "port") ?? (currentUrl.port || "8787"));
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -851,7 +851,7 @@ async function roomLaunch(argv: string[], context: CliContext): Promise<number> 
 // manual-run-required (token-free).
 async function roomRuntimeStatus(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room runtime-status");
   const publicUrl = sanitizePublicUrl(normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl));
   const [tmuxAvailable, runtimeReachable] = await Promise.all([hasCommand("tmux"), probeRuntime(publicUrl)]);
   const runtimeState = resolveRuntimeState(tmuxAvailable, runtimeReachable);
@@ -921,7 +921,11 @@ async function probeRuntime(publicUrl: string): Promise<boolean> {
 
 async function roomServe(argv: string[], context: CliContext, hooks: RoomCommandHooks = {}): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
+  // Host-only (#310, @re1): `serve` is not a read of host files — it stands up the
+  // host's room server over this home's room store and rewrites `current-room.json`
+  // on a successful bind. From a participant home it would bind a port and then
+  // serve a room whose state does not exist here.
+  const current = await requireHostRoom(context.home, "room serve");
   const currentUrl = new URL(current.baseUrl);
   const portValue = flagString(args, "port") ?? (currentUrl.port || "8787");
   const port = Number(portValue);
