@@ -11,6 +11,7 @@
 // write on failure, or be listed in EXCEPTIONS with a stated reason.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 // Concrete, per-block reasons a candidate cannot use the recorder. Empty today:
 // every block in the surface is wired. A future entry must name the block and the
@@ -24,6 +25,35 @@ const WAIT_CALL = /\.(waitFor|waitForSelector|waitForFunction|waitForEvent|waitF
 // ENTIRELY — not reported uncovered, absent. Reaching a browser helper counts as
 // driving a browser (see `browserHelpers`).
 const DRIVES_BROWSER = /chromium\.launch|\.newPage\(|\bpage\b|fixture\.diagnostics/;
+
+// The title this block will carry AT RUNTIME (#318).
+//
+// This used to be the raw source slice between the quotes. A title spelled
+// `record\'s` in the source is `record's` when node runs it, so the two never
+// matched, and `diagnostics-attachment-status` reported an INSTRUMENTED failure as
+// outside the wait surface while the recorder's own artifact sat in the same
+// output — the instrument lying about its own coverage, which is the #293 class of
+// defect one level up.
+//
+// The fix is to parse the literal rather than to unescape it. TypeScript's `.text`
+// on a string or no-substitution template literal IS the parsed value, so `\'`,
+// `\n`, `é`, `\x41` and a backtick-quoted title all resolve exactly as the
+// runtime resolves them — including the spelling nobody has written yet, which is
+// the part a hand-written unescaper can never promise.
+//
+// Returns null when the first argument is not a single literal (a template with a
+// substitution, a concatenation, a variable). Those have no fixed runtime name to
+// match, and inventing one would be a different way of guessing.
+function runtimeTitle(text) {
+  const parsed = ts.createSourceFile("block.ts", text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const [statement] = parsed.statements;
+  if (statement === undefined || !ts.isExpressionStatement(statement)) return null;
+  const call = statement.expression;
+  if (!ts.isCallExpression(call)) return null;
+  const [first] = call.arguments;
+  if (first === undefined) return null;
+  return ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first) ? first.text : null;
+}
 
 // Split a test file into its top-level `test(...)` blocks. A block runs from the
 // line beginning `test(` to the next line that is exactly `});`.
@@ -40,7 +70,7 @@ export function testBlocks(source) {
     while (end < lines.length && lines[end] !== "});") end += 1;
     const text = lines.slice(i, Math.min(end + 1, lines.length)).join("\n");
     blocks.push({
-      title: /^test\(\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1] ?? `<unnamed at line ${i + 1}>`,
+      title: runtimeTitle(text) ?? `<unnamed at line ${i + 1}>`,
       line: i + 1,
       text
     });

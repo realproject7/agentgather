@@ -53,6 +53,9 @@ async function syntheticTree(): Promise<string> {
   // browser of its own, which is the shape @re2 found in `startMixedFixture`.
   assert.match(sample, /async function unwiredIndirectSession/);
   assert.match(sample, /test\("a block that reaches a browser two hops away"/);
+  // #318: the block whose title is spelled with escapes. Without it the escaped-
+  // title test below would prove nothing.
+  assert.match(sample, /test\("a wired block with an escaped \\'quote\\'/);
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-wait-surface-fixture-"));
   await mkdir(path.join(root, "test"), { recursive: true });
   await writeFile(path.join(root, "test", "browser-fixture-sample.test.ts"), sample, "utf8");
@@ -110,7 +113,9 @@ test("the guard catches a browser session that lives in a HELPER, not a block (#
   // …while the helper that DOES attach and write is not flagged — a guard that
   // reported every helper would pass this test while being useless.
   assert.equal(/helper wiredHelperSession\(\)/.test(result.stderr), false, "a covered helper must not be flagged");
-  assert.match(result.stdout, /\| 4 \| 1 \| 3 \| 1 \|/, `blocks and helpers must both be counted:\n${result.stdout}`);
+  // 5 blocks / 2 covered since #318 added the escaped-title block, which is wired;
+  // 3 helpers / 1 covered is unchanged.
+  assert.match(result.stdout, /\| 5 \| 2 \| 3 \| 1 \|/, `blocks and helpers must both be counted:\n${result.stdout}`);
 });
 
 // A run record in the form node:test emits, so the status is driven by what the
@@ -200,6 +205,61 @@ test("a failing browser test with NO record at all reads as NOT attached, not as
   assert.match(written, /NOT attached — no record at all/);
   assert.match(written, /fixture setup, browser launch/);
   assert.equal(/attached and quiet/i.test(written), false, "absence must never be reported as quiet");
+});
+
+// #318 — the instrument lying about its own coverage.
+//
+// The inventory kept each block's title as RAW SOURCE, so a title spelled with an
+// escape (`record\'s`) never equalled the name node reports at runtime. The
+// classifier then fell through to "outside the browser wait surface" for a block
+// that is in the surface, is covered, and whose recorder had just written the
+// artifact sitting in the same output. Every downstream judgement about this
+// defect family rests on that line being true.
+//
+// The negative control matters as much as the positive: a classifier that called
+// everything "inside" would satisfy the first assertion and be just as useless.
+test("an instrumented failure whose title carries escaped source syntax reads as attached, never outside the surface (#318)", async () => {
+  const root = await syntheticTree();
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "agentgather-status-escaped-title-"));
+  await mkdir(path.join(workspace, "test-artifacts"), { recursive: true });
+  // The label the fixture's escaped-title block writes under.
+  await writeFile(
+    path.join(workspace, "test-artifacts", "a-wired-block-with-an-escaped-title.json"),
+    JSON.stringify({ attached: true, failure: "tgl_never_echo_this_secret" }),
+    "utf8"
+  );
+  // The RUNTIME name — what node reports and what TAP carries. The source spells
+  // the same title `...escaped \'quote\', a é, and a \x41...`; if the
+  // classifier compares against that spelling, this test is the failure.
+  const instrumented = "a wired block with an escaped 'quote', a é, and a A (#318)";
+  const uninstrumented = "cli room create writes a room directory";
+  await runRecord(workspace, [instrumented, uninstrumented]);
+  const result = await run([statusScript], { cwd: workspace, env: { BROWSER_SURFACE_ROOT: root } });
+  assert.equal(result.code, 0, result.stderr);
+
+  const written = await readFile(path.join(workspace, "test-artifacts", "attachment-status.md"), "utf8");
+  // Read the verdict for each test by name. Matching the whole document would let
+  // the two failing tests' verdicts satisfy each other's assertions.
+  const verdictFor = (name: string): string => {
+    const line = written.split("\n").find((entry) => entry.startsWith(`- \`${name}\``));
+    assert.ok(line !== undefined, `no verdict line for ${name} in:\n${written}`);
+    return line;
+  };
+
+  assert.match(verdictFor(instrumented), /recorder ATTACHED and wrote/);
+  assert.match(verdictFor(instrumented), /a-wired-block-with-an-escaped-title\.json/);
+  assert.doesNotMatch(
+    verdictFor(instrumented),
+    /outside the browser wait surface/,
+    "an attached artifact was reported as outside the surface"
+  );
+
+  // Negative control: a test that really is outside the surface still says so.
+  assert.match(verdictFor(uninstrumented), /outside the browser wait surface/);
+  assert.doesNotMatch(verdictFor(uninstrumented), /ATTACHED/);
+
+  // The redaction contract is unchanged: the status names files, never reads one.
+  assert.equal(written.includes("tgl_never_echo_this_secret"), false, "the status must not read artifact contents");
 });
 
 test("a failing test outside the browser surface is named as such (#303)", async () => {
