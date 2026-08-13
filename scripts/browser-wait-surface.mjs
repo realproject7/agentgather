@@ -9,6 +9,18 @@
 // A block is in the surface if it drives a browser at all: it launches one, opens
 // a page, or uses a fixture page. Every such block must reach a `diagnostics`
 // write on failure, or be listed in EXCEPTIONS with a stated reason.
+//
+// #322 — and it must also carry a title this script can resolve to the name node
+// reports at runtime. If you have arrived here because a table-driven or otherwise
+// parameterised browser test just failed the guard: **that refusal is deliberate,
+// and EXCEPTIONS deliberately does not cover it** (@re2). EXCEPTIONS excuses a
+// block from ATTACHING a recorder, which is a property of the block. An
+// unresolvable title is a property of the whole diagnostic chain: the status
+// matches a failing test to its block by runtime name, so a block without one has
+// its failures reported as outside the wait surface even when the recorder
+// attached and wrote — a false sentence no exception list can make true. An entry
+// keyed on `<unnamed at line N>` would also break the moment anything above it
+// moved. Give the block a literal title, or parameterise the body under one.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -69,8 +81,14 @@ export function testBlocks(source) {
     let end = i;
     while (end < lines.length && lines[end] !== "});") end += 1;
     const text = lines.slice(i, Math.min(end + 1, lines.length)).join("\n");
+    // #322: `resolved` is carried explicitly rather than inferred from the title
+    // string. A caller that had to sniff for `<unnamed` would be one rename away
+    // from silently treating an unresolved block as a named one — the same shape of
+    // mistake #318 fixed.
+    const parsed = runtimeTitle(text);
     blocks.push({
-      title: runtimeTitle(text) ?? `<unnamed at line ${i + 1}>`,
+      title: parsed ?? `<unnamed at line ${i + 1}>`,
+      resolved: parsed !== null,
       line: i + 1,
       text
     });
@@ -207,6 +225,12 @@ export function surveyBrowserWaitSurface(repoRoot) {
       const exception = EXCEPTIONS.find((entry) => entry.file === name && entry.title === block.title);
       blocks.push({
         title: block.title,
+        // #322: whether this block has a statically knowable runtime name. Only
+        // blocks that reach HERE are in the wait surface, so an unresolvable title
+        // in a CLI or storage test never becomes this guard's business — a guard
+        // that fires broadly gets switched off, and then there is neither the
+        // guard nor the loudness (@re2).
+        resolved: block.resolved,
         line: block.line,
         waits: countCeilingWaits(block.text),
         // Attached AND written on failure. A recorder that is created and never
@@ -241,6 +265,12 @@ export function surveyBrowserWaitSurface(repoRoot) {
       covered: blocks.filter((block) => block.covered).length,
       uncovered: blocks.filter((block) => !block.covered && block.exception === null),
       excepted: blocks.filter((block) => !block.covered && block.exception !== null),
+      // #322: in the surface, but carrying no statically knowable runtime name.
+      // Separate from `uncovered` on purpose — such a block can be perfectly
+      // wired, write its artifact, and STILL have its failure classified as
+      // outside the wait surface, because the status matches a failing test by
+      // name. That is #318's own acceptance criterion failing by another route.
+      unresolvedTitles: blocks.filter((block) => !block.resolved),
       launchesInFixture: fixtureLaunchesBrowser(source),
       setupCovered
     });
@@ -293,9 +323,35 @@ if (import.meta.filename === process.argv[1]) {
       (helper) => `${entry.file}:${helper.line} helper ${helper.name}() drives a browser and writes nothing on failure`
     )
   );
+  // #322: a block in the surface whose title cannot be resolved statically. It is
+  // reported apart from UNCOVERED because it is a different failure: the block may
+  // attach and write perfectly, and its failure will STILL read as outside the
+  // wait surface, because the status matches a failing test by its runtime name
+  // and this block has none to match. Located, not counted — "3 unresolved" sends
+  // the reader looking; naming them is actionable.
+  const titleGaps = inventory.flatMap((entry) =>
+    entry.unresolvedTitles.map(
+      (block) =>
+        `${entry.file}:${block.line} a browser block whose title is not a single literal, so it has no runtime name to match a failure against`
+    )
+  );
+  if (titleGaps.length > 0) {
+    console.error("\nUNRESOLVED TITLE:");
+    for (const gap of titleGaps) console.error("  - " + gap);
+    console.error(
+      "\n  Give the block a literal title. A dynamic one cannot be matched to a failing\n" +
+        "  test by name, so its failures classify as outside the browser wait surface\n" +
+        "  even when the recorder attached and wrote (#318, #322)."
+    );
+  }
   if (gaps.length > 0 || setupGaps.length > 0 || helperGaps.length > 0) {
     console.error("\nUNCOVERED:");
     for (const gap of [...gaps, ...helperGaps, ...setupGaps]) console.error("  - " + gap);
+  }
+  // Both categories fail the guard, and both are reported before exiting — a run
+  // with an unresolved title AND an uncovered block must show the reader both,
+  // not the first one it happened to find.
+  if (titleGaps.length > 0 || gaps.length > 0 || setupGaps.length > 0 || helperGaps.length > 0) {
     process.exit(1);
   }
 }

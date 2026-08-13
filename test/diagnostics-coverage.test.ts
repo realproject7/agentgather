@@ -113,6 +113,67 @@ test("the guard catches a browser session that lives in a HELPER, not a block (#
   assert.match(result.stdout, /\| 4 \| 1 \| 3 \| 1 \|/, `blocks and helpers must both be counted:\n${result.stdout}`);
 });
 
+// #322 — a browser block whose title cannot be resolved to a runtime name.
+//
+// #318 stopped a RESOLVABLE title from being misread. This is the other route to
+// the same false sentence: a block that is fully wired, writes its artifact, and
+// still has its failure classified as outside the wait surface, because the status
+// matches a failing test by name and this block has none to match.
+test("the guard FAILS on a browser block whose title cannot be resolved, and says where (#322)", async () => {
+  const fixture = await readFile(path.join(repoRoot, "test", "support", "wait-surface-dynamic-title.txt"), "utf8");
+  // Positive controls on the fixture: without each of these the assertions below
+  // would prove nothing.
+  assert.match(fixture, /test\(ASSEMBLED_TITLE, async/, "the fixture lost its variable-titled block");
+  assert.match(fixture, /test\(`\$\{ASSEMBLED_TITLE\} in a template/, "the fixture lost its template-titled block");
+  assert.match(fixture, /test\("a normally titled covered block \(#322\)"/, "the fixture lost its named control");
+  assert.match(fixture, /with no browser at all/, "the fixture lost its non-browser block");
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-dynamic-title-fixture-"));
+  await mkdir(path.join(root, "test"), { recursive: true });
+  await writeFile(path.join(root, "test", "browser-dynamic-sample.test.ts"), fixture, "utf8");
+
+  const result = await run([surveyScript, root]);
+  assert.equal(result.code, 1, `an unresolvable title must fail the guard:\n${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /UNRESOLVED TITLE:/);
+
+  // LOCATED, not counted. "2 titles unresolved" sends the reader looking; naming
+  // the file and line is what makes it actionable.
+  assert.match(result.stderr, /browser-dynamic-sample\.test\.ts:17 a browser block whose title is not a single literal/);
+  assert.match(result.stderr, /browser-dynamic-sample\.test\.ts:34 a browser block whose title is not a single literal/);
+
+  // Assert the reported SET, by line, not the absence of a title string: the
+  // message deliberately carries no title (an unresolved block has none), so an
+  // assertion phrased as "the named block is absent from stderr" could never fail
+  // and would be worth nothing.
+  //
+  // Line 52 is the normally titled covered block and line 71 is a dynamic title
+  // with no browser. Both are in the same fixture and neither may be reported:
+  // 52 keeps "exit 1 on a gap" from being satisfied by a guard that flags every
+  // block it sees, and 71 keeps it from firing outside the wait surface, where it
+  // would be a nuisance and get switched off.
+  const reported = result.stderr
+    .split("UNRESOLVED TITLE:")[1]
+    ?.split("\n")
+    .filter((line) => line.trimStart().startsWith("- "))
+    .map((line) => /browser-dynamic-sample\.test\.ts:(\d+)/.exec(line)?.[1] ?? line.trim());
+  assert.deepEqual(reported, ["17", "34"], `only the two unresolvable titles may be reported:\n${result.stderr}`);
+
+  // The two failures are independent: these blocks ARE covered. Reporting them as
+  // uncovered would be a different, wrong diagnosis of the same source line.
+  assert.match(result.stdout, /\| 3 \| 3 \| 0 \| 0 \|/, `the surface blocks are covered:\n${result.stdout}`);
+  assert.equal(/UNCOVERED:/.test(result.stderr), false, "an unresolved title is not a coverage gap");
+});
+
+test("a tree whose titles all resolve produces no unresolved-title warning at all (#322)", async () => {
+  // The negative control for the test above: without it, a guard that warned
+  // unconditionally would pass every assertion there. Driven over the REAL tree,
+  // which is the population the guard actually runs against.
+  const result = await run([surveyScript]);
+  assert.equal(result.code, 0, `the real tree must stay clean:\n${result.stderr}`);
+  assert.equal(/UNRESOLVED TITLE/.test(result.stderr), false, `no warning is due:\n${result.stderr}`);
+  assert.equal(/UNRESOLVED TITLE/.test(result.stdout), false, "the inventory must stay quiet too");
+  assert.equal(/<unnamed at line/.test(result.stdout), false, "no block in the real surface is unnamed");
+});
+
 // A run record in the form node:test emits, so the status is driven by what the
 // run actually reported rather than by what the sources contain.
 async function runRecord(workspace: string, failing: string[], passing = 1): Promise<void> {
