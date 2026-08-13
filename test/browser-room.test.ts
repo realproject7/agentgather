@@ -11,6 +11,10 @@ import { createRoomHttpServer, participantTokenHash } from "../src/server/index.
 import { closeServer } from "./support/close-server.js";
 import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
 
+// #305 — the discard port. Binding it requires root, so no user-level service can
+// be listening: an address a test can name without ever reaching a real one.
+const UNREACHABLE_DASHBOARD = "http://127.0.0.1:9";
+
 async function makeRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agentgather-browser-test-"));
 }
@@ -373,7 +377,13 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
     const page = await browser.newPage({ viewport: { width: 960, height: 700 } });
     // #303: failure-only capture; coverage is the 30s wait surface.
     diagnostics = recordBrowserDiagnostics(page, page.context());
-    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent("http://127.0.0.1:8788")}#token=${fixture.hostToken}`);
+    // #305: NEVER the product default dashboard port. The page posts its join to
+    // whatever this address names (`bridgeJoinToDashboard`), so on a machine
+    // running a real dashboard the default port wrote `browser-<random>` rows into
+    // the developer's own store — 66 of them. `127.0.0.1:9` is the discard port:
+    // binding it needs root, so nothing user-level can be listening and the POST is
+    // always refused. The test only needs an ADDRESS to render, not a live service.
+    await page.goto(`${fixture.baseUrl}/?dashboard=${encodeURIComponent(UNREACHABLE_DASHBOARD)}#token=${fixture.hostToken}`);
     await page.waitForSelector("text=Ship the browser room safely.");
     const home = page.locator("#dashboard-home");
     await home.waitFor();
@@ -382,7 +392,7 @@ test("room opened from the dashboard exposes a same-tab dashboard home link", as
     // expectation carried the trailing slash `toString()` adds, which is the same
     // pass-through that let a path, a query and a `#token=` fragment reach this
     // href from a stored value.
-    assert.equal(await home.getAttribute("href"), "http://127.0.0.1:8788");
+    assert.equal(await home.getAttribute("href"), UNREACHABLE_DASHBOARD);
     assert.equal(await page.locator("#brand-static").isHidden(), true);
   } catch (error) {
     await captureBrowserFailure(diagnostics, "room-opened-from-the-dashboard-exposes-a-same-ta", error);
