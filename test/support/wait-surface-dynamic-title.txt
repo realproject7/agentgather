@@ -1,0 +1,74 @@
+// #322 fixture, not a test. `diagnostics-coverage.test.ts` copies this into a
+// throwaway tree to prove the wait-surface guard FAILS on a browser block whose
+// title cannot be resolved to a runtime name.
+//
+// Its own file rather than an addition to `wait-surface-sample.txt`: that sample's
+// block counts are asserted by other tests, and #322 does not own them.
+import test from "node:test";
+import { chromium } from "playwright";
+
+const ASSEMBLED_TITLE = "a title held in a variable";
+
+// The defect this fixture exists for. The block is FULLY WIRED — it attaches, it
+// writes on failure, it would be reported `covered` — and it is still broken,
+// because the status matches a failing test by its runtime name and this block has
+// no statically knowable one. That is why unresolved titles are reported apart
+// from uncovered ones: coverage is not the property that fails here.
+test(ASSEMBLED_TITLE, async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-title-held-in-a-variable", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+// The same hole wearing a template: a substitution means there is no fixed name at
+// static-inventory time, however literal the rest of it looks.
+test(`${ASSEMBLED_TITLE} in a template (#322)`, async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-title-in-a-template", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+// The control that keeps "exit 1 on a gap" from being satisfied by a guard that
+// flags every block it sees: a normally titled, covered block in the SAME fixture,
+// which must not appear in the report. Same shape as `wiredHelperSession` in #303.
+test("a normally titled covered block (#322)", async () => {
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    const page = await browser.newPage();
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.waitForSelector("#ready");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-normally-titled-covered-block", error);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+});
+
+// A dynamic title OUTSIDE the wait surface: this block drives no browser, so the
+// guard must ignore it entirely. A version that fired on every unresolved title in
+// the tree would become a nuisance and get switched off — and then there is
+// neither the guard nor the loudness.
+test(ASSEMBLED_TITLE + " with no browser at all", async () => {
+  const total = 1 + 1;
+  if (total !== 2) throw new Error("arithmetic");
+});
