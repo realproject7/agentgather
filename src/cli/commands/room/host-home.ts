@@ -39,20 +39,25 @@ import { readCurrent, type CurrentRoom } from "../../state.js";
 // and token-free: the room id is the only identifier that appears — never
 // `AGENTGATHER_HOME`'s value, an internal file path, or anything out of
 // `tokens.json`.
-export async function requireHostRoom(home: string, command: string): Promise<CurrentRoom> {
-  const relocate = "Run it on the host device, or point AGENTGATHER_HOME at the home that hosts this room.";
+// #314 shares this with `room leave`. The four states are the same question —
+// what does this home hold for the room it names — but the ANSWER differs by
+// command: a host-only command tells you to run it on the host device, while
+// `leave` is a participant command and must never say that. So the classification
+// is shared and the wording is not; two classifiers drifting apart is how one
+// failed read ended up with two policies (@head).
+export type RoomHomeClassification =
+  | { state: "host"; current: CurrentRoom }
+  | { state: "participant"; current: CurrentRoom }
+  | { state: "unknown"; current: CurrentRoom }
+  | { state: "no-current-room"; current: null };
 
+export async function classifyRoomHome(home: string): Promise<RoomHomeClassification> {
   let current: CurrentRoom;
   try {
     current = await readCurrent(home);
   } catch (error) {
     if (!isNotFoundError(error)) throw error;
-    throw new Error(
-      [
-        `\`agentgather ${command}\` is a host-only command and this home has no current room.`,
-        "Run `agentgather room start <room>` to host a room in this home, or `agentgather room join` to join one."
-      ].join("\n")
-    );
+    return { state: "no-current-room", current: null };
   }
 
   const paths = roomPaths(home, current.roomId);
@@ -65,24 +70,41 @@ export async function requireHostRoom(home: string, command: string): Promise<Cu
     // one remaining trace a copy can leave (the dashboard's invite import records
     // the row), and it still means "joined, not hosted".
     const joined = await readJoinedRooms(home);
-    if (joined.every((entry) => entry.roomId !== current.roomId)) {
-      throw new Error(
-        [
-          `\`agentgather ${command}\` is a host-only command and this home does not know room "${current.roomId}".`,
-          "This home has neither a hosted room store nor a joined participant copy of it.",
-          relocate
-        ].join("\n")
-      );
-    }
-    roomDir = [];
+    return joined.some((entry) => entry.roomId === current.roomId)
+      ? { state: "participant", current }
+      : { state: "unknown", current };
   }
 
   const hostOwned = [paths.state, paths.participants].map((file) => path.basename(file));
-  if (hostOwned.some((file) => roomDir.includes(file))) return current;
+  return hostOwned.some((file) => roomDir.includes(file))
+    ? { state: "host", current }
+    : { state: "participant", current };
+}
 
+export async function requireHostRoom(home: string, command: string): Promise<CurrentRoom> {
+  const relocate = "Run it on the host device, or point AGENTGATHER_HOME at the home that hosts this room.";
+  const classification = await classifyRoomHome(home);
+  if (classification.state === "host") return classification.current;
+  if (classification.state === "no-current-room") {
+    throw new Error(
+      [
+        `\`agentgather ${command}\` is a host-only command and this home has no current room.`,
+        "Run `agentgather room start <room>` to host a room in this home, or `agentgather room join` to join one."
+      ].join("\n")
+    );
+  }
+  if (classification.state === "unknown") {
+    throw new Error(
+      [
+        `\`agentgather ${command}\` is a host-only command and this home does not know room "${classification.current.roomId}".`,
+        "This home has neither a hosted room store nor a joined participant copy of it.",
+        relocate
+      ].join("\n")
+    );
+  }
   throw new Error(
     [
-      `\`agentgather ${command}\` is a host-only command and this home is not the host of room "${current.roomId}".`,
+      `\`agentgather ${command}\` is a host-only command and this home is not the host of room "${classification.current.roomId}".`,
       "This home holds a participant copy of that room: this device joined it, so it has none of the room's host files.",
       relocate
     ].join("\n")
