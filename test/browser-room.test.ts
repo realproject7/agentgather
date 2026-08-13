@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
-import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
+import { appendServerMessage, createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
 import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
@@ -4077,6 +4077,76 @@ test("a seeded row shows its author only where the host's log confirms that id (
     // Write the artifact, then rethrow untouched (#303): this must never turn a
     // failure into a pass, and the assertion the runner reports stays the original.
     await captureBrowserFailure(diagnostics, "seeded-author-confirmed-by-host-log-312", error);
+    throw error;
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #312 / @re1's PR-review finding — the confirmation read must cover the seeded id
+// SPAN, not the count of renderable seeded rows.
+//
+// `system` and `status` records are excluded from the store at read time
+// (`isRestorableStoredType`), so the seeded id list is SHORTER than the host's id
+// range whenever such a record sits between two seeded chat rows. Bounding the
+// confirmation read by the seeded COUNT then truncates the host's log before the
+// later ids, and rows the host would have confirmed stay `local copy` — AC1 fails
+// for exactly the rooms most likely to have system chatter.
+//
+// The host log here is: chat, system, chat. The store seeds the two chat rows. A
+// count-bounded read (limit=2) stops at the system record and never sees the
+// second chat row.
+test("an excluded host record between seeded rows does not truncate confirmation (#312)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+    await postMessage(fixture, fixture.reviewerToken, "span line one");
+    // The excluded record, interleaved — this is the row that eats the budget.
+    await appendServerMessage({ root: fixture.root, roomId: fixture.roomId, from: "system", text: "interleaved system line" });
+    await postMessage(fixture, fixture.reviewerToken, "span line two");
+
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const first = hosted.find((m) => m.text === "span line one");
+    const last = hosted.find((m) => m.text === "span line two");
+    assert.ok(first && last, "precondition: both chat rows on the host");
+    assert.ok(last.id - first.id >= 2, "precondition: an excluded record sits between them");
+
+    const key = `agentgather.backup.${fixture.roomId}`;
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.addInitScript(
+      (arg: { k: string; a: number; b: number }) => {
+        window.localStorage.setItem(
+          arg.k,
+          JSON.stringify({
+            messages: [
+              { id: arg.a, from: "impostor", ts: "2026-08-01T00:00:00.000Z", type: "chat", text: "span line one" },
+              { id: arg.b, from: "impostor", ts: "2026-08-01T00:00:01.000Z", type: "chat", text: "span line two" }
+            ]
+          })
+        );
+      },
+      { k: key, a: first.id, b: last.id }
+    );
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector(`li[data-message-id="${last.id}"][data-author-confirmed="true"]`);
+
+    // The LATER seeded row is the one a count-bounded read loses.
+    assert.equal(
+      (await page.locator(`li[data-message-id="${last.id}"] .message-from`).textContent())?.trim(),
+      "reviewer",
+      "a seeded row after an excluded host record must still be confirmed"
+    );
+    assert.equal(
+      (await page.locator(`li[data-message-id="${first.id}"] .message-from`).textContent())?.trim(),
+      "reviewer"
+    );
+    assert.equal(/impostor/.test(await page.locator("#timeline").innerHTML()), false, "the stored alias reached the DOM");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "seeded-confirmation-span-not-count-312", error);
     throw error;
   } finally {
     await browser?.close();

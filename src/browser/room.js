@@ -1133,9 +1133,19 @@ async function confirmSeededAuthors() {
   state.seededConfirmed = true;
   const ids = state.seededIds;
   const lowest = ids[0];
+  const highest = ids[ids.length - 1];
+  // Bound by the id SPAN, not by how many rows were seeded (@re1, PR #315).
+  // `system` and `status` records are dropped from the store at read time
+  // (`isRestorableStoredType`), so whenever one sits between two seeded rows the
+  // host's range holds more records than the store does. A count-bounded read then
+  // truncates the host's log before the later ids and leaves rows the host WOULD
+  // have confirmed saying `local copy` — worst in exactly the rooms with the most
+  // system chatter. The span is the number of ids that can exist in the range, so
+  // it cannot truncate; it is still bounded by #211's cap rather than room size.
+  const span = highest - lowest + 1;
   let payload;
   try {
-    payload = await authFetch(`/messages?since_id=${Math.max(0, lowest - 1)}&limit=${ids.length}`);
+    payload = await authFetch(`/messages?since_id=${Math.max(0, lowest - 1)}&limit=${span}`);
   } catch {
     return;
   }
