@@ -55,7 +55,34 @@ export const DEFAULT_ENDPOINT_PATTERN = /(?:127\.0\.0\.1|localhost|\[::1\]|::1):
  * The exemption is a single named file rather than a category, and the guard
  * asserts that it is the only one.
  */
-export const DEFAULT_PORTS = [8787, 8788] as const;
+const DEFAULT_PORTS = [8787, 8788] as const;
+
+/**
+ * Fixture lines for the guard's own tests.
+ *
+ * The ports are module-PRIVATE (@re1, PR #316): exporting them made the constant
+ * itself a composition source — a scanned test could import it, build
+ * `http://localhost:${DEFAULT_PORTS[1]}`, reach the live dashboard, and carry no
+ * literal for the scan to find. Private is stronger than detected: a
+ * non-exported binding cannot be imported at all, so the compiler refuses the
+ * path rather than a scan reporting it afterwards.
+ *
+ * The guard's tests still need offending inputs, so they get finished STRINGS
+ * built here. A string cannot be recombined into a different address, and the
+ * test file stays free of literals so it remains inside the scanned surface.
+ */
+export function offendingSamples(): { addressed: string[]; split: string[]; clean: string[] } {
+  const [roomPort, dashboardPort] = DEFAULT_PORTS;
+  const aliases = ["127.0.0.1", "localhost", "[::1]", "::1"];
+  return {
+    addressed: aliases.flatMap((host) => [
+      `const dashboard = "http://${host}:${roomPort}";`,
+      `const dashboard = "http://${host}:${dashboardPort}";`
+    ]),
+    split: [`const host = "localhost";`, `const port = ${dashboardPort};`],
+    clean: aliases.map((host) => `const d = "http://${host}:9";`).concat("const d = fixture.baseUrl;")
+  };
+}
 
 /** The one file permitted to name a default port: the definition site above. */
 export const DEFINITION_FILE = path.join("test", "support", "default-endpoint-scan.ts");

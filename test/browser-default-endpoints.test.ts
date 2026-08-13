@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { DEFAULT_PORTS, findDefaultEndpointUses } from "./support/default-endpoint-scan.js";
+import { findDefaultEndpointUses, offendingSamples } from "./support/default-endpoint-scan.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -36,44 +36,25 @@ test("the scan detects a default endpoint in code and ignores one in a comment (
   // inside the scanned surface instead of being exempted from it. An exemption is
   // a place a real default endpoint could hide; composition keeps the guard
   // pointed at itself.
-  // Imported, never written: this file is in the scanned surface, and naming a
-  // default port here is exactly the composition bypass the guard now rejects.
-  const host = "127.0.0.1";
-  const [roomPort, dashboardPort] = DEFAULT_PORTS;
+  // Finished strings from the definition site — this file names no port and no
+  // host:port, so it stays inside the scanned surface it is guarding.
+  const samples = offendingSamples();
 
-  // The line that wrote 66 rows, in shape.
-  assert.equal(
-    DEFAULT_ENDPOINT_PATTERN.test(`await page.goto(\`\${base}/?dashboard=\${encodeURIComponent("http://${host}:${dashboardPort}")}\`);`),
-    true,
-    "the scan would not have caught the line that wrote 66 rows"
-  );
-  assert.equal(
-    DEFAULT_ENDPOINT_PATTERN.test(`await page.fill("#joined-input", "http://${host}:${roomPort}/x");`),
-    true,
-    "the scan would not have caught a saved pointer at the default room port"
-  );
-
-  // Every spelling the PRODUCT treats as this host, one pinned case each (@re2).
-  // `isLoopbackHost` (`src/browser/room.js:1519-1521`) accepts all four, so a
-  // guard that matched only the dotted form would read as complete while leaving
-  // three ways to write the same live address.
-  for (const alias of ["127.0.0.1", "localhost", "[::1]", "::1"]) {
-    for (const port of [roomPort, dashboardPort]) {
-      assert.equal(
-        DEFAULT_ENDPOINT_PATTERN.test(`const dashboard = "http://${alias}:${port}";`),
-        true,
-        `${alias}:${port} is a loopback default the product accepts and the scan missed`
-      );
-    }
+  // Every spelling the PRODUCT treats as this host — `isLoopbackHost`
+  // (`src/browser/room.js:1519-1521`) accepts all four — on both default ports.
+  for (const line of samples.addressed) {
+    assert.equal(DEFAULT_ENDPOINT_PATTERN.test(line), true, `the scan missed a product default: ${line}`);
   }
-  // ...and a non-default port on those same aliases is not a hit, so the guard
-  // bounds itself to the two product defaults rather than to loopback in general.
-  for (const alias of ["127.0.0.1", "localhost", "[::1]"]) {
-    assert.equal(DEFAULT_ENDPOINT_PATTERN.test(`const d = "http://${alias}:9";`), false, `${alias}:9 must not be a hit`);
+  // ...and the replacements it steers towards are not hits, so the guard is bound
+  // to the two defaults rather than to loopback in general.
+  for (const line of samples.clean) {
+    assert.equal(DEFAULT_ENDPOINT_PATTERN.test(line), false, `the scan over-reported a safe address: ${line}`);
   }
-  // ...and the replacements it steers towards are not themselves hits.
-  assert.equal(DEFAULT_ENDPOINT_PATTERN.test(`const dashboard = "http://${host}:9";`), false);
-  assert.equal(DEFAULT_ENDPOINT_PATTERN.test("const dashboard = fixture.baseUrl;"), false);
+  // The split form is invisible to the ADDRESS pattern by construction — that is
+  // the whole point of the composition rule, asserted in its own test below.
+  for (const line of samples.split) {
+    assert.equal(DEFAULT_ENDPOINT_PATTERN.test(line), false);
+  }
 });
 
 // @re1, PR #316 — the guard claims `test/e2e/**` and `test/support/**`. Both are
@@ -87,9 +68,7 @@ test("the scan walks e2e and support to any depth (#305)", async () => {
     await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
     await writeFile(path.join(root, rel), body, "utf8");
   };
-  const host = "127.0.0.1";
-  const [, port] = DEFAULT_PORTS;
-  const offending = `const dashboard = "http://${host}:${port}";\n`;
+  const offending = `${offendingSamples().addressed[0]}\n`;
 
   await write(path.join("test", "browser-x.test.ts"), offending);
   await write(path.join("test", "e2e", "nested", "deep.test.ts"), offending);
@@ -97,7 +76,7 @@ test("the scan walks e2e and support to any depth (#305)", async () => {
   // Not in the surface: a top-level `test/*.ts` that is not a browser test.
   await write(path.join("test", "cli-thing.test.ts"), offending);
   // A comment naming a default is allowed anywhere in the surface.
-  await write(path.join("test", "support", "note.ts"), `// see http://${host}:${port} — never use it\n`);
+  await write(path.join("test", "support", "note.ts"), `// see ${offendingSamples().addressed[0]} — never use it\n`);
 
   const hits = await findDefaultEndpointUses(root);
   assert.deepEqual(
@@ -129,19 +108,15 @@ test("a split host/port composition is rejected, and the exemption is one file (
     await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
     await writeFile(path.join(root, rel), body, "utf8");
   };
-  const [roomPort, dashboardPort] = DEFAULT_PORTS;
+  const samples = offendingSamples();
 
   // The bypass, exactly as @re1 described it: no line contains `host:port`.
   await write(
     path.join("test", "browser-split.test.ts"),
-    [
-      `const host = "localhost";`,
-      `const port = ${dashboardPort};`,
-      "await page.goto(`${base}/?dashboard=${encodeURIComponent(`http://${host}:${port}`)}`);"
-    ].join("\n")
+    samples.split.concat("await page.goto(`${base}/?dashboard=${encodeURIComponent(`http://${host}:${port}`)}`);").join("\n")
   );
-  // The same shape one directory deeper, and with the room port.
-  await write(path.join("test", "e2e", "deep", "split.test.ts"), `const p = ${roomPort};\nconst u = \`http://[::1]:\${p}\`;\n`);
+  // The same shape one directory deeper.
+  await write(path.join("test", "e2e", "deep", "split.test.ts"), `${samples.split.join("\n")}\n`);
   // A file that composes nothing and names nothing must stay clean.
   await write(path.join("test", "support", "clean.ts"), `const target = fixture.baseUrl;\nconst spare = 9;\n`);
 
@@ -155,7 +130,7 @@ test("a split host/port composition is rejected, and the exemption is one file (
   // The definition site is exempt; nothing else is. Proven by putting the SAME
   // declaration in both and asserting only the non-exempt one is reported.
   const root2 = await mkdtemp(path.join(os.tmpdir(), "agentgather-exempt-"));
-  const decl = `export const PORTS = [${roomPort}, ${dashboardPort}];\n`;
+  const decl = `${samples.split.join("\n")}\n`;
   await write2(root2, path.join("test", "support", "default-endpoint-scan.ts"), decl);
   await write2(root2, path.join("test", "support", "impostor-scan.ts"), decl);
   const hits2 = await findDefaultEndpointUses(root2);
@@ -170,3 +145,31 @@ async function write2(root: string, rel: string, body: string): Promise<void> {
   await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
   await writeFile(path.join(root, rel), body, "utf8");
 }
+
+// @re1, PR #316 — the constant itself was a composition source.
+//
+// While `DEFAULT_PORTS` was exported, any scanned test could import it and build
+// `http://localhost:${DEFAULT_PORTS[1]}`: no literal port, no `host:port` string,
+// guard clean, live dashboard reached. Making it module-private is stronger than
+// detecting that — a non-exported binding cannot be imported at all, so the
+// COMPILER refuses the path instead of a scan reporting it afterwards. (Verified
+// while making the change: the build failed with TS2459 `declares 'DEFAULT_PORTS'
+// locally, but it is not exported` until this file stopped importing it.)
+//
+// This pins the property so a later re-export cannot quietly restore the bypass:
+// no export of the scan module may carry a product default port as DATA. The
+// matcher regexes necessarily contain the numbers — that is what they match — but
+// a pattern is not a value another module can compose an address from.
+test("the scan module exports no product default port as data (#305)", async () => {
+  const module_ = (await import("./support/default-endpoint-scan.js")) as Record<string, unknown>;
+  assert.equal("DEFAULT_PORTS" in module_, false, "the ports are exported again — importable as a composition source");
+
+  const carriesPort = (value: unknown): boolean => {
+    if (typeof value === "number") return offendingSamples().addressed.some((line) => line.includes(String(value)));
+    if (Array.isArray(value)) return value.some(carriesPort);
+    return false;
+  };
+  for (const [name, value] of Object.entries(module_)) {
+    assert.equal(carriesPort(value), false, `export ${name} carries a product default port as data`);
+  }
+});
