@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, stat } from "node:fs/promises";
 import type { Server } from "node:http";
+import { createServer } from "node:http";
 import { AddressInfo, createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -205,29 +206,83 @@ test("a participant whose host is unreachable is told exactly that, and nothing 
   await assert.rejects(() => stat(roomPaths(joined.context.home, ROOM).state));
 });
 
-test("a host that answers and REFUSES is reported with its own reason, not as unreachable (#314)", async () => {
-  // The distinction the participant branch is built on: "no server answered" and
-  // "the server said no" are different problems with different next actions.
-  // Flattening the second into the first would send the reader to restart a host
-  // that is already running.
-  const { participant: joined, server } = await hostAndParticipant();
+function refused(roomId: string, reason: string): string {
+  return [
+    `\`agentgather room leave\` was refused by the host of room "${roomId}": it is not accepting this credential.`,
+    "You may have been removed from the room, or this device's invite may have been replaced.",
+    "Open the room in your dashboard to check, or ask the host for a new invite.",
+    `The host said: ${reason}`
+  ].join("\n");
+}
+
+test("a removed participant is told the host refused them, in `room leave`'s own words (#314)", async () => {
+  // The state a real user reaches with the host UP: they were removed (#210), so
+  // their credential is no longer accepted. Before this, the whole message was the
+  // server's own string — `participant token is not allowed` — which names no
+  // command, no state and no next step: the exact shape #314 exists to remove.
+  const { host, participant: joined, server, participantToken } = await hostAndParticipant();
   try {
-    // A credential the room does not know. The server answers 403 with its reason.
-    await writeCurrent(joined.context.home, {
-      roomId: ROOM,
-      alias: "project7",
-      token: "tgl_a_token_this_room_never_issued",
-      baseUrl: server.baseUrl
-    });
+    await writeParticipants(host.context.home, ROOM, [
+      participant("pb-lead", true, "tgl_host_leave_token"),
+      { ...participant("project7", false, participantToken), removed_at: new Date().toISOString() }
+    ]);
 
     const error = await runFailing(["leave"], joined.context);
-    assert.equal(error.message, "participant token is not allowed");
-    assert.notEqual(error.message, hostUnreachable(ROOM), "a refusal must not read as unreachable");
+    assert.equal(error.message, refused(ROOM, "participant token is not allowed"));
+
+    // It names the command, the state, and a next step — the three things the bare
+    // server string had none of.
+    assert.ok(error.message.includes("agentgather room leave"), "names the command");
+    assert.ok(error.message.includes("removed from the room"), "names the state in the user's terms");
+    assert.ok(error.message.includes("dashboard"), "gives a next step");
+    // The server's reason survives as CONTEXT, not as the message.
+    assert.notEqual(error.message, "participant token is not allowed");
+    assert.ok(error.message.endsWith("The host said: participant token is not allowed"));
+
+    // A refusal must not read as unreachable: those send the reader to different
+    // next actions, and flattening this one would tell them to restart a host that
+    // is already running.
+    assert.notEqual(error.message, hostUnreachable(ROOM));
+    assert.notEqual(error.message, unknownRoom(ROOM));
+    assert.notEqual(error.message, NO_CURRENT_ROOM);
     assert.equal(error.message.includes(HOST_HOME_REMEDY), false);
-    assert.equal(/tgl_/.test(error.message), false, "the rejected token must not be echoed back");
+
+    assert.equal(/tgl_/.test(error.message), false, "the rejected credential must not be echoed back");
+    assert.equal(error.message.includes(participantToken), false);
     assert.equal(error.message.includes(joined.context.home), false);
+    assert.equal(error.message.includes(os.tmpdir()), false);
   } finally {
     await server.close();
+  }
+});
+
+test("a hostile reason from the host cannot smuggle a credential into the message (#314)", async () => {
+  // The reason is a string from ANOTHER machine. It is redacted before it is
+  // shown, and redaction runs before the length cap — capping first could cut a
+  // token into a form the redactor no longer recognises.
+  const home = await makeHome("leave-hostile");
+  const hostile = await listen(
+    createServer((_req, res) => {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "denied for tgl_secret_from_a_hostile_host see http://evil.test/x?token=tgl_more" }));
+    })
+  );
+  try {
+    await writeCurrent(home.context.home, {
+      roomId: ROOM,
+      alias: "project7",
+      token: "tgl_local_token",
+      baseUrl: hostile.baseUrl
+    });
+    await writeToken(home.context.home, ROOM, "project7", "tgl_local_token");
+
+    const error = await runFailing(["leave"], home.context);
+    assert.ok(error.message.startsWith("`agentgather room leave` was refused by the host"), error.message);
+    assert.equal(/tgl_/.test(error.message), false, "a credential in the host's reason reached the screen");
+    assert.equal(/evil\.test/.test(error.message), false, "a tokenized URL in the host's reason reached the screen");
+    assert.ok(error.message.includes("[redacted-"), "the reason must be shown redacted, not dropped");
+  } finally {
+    await hostile.close();
   }
 });
 

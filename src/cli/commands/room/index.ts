@@ -23,6 +23,7 @@ import {
   readBrief,
   readParticipants,
   readRoomState,
+  redactSnapshotText,
   roomPaths,
   updateAttendancePolicy,
   updateBrief,
@@ -838,7 +839,25 @@ async function roomLeave(argv: string[], context: CliContext): Promise<number> {
     });
     const payload = await readResponseJson<{ message?: string }>(response);
     if (!response.ok && response.status !== 404) {
-      throw new Error(payload.message ?? `leaving the room failed with HTTP ${response.status}`);
+      // The host answered and said no. This is the state a removed participant
+      // reaches (#210 removal, `removed_at`) with the host UP, and the bare server
+      // string — "participant token is not allowed" — names no command, no state
+      // and no next step, which is the shape #314 exists to remove. So the reason
+      // becomes context on an actionable message rather than being the message.
+      //
+      // The reason is redacted before it is shown: it is a string from another
+      // machine, and a host could put a URL or a credential in it. Redact first,
+      // then cap — capping first could cut a token into a form the redactor no
+      // longer recognises.
+      const reason = redactSnapshotText(payload.message ?? `HTTP ${response.status}`).slice(0, 200);
+      throw new Error(
+        [
+          `\`agentgather room leave\` was refused by the host of room "${current.roomId}": it is not accepting this credential.`,
+          "You may have been removed from the room, or this device's invite may have been replaced.",
+          "Open the room in your dashboard to check, or ask the host for a new invite.",
+          `The host said: ${reason}`
+        ].join("\n")
+      );
     }
     announced = response.ok;
   } catch (error) {
