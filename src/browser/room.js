@@ -1159,11 +1159,24 @@ async function confirmSeededAuthors() {
     // The host record for THIS id, or nothing. `confirmedRestoredSender` returns
     // the label when it is handed nothing, so an unconfirmed row is untouched by
     // construction rather than by remembering to check.
-    const sender = confirmedRestoredSender(hostById.get(id) ?? null);
+    const hostRecord = hostById.get(id) ?? null;
+    const sender = confirmedRestoredSender(hostRecord);
     if (sender === RESTORED_SENDER_LABEL) continue;
     const from = row.querySelector(".message-from");
-    if (from === null) continue;
+    const body = row.querySelector(".message-text");
+    if (from === null || body === null) continue;
+    // A confirmed ID IS NOT A CONFIRMED ROW (@re2, PR #315). The store supplies the
+    // text; the host supplies only the author. Writing one onto the other produces
+    // the worst possible row — forged content under a real participant's name,
+    // which is strictly worse than the label bug this ticket fixes and exactly the
+    // trade the operator refused. #278's own tampered-backup guard proves it.
+    //
+    // So a confirmed row is REPLACED by the host's record, not annotated with part
+    // of it: author and text both come from the host, and nothing store-supplied
+    // survives. Redaction is re-applied on the way in, as at seed time, because a
+    // restored region stays uniformly redacted whatever its content's origin.
     from.textContent = state.participantLabels.get(sender) || sender;
+    renderSafeMarkdown(body, redactForBackup(String(hostRecord.text ?? "")), { mentions: state.participants });
     row.dataset.authorConfirmed = "true";
   }
 }

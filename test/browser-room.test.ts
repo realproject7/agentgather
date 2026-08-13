@@ -2636,6 +2636,12 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     }, new Date().toISOString());
     await page.reload();
     await page.waitForSelector("text=forged host claim");
+    // #312 changed what happens next, and this test is the guard that proved why.
+    // The forged record claims `id: head` — an id the room REALLY has — so once the
+    // host answers, its own record for that id replaces the row entirely: author
+    // AND text. Wait for that to land rather than asserting into the race, which is
+    // what let an earlier local run pass while CI failed on this very test.
+    await page.waitForSelector(`li[data-message-id][data-author-confirmed="true"]`);
 
     // A record claiming the room's own voice is not restored at all — `system` is
     // how the room speaks, and a hand-edited store must not be able to speak in it.
@@ -2647,20 +2653,26 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
       "no restored row is styled as the room's own system voice"
     );
 
-    // The forged host record renders, but with none of the host's identity: its
-    // sender is never resolved through the live roster, so it gets no display name,
-    // no human/agent kind and no host treatment — only the stored text, inside a
-    // region labelled as this device's own copy.
-    const forged = page.locator(".message", { hasText: "forged host claim" }).first();
-    assert.equal(await forged.getAttribute("data-restored"), "true");
-    assert.equal(await forged.locator(".message-from").getAttribute("data-kind"), "restored");
-    assert.equal(await forged.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
-    // ...nor the viewer's own presentation: this page is authenticated AS the host,
-    // so a forged `from: "host"` would otherwise render as the viewer's own line.
-    assert.equal(((await forged.getAttribute("class")) ?? "").includes("own"), false);
-    // ...and the forged author label never reaches the DOM at all: a restored row
-    // says only that it came from this device's own copy.
-    assert.equal((await forged.locator(".message-from").textContent())?.trim(), "local copy");
+    // The forged record claimed an id the room really has, so #312's confirmation
+    // REPLACES it with the host's own record — author and text together. The
+    // forgery is therefore erased rather than merely labelled, which is a stronger
+    // outcome than this test originally asserted:
+    //
+    //   before #312 : row renders the forged text, labelled `local copy`
+    //   after  #312 : row renders the HOST's text and the HOST's author
+    //
+    // What must never happen — and what #312's first draft did — is the row keeping
+    // the forged TEXT while gaining the host's NAME. That pairing is the reason
+    // this assertion is written against the text, not just the label.
+    assert.equal(
+      await page.locator(".message", { hasText: "forged host claim" }).count(),
+      0,
+      "forged text survived on a row whose id the host confirmed"
+    );
+    const confirmed = page.locator("li[data-author-confirmed='true']").first();
+    assert.equal(await confirmed.getAttribute("data-restored"), "true", "the row is still this device's copy");
+    // The forged author never reaches the DOM: what renders is the host's own.
+    assert.equal((await confirmed.locator(".message-from").textContent())?.trim(), "reviewer");
     const restoredHtml = (await page.locator("#timeline").innerHTML()) ?? "";
     assert.equal(/message-from[^>]*>\s*host\s*</.test(restoredHtml), false, "no restored row is labelled host");
     // Malformed records are dropped rather than coerced into a half-rendered row.
@@ -2670,7 +2682,6 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     // Redaction is re-applied on the way in: a smuggled token never reaches the DOM.
     const rendered = (await page.locator("#timeline").innerHTML()) ?? "";
     assert.equal(/tgl_forged_secret_value/.test(rendered), false);
-    assert.match(rendered, /\[redacted-token\]/);
 
     // A line the host serves after entry is NOT marked restored — the distinction
     // the marking exists to make.
@@ -3796,12 +3807,17 @@ async function offlineNotice(
     // the "show earlier" control mounts.
     if (seedBackup) {
       await page.addInitScript((k) => {
+        // #312: the stored text must be what the host actually holds for these ids.
+        // A real backup is written FROM the host, so it always is; this fixture used
+        // to invent divergent text, and #312 now replaces a confirmed row with the
+        // host's own record, which would rewrite it. Matching the host keeps the
+        // fixture honest instead of asserting a state the product cannot produce.
         const messages = [5, 6, 7, 8].map((id) => ({
           id,
           from: "host",
           ts: "2026-07-01T00:00:00.000Z",
           type: "chat",
-          text: `seeded-${id}`
+          text: `earlier-${id}`
         }));
         window.localStorage.setItem(k, JSON.stringify({ messages }));
       }, key);
@@ -3813,7 +3829,7 @@ async function offlineNotice(
     }
 
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
-    if (seedBackup) await page.waitForSelector("text=seeded-8");
+    if (seedBackup) await page.waitForSelector("text=earlier-8");
 
     if (fetchEarlier) {
       // ONLINE: pull older rows from the host first.
@@ -4106,11 +4122,14 @@ test("an excluded host record between seeded rows does not truncate confirmation
     await postMessage(fixture, fixture.reviewerToken, "span line one");
     // The excluded record, interleaved — this is the row that eats the budget.
     await appendServerMessage({ root: fixture.root, roomId: fixture.roomId, from: "system", text: "interleaved system line" });
-    await postMessage(fixture, fixture.reviewerToken, "span line two");
+    // Carries a credential-shaped value so the CONFIRMED row proves redaction is
+    // re-applied on #312's new path: the host's text replaces the stored text, and
+    // a restored region stays uniformly redacted whatever the content's origin.
+    await postMessage(fixture, fixture.reviewerToken, "span line two tgl_confirmed_secret_value");
 
     const hosted = await readMessages(fixture.root, fixture.roomId);
     const first = hosted.find((m) => m.text === "span line one");
-    const last = hosted.find((m) => m.text === "span line two");
+    const last = hosted.find((m) => m.text.startsWith("span line two"));
     assert.ok(first && last, "precondition: both chat rows on the host");
     assert.ok(last.id - first.id >= 2, "precondition: an excluded record sits between them");
 
@@ -4145,6 +4164,11 @@ test("an excluded host record between seeded rows does not truncate confirmation
       "reviewer"
     );
     assert.equal(/impostor/.test(await page.locator("#timeline").innerHTML()), false, "the stored alias reached the DOM");
+
+    // Redaction is re-applied to the HOST record on the confirmed row.
+    const confirmedRow = await page.locator(`li[data-message-id="${last.id}"]`).innerHTML();
+    assert.equal(/tgl_confirmed_secret_value/.test(confirmedRow), false, "a token reached the DOM on a confirmed row");
+    assert.match(confirmedRow, /\[redacted-token\]/, "redaction was not re-applied to the host record");
   } catch (error) {
     await captureBrowserFailure(diagnostics, "seeded-confirmation-span-not-count-312", error);
     throw error;
