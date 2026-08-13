@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import type { Participant } from "../src/protocol/index.js";
-import { createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
+import { appendServerMessage, createBoardroom, createRoom, readMessages, writeParticipants } from "../src/storage/index.js";
 import { createRoomHttpServer, participantTokenHash } from "../src/server/index.js";
 import { closeServer } from "./support/close-server.js";
 import { captureBrowserFailure, recordBrowserDiagnostics } from "./support/browser-diagnostics.js";
@@ -2636,6 +2636,12 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     }, new Date().toISOString());
     await page.reload();
     await page.waitForSelector("text=forged host claim");
+    // #312 changed what happens next, and this test is the guard that proved why.
+    // The forged record claims `id: head` — an id the room REALLY has — so once the
+    // host answers, its own record for that id replaces the row entirely: author
+    // AND text. Wait for that to land rather than asserting into the race, which is
+    // what let an earlier local run pass while CI failed on this very test.
+    await page.waitForSelector(`li[data-message-id][data-author-confirmed="true"]`);
 
     // A record claiming the room's own voice is not restored at all — `system` is
     // how the room speaks, and a hand-edited store must not be able to speak in it.
@@ -2647,20 +2653,36 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
       "no restored row is styled as the room's own system voice"
     );
 
-    // The forged host record renders, but with none of the host's identity: its
-    // sender is never resolved through the live roster, so it gets no display name,
-    // no human/agent kind and no host treatment — only the stored text, inside a
-    // region labelled as this device's own copy.
-    const forged = page.locator(".message", { hasText: "forged host claim" }).first();
-    assert.equal(await forged.getAttribute("data-restored"), "true");
-    assert.equal(await forged.locator(".message-from").getAttribute("data-kind"), "restored");
-    assert.equal(await forged.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
-    // ...nor the viewer's own presentation: this page is authenticated AS the host,
-    // so a forged `from: "host"` would otherwise render as the viewer's own line.
-    assert.equal(((await forged.getAttribute("class")) ?? "").includes("own"), false);
-    // ...and the forged author label never reaches the DOM at all: a restored row
-    // says only that it came from this device's own copy.
-    assert.equal((await forged.locator(".message-from").textContent())?.trim(), "local copy");
+    // The forged record claimed an id the room really has, so #312's confirmation
+    // REPLACES it with the host's own record — author and text together. The
+    // forgery is therefore erased rather than merely labelled, which is a stronger
+    // outcome than this test originally asserted:
+    //
+    //   before #312 : row renders the forged text, labelled `local copy`
+    //   after  #312 : row renders the HOST's text and the HOST's author
+    //
+    // What must never happen — and what #312's first draft did — is the row keeping
+    // the forged TEXT while gaining the host's NAME. That pairing is the reason
+    // this assertion is written against the text, not just the label.
+    assert.equal(
+      await page.locator(".message", { hasText: "forged host claim" }).count(),
+      0,
+      "forged text survived on a row whose id the host confirmed"
+    );
+    const confirmed = page.locator("li[data-author-confirmed='true']").first();
+    assert.equal(await confirmed.getAttribute("data-restored"), "true", "the row is still this device's copy");
+    // The forged author never reaches the DOM: what renders is the host's own.
+    assert.equal((await confirmed.locator(".message-from").textContent())?.trim(), "reviewer");
+    // These three became LOAD-BEARING in the same change that first dropped them
+    // (@re2, review 4922776640). Before #312 a restored row said `local copy`, so
+    // its label alone marked it as not-live. A confirmed row now shows a real
+    // participant's name, which makes the sender kind, the avatar treatment and
+    // the absence of `own` the entire remaining visual distinction between a
+    // restored row and a live one. They are asserted against the CONFIRMED row —
+    // the case where the label no longer carries the distinction by itself.
+    assert.equal(await confirmed.locator(".message-from").getAttribute("data-kind"), "restored");
+    assert.equal(await confirmed.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
+    assert.equal(((await confirmed.getAttribute("class")) ?? "").includes("own"), false);
     const restoredHtml = (await page.locator("#timeline").innerHTML()) ?? "";
     assert.equal(/message-from[^>]*>\s*host\s*</.test(restoredHtml), false, "no restored row is labelled host");
     // Malformed records are dropped rather than coerced into a half-rendered row.
@@ -2670,7 +2692,6 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     // Redaction is re-applied on the way in: a smuggled token never reaches the DOM.
     const rendered = (await page.locator("#timeline").innerHTML()) ?? "";
     assert.equal(/tgl_forged_secret_value/.test(rendered), false);
-    assert.match(rendered, /\[redacted-token\]/);
 
     // A line the host serves after entry is NOT marked restored — the distinction
     // the marking exists to make.
@@ -3796,12 +3817,17 @@ async function offlineNotice(
     // the "show earlier" control mounts.
     if (seedBackup) {
       await page.addInitScript((k) => {
+        // #312: the stored text must be what the host actually holds for these ids.
+        // A real backup is written FROM the host, so it always is; this fixture used
+        // to invent divergent text, and #312 now replaces a confirmed row with the
+        // host's own record, which would rewrite it. Matching the host keeps the
+        // fixture honest instead of asserting a state the product cannot produce.
         const messages = [5, 6, 7, 8].map((id) => ({
           id,
           from: "host",
           ts: "2026-07-01T00:00:00.000Z",
           type: "chat",
-          text: `seeded-${id}`
+          text: `earlier-${id}`
         }));
         window.localStorage.setItem(k, JSON.stringify({ messages }));
       }, key);
@@ -3813,7 +3839,7 @@ async function offlineNotice(
     }
 
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
-    if (seedBackup) await page.waitForSelector("text=seeded-8");
+    if (seedBackup) await page.waitForSelector("text=earlier-8");
 
     if (fetchEarlier) {
       // ONLINE: pull older rows from the host first.
@@ -3894,6 +3920,348 @@ test("the offline notice names both sources when host-fetched rows are on screen
       assert.match(text, /newer messages aren't shown and can't be sent until the host resumes\./);
     }
   } finally {
+    await fixture.close();
+  }
+});
+
+
+// #312 — a seeded row earns its author from the host's own log, or keeps saying
+// `local copy`.
+//
+// #279's rule is right for the case it was written for: nothing can check the
+// store, so a stored alias must not be rendered. #278 then routed a warm entry —
+// host reachable, serving the very ids being seeded — through the same rule, and
+// every backfilled line in a coordination room went anonymous.
+//
+// Four cases, four distinct rendered senders. Each assertion is false in the other
+// three, or it is not testing this:
+//
+//   1. host reachable + id confirmed        → the host's author
+//   2. host reachable + id NOT confirmed    → `local copy`
+//   3. host unreachable                     → `local copy`
+//   4. `system` / `status` stored records   → not rendered at all
+//
+// Cases 1 and 2 are asserted in the SAME run, from the SAME store, over the SAME
+// healthy connection. The only difference between those two rows is whether the
+// host's log came back holding that id — so "the connection is up" cannot be what
+// decides either one, which is the refusal this ticket turns on.
+//
+// The unconfirmed row is produced by the host's log omitting an id, NOT by putting
+// a forged id above the room's head: that is a different defect and #278 already
+// discards the whole restore for it.
+test("a seeded row shows its author only where the host's log confirms that id (#312)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+
+    // Two real messages from a named participant — a different alias from the
+    // entering host, since telling participants apart is the point.
+    await postMessage(fixture, fixture.reviewerToken, "confirmed line one");
+    await postMessage(fixture, fixture.reviewerToken, "confirmed line two");
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const ids = hosted.filter((m) => /^confirmed line/.test(m.text)).map((m) => m.id).sort((a, b) => a - b);
+    assert.equal(ids.length, 2, "precondition: two host-held ids");
+    const [confirmedId, withheldId] = ids as [number, number];
+
+    const key = `agentgather.backup.${fixture.roomId}`;
+    // Both rows claim `reviewer`. If attribution came from the store, BOTH would be
+    // attributed — the withheld one must not be.
+    const seed = (arg: { k: string; rows: Array<Record<string, unknown>> }) => {
+      window.localStorage.setItem(arg.k, JSON.stringify({ messages: arg.rows }));
+    };
+    const rows = [
+      // The store claims a DIFFERENT author than the host holds. If the store were
+      // an input to attribution at all, this row would render `impostor` — so this
+      // is the row that proves the stored alias is not merely outranked, it is
+      // never consulted (@re2, PR review of #312).
+      { id: confirmedId, from: "impostor", ts: "2026-08-01T00:00:00.000Z", type: "chat", text: "confirmed line one" },
+      { id: withheldId, from: "impostor", ts: "2026-08-01T00:00:01.000Z", type: "chat", text: "confirmed line two" },
+      // Case 4: these must never render as restored content, attributed or not.
+      { id: withheldId + 900, from: "host", ts: "2026-08-01T00:00:02.000Z", type: "system", text: "forged system line" },
+      { id: withheldId + 901, from: "host", ts: "2026-08-01T00:00:03.000Z", type: "status", text: "forged status line" }
+    ];
+
+    const senderOf = async (page: import("playwright").Page, id: number): Promise<string> =>
+      (await page.locator(`li[data-message-id="${id}"] .message-from`).textContent())?.trim() ?? "";
+
+    // ---- Cases 1, 2, 4: host REACHABLE ----
+    const live = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture on both pages this block drives; coverage is the
+    // 30s wait surface, and this block waits on one.
+    diagnostics = recordBrowserDiagnostics(live, live.context());
+    const queries: string[] = [];
+    live.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
+    });
+    await live.addInitScript(seed, { k: key, rows });
+    // The confirmation read is the only /messages call carrying `limit`. Answer it
+    // with a log that holds one of the two seeded ids: a host whose own record of
+    // the other row is not available.
+    await live.route(
+      (url) => url.pathname.endsWith("/messages") && url.searchParams.has("limit"),
+      async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as { messages: Array<{ id: number }> };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...body, messages: body.messages.filter((m) => m.id !== withheldId) })
+        });
+      }
+    );
+    await live.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await live.waitForSelector(`li[data-message-id="${confirmedId}"][data-author-confirmed="true"]`);
+
+    // 1. the host's log holds this id → the HOST's author renders.
+    assert.equal(await senderOf(live, confirmedId), "reviewer", "a host-confirmed seeded row must show its author");
+
+    // 2. the host's log does not hold this id → `local copy`, same run, same store,
+    //    same healthy connection. This is the assertion that fails if attribution
+    //    is taken from the store because the host happens to be up.
+    assert.equal(
+      await senderOf(live, withheldId),
+      "local copy",
+      "a row the host's log does not confirm must keep local copy while the host is reachable"
+    );
+    assert.equal(
+      await live.locator(`li[data-message-id="${withheldId}"]`).getAttribute("data-author-confirmed"),
+      null,
+      "an unconfirmed row must not be marked author-confirmed"
+    );
+
+    // The stored alias never reaches the DOM under any branch — asserted as an
+    // absence, not merely as "the right name showed".
+    assert.equal(
+      /impostor/.test(await live.locator("#timeline").innerHTML()),
+      false,
+      "the stored alias reached the DOM"
+    );
+
+    // Provenance survives attribution: the row is still this device's copy.
+    assert.equal(await live.locator(`li[data-message-id="${confirmedId}"]`).getAttribute("data-restored"), "true");
+
+    // #283's AMENDMENT 2 invariant: the confirmation read is a THIRD read path
+    // beside `pollMessages` and `loadEarlierMessages`, and a non-poll read that
+    // touches the live cursor is exactly what once turned `state.cursor` into
+    // `undefined` and 400-looped every later poll. Assert the cursor's value where
+    // it is observable — the URL the next poll actually issues — not the branch
+    // that ran. The confirmation read is the only one carrying `limit`; every poll
+    // must still ask from the restored head.
+    const head = Math.max(...ids);
+    const settled = queries.length;
+    const deadline = Date.now() + 8000;
+    while (queries.length === settled && Date.now() < deadline) {
+      await live.waitForTimeout(200);
+    }
+    const polls = queries.slice(settled).filter((q) => !q.includes("limit="));
+    assert.ok(polls.length >= 1, "expected at least one poll after the confirmation read");
+    for (const query of polls) {
+      assert.equal(query, `?since_id=${head}`, `a poll after the confirmation read asked ${query}`);
+    }
+    assert.deepEqual(queries.filter((q) => q.includes("since_id=0") && !q.includes("limit=")), [], "a poll rewound to zero");
+
+    // 4. stored system/status records are not rendered at all.
+    assert.equal(await live.locator(`li[data-message-id="${withheldId + 900}"]`).count(), 0, "a stored system record rendered");
+    assert.equal(await live.locator(`li[data-message-id="${withheldId + 901}"]`).count(), 0, "a stored status record rendered");
+    assert.equal(
+      /forged system line|forged status line/.test(await live.locator("#timeline").innerHTML()),
+      false,
+      "forged system/status text reached the DOM"
+    );
+    await live.close();
+
+    // ---- Case 3: host UNREACHABLE ----
+    // Entered warm the way a real one is — online first so the room writes its own
+    // backup — and THEN the host goes away. Routing 504 from the very first load
+    // would abort entry before it ever seeds, which tests nothing about this rule.
+    const offline = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    recordBrowserDiagnostics(offline, offline.context());
+    await offline.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await offline.waitForSelector("text=confirmed line two");
+    await offline.route(/\/(messages|status)(\?|$)/, (route) =>
+      route.fulfill({
+        status: 504,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "host_unavailable", message: "host tunnel did not respond" })
+      })
+    );
+    await offline.reload();
+    await offline.waitForSelector(`li[data-message-id="${confirmedId}"][data-restored="true"]`);
+    // Nothing can confirm anything, so the row the reachable run DID attribute
+    // reads exactly as it does today.
+    assert.equal(await senderOf(offline, confirmedId), "local copy", "an unreachable host must leave seeded rows as local copy");
+    assert.equal(await senderOf(offline, withheldId), "local copy");
+    assert.equal(
+      await offline.locator("li[data-author-confirmed='true']").count(),
+      0,
+      "no row may be author-confirmed while the host is unreachable"
+    );
+  } catch (error) {
+    // Write the artifact, then rethrow untouched (#303): this must never turn a
+    // failure into a pass, and the assertion the runner reports stays the original.
+    await captureBrowserFailure(diagnostics, "seeded-author-confirmed-by-host-log-312", error);
+    throw error;
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #312 / @re1's PR-review finding — the confirmation read must cover the seeded id
+// SPAN, not the count of renderable seeded rows.
+//
+// `system` and `status` records are excluded from the store at read time
+// (`isRestorableStoredType`), so the seeded id list is SHORTER than the host's id
+// range whenever such a record sits between two seeded chat rows. Bounding the
+// confirmation read by the seeded COUNT then truncates the host's log before the
+// later ids, and rows the host would have confirmed stay `local copy` — AC1 fails
+// for exactly the rooms most likely to have system chatter.
+//
+// The host log here is: chat, system, chat. The store seeds the two chat rows. A
+// count-bounded read (limit=2) stops at the system record and never sees the
+// second chat row.
+test("an excluded host record between seeded rows does not truncate confirmation (#312)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+    await postMessage(fixture, fixture.reviewerToken, "span line one");
+    // The excluded record, interleaved — this is the row that eats the budget.
+    await appendServerMessage({ root: fixture.root, roomId: fixture.roomId, from: "system", text: "interleaved system line" });
+    // Carries a credential-shaped value so the CONFIRMED row proves redaction is
+    // re-applied on #312's new path: the host's text replaces the stored text, and
+    // a restored region stays uniformly redacted whatever the content's origin.
+    await postMessage(fixture, fixture.reviewerToken, "span line two tgl_confirmed_secret_value");
+
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const first = hosted.find((m) => m.text === "span line one");
+    const last = hosted.find((m) => m.text.startsWith("span line two"));
+    assert.ok(first && last, "precondition: both chat rows on the host");
+    assert.ok(last.id - first.id >= 2, "precondition: an excluded record sits between them");
+
+    const key = `agentgather.backup.${fixture.roomId}`;
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    await page.addInitScript(
+      (arg: { k: string; a: number; b: number }) => {
+        window.localStorage.setItem(
+          arg.k,
+          JSON.stringify({
+            messages: [
+              { id: arg.a, from: "impostor", ts: "2026-08-01T00:00:00.000Z", type: "chat", text: "span line one" },
+              { id: arg.b, from: "impostor", ts: "2026-08-01T00:00:01.000Z", type: "chat", text: "span line two" }
+            ]
+          })
+        );
+      },
+      { k: key, a: first.id, b: last.id }
+    );
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector(`li[data-message-id="${last.id}"][data-author-confirmed="true"]`);
+
+    // The LATER seeded row is the one a count-bounded read loses.
+    assert.equal(
+      (await page.locator(`li[data-message-id="${last.id}"] .message-from`).textContent())?.trim(),
+      "reviewer",
+      "a seeded row after an excluded host record must still be confirmed"
+    );
+    assert.equal(
+      (await page.locator(`li[data-message-id="${first.id}"] .message-from`).textContent())?.trim(),
+      "reviewer"
+    );
+    assert.equal(/impostor/.test(await page.locator("#timeline").innerHTML()), false, "the stored alias reached the DOM");
+
+    // Redaction is re-applied to the HOST record on the confirmed row.
+    const confirmedRow = await page.locator(`li[data-message-id="${last.id}"]`).innerHTML();
+    assert.equal(/tgl_confirmed_secret_value/.test(confirmedRow), false, "a token reached the DOM on a confirmed row");
+    assert.match(confirmedRow, /\[redacted-token\]/, "redaction was not re-applied to the host record");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "seeded-confirmation-span-not-count-312", error);
+    throw error;
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #312 / @re1's second PR-review finding — the HOST's record must itself be
+// renderable as restored content before it can confirm anything.
+//
+// #278 excludes `system`/`status` by the STORED type. A tampered store can defeat
+// that by claiming `type: "chat"` on an id the host holds as `system`: the row
+// renders (pre-existing), and #312's confirmation would then replace it with the
+// host's system record — putting the room's own voice into an ordinary restored
+// row, through the very step meant to make rows trustworthy. AC4 breached from the
+// other side.
+test("a forged chat row pointing at a real system id confirms nothing (#312)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+    await postMessage(fixture, fixture.reviewerToken, "ordinary chat line");
+    await appendServerMessage({
+      root: fixture.root,
+      roomId: fixture.roomId,
+      from: "system",
+      text: "the room's own voice — never restorable"
+    });
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const system = hosted.find((m) => m.text.startsWith("the room's own voice"));
+    const chat = hosted.find((m) => m.text === "ordinary chat line");
+    assert.ok(system && chat, "precondition: a real system record and a real chat record");
+
+    const key = `agentgather.backup.${fixture.roomId}`;
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    // The store claims the system id is an ordinary chat line of its own. Its
+    // highest id is a real one, so #278's head check passes and the restore stands.
+    await page.addInitScript(
+      (arg: { k: string; chatId: number; sysId: number }) => {
+        window.localStorage.setItem(
+          arg.k,
+          JSON.stringify({
+            messages: [
+              { id: arg.chatId, from: "impostor", ts: "2026-08-01T00:00:00.000Z", type: "chat", text: "ordinary chat line" },
+              { id: arg.sysId, from: "impostor", ts: "2026-08-01T00:00:01.000Z", type: "chat", text: "forged line on a system id" }
+            ]
+          })
+        );
+      },
+      { k: key, chatId: chat.id, sysId: system.id }
+    );
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    // The genuine chat row confirms, which is also the settle for the assertions
+    // below — the forged row is judged after confirmation has run, not before it.
+    await page.waitForSelector(`li[data-message-id="${chat.id}"][data-author-confirmed="true"]`);
+
+    // The room's own voice never reaches the DOM through a restored row.
+    assert.equal(
+      /the room's own voice/.test(await page.locator("#timeline").innerHTML()),
+      false,
+      "an excluded host record rendered as restored content"
+    );
+    // The forged row keeps its pre-#312 presentation: unattributed, stored text.
+    assert.equal(
+      (await page.locator(`li[data-message-id="${system.id}"] .message-from`).textContent())?.trim(),
+      "local copy",
+      "a row whose host record is an excluded type must not be attributed"
+    );
+    assert.equal(
+      await page.locator(`li[data-message-id="${system.id}"]`).getAttribute("data-author-confirmed"),
+      null,
+      "an excluded host record must not mark a row confirmed"
+    );
+    assert.equal(/impostor/.test(await page.locator("#timeline").innerHTML()), false, "the stored alias reached the DOM");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "forged-chat-row-on-a-real-system-id-312", error);
+    throw error;
+  } finally {
+    await browser?.close();
     await fixture.close();
   }
 });
