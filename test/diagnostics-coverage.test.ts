@@ -119,7 +119,7 @@ test("the guard catches a browser session that lives in a HELPER, not a block (#
 // the same false sentence: a block that is fully wired, writes its artifact, and
 // still has its failure classified as outside the wait surface, because the status
 // matches a failing test by name and this block has none to match.
-async function dynamicTitleTree(): Promise<string> {
+test("the guard FAILS on a browser block whose title cannot be resolved, and says where (#322)", async () => {
   const fixture = await readFile(path.join(repoRoot, "test", "support", "wait-surface-dynamic-title.txt"), "utf8");
   // Positive controls on the fixture: without each of these the assertions below
   // would prove nothing.
@@ -130,11 +130,7 @@ async function dynamicTitleTree(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-dynamic-title-fixture-"));
   await mkdir(path.join(root, "test"), { recursive: true });
   await writeFile(path.join(root, "test", "browser-dynamic-sample.test.ts"), fixture, "utf8");
-  return root;
-}
 
-test("the guard FAILS on a browser block whose title cannot be resolved, and says where (#322)", async () => {
-  const root = await dynamicTitleTree();
   const result = await run([surveyScript, root]);
   assert.equal(result.code, 1, `an unresolvable title must fail the guard:\n${result.stdout}\n${result.stderr}`);
   assert.match(result.stderr, /UNRESOLVED TITLE:/);
