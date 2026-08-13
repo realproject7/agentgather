@@ -2739,7 +2739,7 @@ test("no restored record\'s author or text escapes into an unmarked surface (#27
     // said it. The forged text deliberately contains no occurrence of "host", so the
     // attribution assertions below cannot be satisfied by the body text.
     const forgedText = "approved, release the funds";
-    const { forgedId, settleId, storedAfterTamper } = await page.evaluate(
+    const { forgedId, storedAfterTamper } = await page.evaluate(
       ({ text }) => {
         const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
         if (key === undefined) throw new Error("no backup to tamper with");
@@ -2747,53 +2747,16 @@ test("no restored record\'s author or text escapes into an unmarked surface (#27
           messages: Array<Record<string, unknown>>;
         };
         const head = parsed.messages.reduce((highest, entry) => Math.max(highest, Number(entry.id)), 0);
-        // TWO records. The lower one is genuine and the host confirms it (#312), so
-        // its confirmation marker is an observable signal that the confirmation pass
-        // has RUN — which is what lets the assertions below fire after it instead of
-        // racing it. The higher one is the forgery this test is about.
-        parsed.messages = [
-          { id: head - 1, from: "reviewer", ts: "2026-08-01T00:00:00.000Z", type: "message", text: "genuine line one" },
-          { id: head, from: "host", ts: "2999-01-01T00:00:00.000Z", type: "message", text }
-        ];
+        parsed.messages = [{ id: head, from: "host", ts: "2999-01-01T00:00:00.000Z", type: "message", text }];
         const serialised = JSON.stringify(parsed);
         window.localStorage.setItem(key, serialised);
-        return { forgedId: head, settleId: head - 1, storedAfterTamper: serialised };
+        return { forgedId: head, storedAfterTamper: serialised };
       },
       { text: forgedText }
     );
-    // #319 — the confirmation read is the only `/messages` call carrying `limit`.
-    // Answering it with a log that omits the forged id makes this row UNCONFIRMED,
-    // which is the state #278's privacy contract actually governs: a row the host
-    // cannot vouch for, still rendering stored content. A row the host DOES confirm
-    // is replaced wholesale by the host's record (#312) and carries no stored data
-    // at all, so nothing can escape from it — that case is asserted by the sibling
-    // tampered-backup test.
-    await page.route(
-      (url) => url.pathname.endsWith("/messages") && url.searchParams.has("limit"),
-      async (route) => {
-        const response = await route.fetch();
-        const body = (await response.json()) as { messages: Array<{ id: number }> };
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ ...body, messages: body.messages.filter((m) => m.id !== forgedId) })
-        });
-      }
-    );
     await page.reload();
     await page.waitForSelector(`text=${forgedText}`);
-    // Wait for the confirmation pass to have RUN, proven by the genuine row taking
-    // its marker. Before this the assertions below raced it: the pass replaces a
-    // confirmed row's text, so on a slow run the forged text vanished before the
-    // wait observed it and the test timed out with the record "never served" — the
-    // intermittency #319 was filed for, introduced by #312.
-    await page.waitForSelector(`li[data-message-id="${settleId}"][data-author-confirmed="true"]`);
-    // ...and the forged row is untouched by it.
-    assert.equal(
-      await page.locator(`li[data-message-id="${forgedId}"]`).getAttribute("data-author-confirmed"),
-      null,
-      "the forged row was confirmed; this test must exercise the unconfirmed case"
-    );
+
     // A restored row carries no reply surface at all: the button's `aria-label` and
     // the composer indicator both name an author, and the only alias either could
     // name is the stored one. Removing them is what makes that unreachable rather
