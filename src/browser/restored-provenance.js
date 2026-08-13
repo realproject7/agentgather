@@ -20,6 +20,34 @@
 // earned, which is exactly the laundering #278 closed.
 export const RESTORED_SENDER_LABEL = "local copy";
 
+// The ONLY way a restored row may show an author (#312).
+//
+// #279's rule was written for the case where nothing can check the store: the host
+// is gone, and a stored alias resolved against a live roster would confer an
+// identity the record has not earned. That reasoning is untouched. #278 then routed
+// a SECOND case through it — a warm entry while the host is reachable and serving
+// the very ids being seeded — where attribution is not an unverifiable claim
+// because the host's own log can confirm it row by row.
+//
+// So this takes the HOST's record and nothing else. That is the whole guarantee,
+// and it is structural rather than remembered: the stored alias is never passed in,
+// so no future caller can be talked into rendering it. A caller with no host record
+// for THIS id gets the label back — "the host answered something" is not
+// confirmation of a row, and a healthy connection confers nothing.
+//
+// DASHBOARD (deliberate, not drift): the dashboard renders the offline snapshot,
+// which exists precisely because the host is NOT reachable. It therefore has no
+// host record to pass and always receives `null` here, so it keeps `local copy`
+// exactly as before. The shared rule changes for both surfaces; the outcome differs
+// only because one of them can obtain confirmation and the other, by definition,
+// cannot.
+export function confirmedRestoredSender(hostRecord) {
+  if (hostRecord === null || typeof hostRecord !== "object") return RESTORED_SENDER_LABEL;
+  const from = hostRecord.from;
+  if (typeof from !== "string" || from.length === 0) return RESTORED_SENDER_LABEL;
+  return from;
+}
+
 // Whether a stored record may be shown as ordinary restored content at all.
 //
 // `system` is the room's own voice and `status` is its broadcast treatment. A

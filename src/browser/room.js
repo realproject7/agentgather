@@ -1,7 +1,7 @@
 import { analyzeMentions } from "./mentions.js";
 import { renderSafeMarkdown } from "./markdown.js";
 import { describeWakeTier, wakeTierForMode } from "./wake-tier.js";
-import { RESTORED_SENDER_LABEL, isRestorableStoredType } from "./restored-provenance.js";
+import { RESTORED_SENDER_LABEL, confirmedRestoredSender, isRestorableStoredType } from "./restored-provenance.js";
 
 const state = {
   token: null,
@@ -78,6 +78,10 @@ const state = {
   // length. Nothing here is a cursor: the live cursor is `state.cursor` and this
   // path never writes it.
   earlier: { oldestId: 0, restoredLowest: 0, restoredHighest: 0, loaded: 0, hasMore: false, inFlight: false, failed: false },
+  // #312: ids seeded from the local copy this entry, awaiting per-row confirmation
+  // against the host's log. Ids only — never the stored aliases.
+  seededIds: [],
+  seededConfirmed: false,
   // #247 offline-history bridge: the write-only capability this open was handed in
   // its entry fragment, held in memory for the life of the tab and nowhere else.
   // Absent unless the dashboard opened this room, which is exactly when a
@@ -811,6 +815,11 @@ function seedEntryFromBackup() {
   state.earlier.oldestId = lowest;
   state.earlier.hasMore = lowest > 1;
   if (state.earlier.hasMore) mountEarlierControl();
+  // #312 — the ids this entry seeded from the local copy, so their authorship can
+  // be confirmed against the host's own log once it answers. Held as ids only: the
+  // stored aliases stay out of this path entirely, which is what makes attribution
+  // impossible to launder from the store.
+  state.seededIds = restored.map((message) => message.id);
   // The restore is provisional until the room confirms it holds that head (#278).
   state.seedUnverified = true;
   emptyState.hidden = true;
@@ -1093,6 +1102,62 @@ async function verifyRestoredHead() {
   return false;
 }
 
+// #312 — earn the author of each seeded row from the host's own log, or leave it
+// saying `local copy`.
+//
+// #278 made a warm entry render the local copy, and #279's rule then labelled every
+// one of those rows `local copy` — correct when nothing can check the store, wrong
+// when the host is reachable and serving the very ids being seeded. In a
+// coordination room that made every backfilled line anonymous, which is the thing
+// the room exists to show.
+//
+// Three properties, each deliberate:
+//
+//  1. PER ROW, from the HOST. The host's own records are fetched and matched by id;
+//     a row is attributed only where the host's log holds that id, and it is the
+//     HOST's `from` that renders. The stored alias never enters this path — the ids
+//     are all that was kept — so a hand-edited store cannot put words in a named
+//     participant's mouth no matter how healthy the connection is.
+//  2. NON-BLOCKING. Entry still paints instantly from the local copy; this runs
+//     after the first poll has already proved the host answers. The latency #278
+//     bought is untouched. It does re-read the seeded range once, bounded by
+//     #211's cap rather than by room size.
+//  3. PROVENANCE SURVIVES. The row keeps `data-restored="true"`, its restored
+//     avatar and its restored kind. What changes is only the one thing the host
+//     confirmed: who wrote it. The row is still this device's copy, and still says
+//     so — it is no longer anonymous about the author.
+//
+// A transport failure proves nothing, so rows simply stay `local copy`.
+async function confirmSeededAuthors() {
+  if (state.seededConfirmed || state.seededIds.length === 0) return;
+  state.seededConfirmed = true;
+  const ids = state.seededIds;
+  const lowest = ids[0];
+  let payload;
+  try {
+    payload = await authFetch(`/messages?since_id=${Math.max(0, lowest - 1)}&limit=${ids.length}`);
+  } catch {
+    return;
+  }
+  const hostById = new Map();
+  for (const record of Array.isArray(payload.messages) ? payload.messages : []) {
+    hostById.set(record.id, record);
+  }
+  for (const id of ids) {
+    const row = timeline.querySelector(`li[data-message-id="${id}"][data-restored="true"]`);
+    if (row === null) continue;
+    // The host record for THIS id, or nothing. `confirmedRestoredSender` returns
+    // the label when it is handed nothing, so an unconfirmed row is untouched by
+    // construction rather than by remembering to check.
+    const sender = confirmedRestoredSender(hostById.get(id) ?? null);
+    if (sender === RESTORED_SENDER_LABEL) continue;
+    const from = row.querySelector(".message-from");
+    if (from === null) continue;
+    from.textContent = state.participantLabels.get(sender) || sender;
+    row.dataset.authorConfirmed = "true";
+  }
+}
+
 // Drop everything the restore contributed and return to the pre-#278 behaviour:
 // an empty timeline and a fetch from the start. The stored copy is removed too —
 // it has been shown to belong to some other room's numbering, so keeping it would
@@ -1166,6 +1231,11 @@ async function pollMessages() {
         await pollMessages();
         return;
       }
+      // #312 — the restore has survived verification and the host has answered, so
+      // its log is available to confirm who wrote the seeded rows. Deliberately
+      // here and not at seed time: this must not gate first paint, and a host that
+      // never answers must leave every row saying `local copy`.
+      await confirmSeededAuthors();
     }
     emptyState.hidden = state.seen.size > 0 || state.roomStatus === "closed";
     if (state.roomStatus === "closed") {
