@@ -58,6 +58,7 @@ import { parseArgs, flagBoolean, flagString, type ParsedArgs } from "../../args.
 import type { CliContext } from "../../context.js";
 import { listenErrorMessage, listenOrError, type ListenOutcome } from "../listen.js";
 import { readCurrent, readToken, recordJoinedRoom, writeCurrent, writeToken } from "../../state.js";
+import { requireHostRoom } from "./host-home.js";
 
 export interface RoomCommandHooks {
   // Injectable so tests can deterministically exercise the bind-error path without
@@ -217,7 +218,7 @@ async function roomChannelCreate(argv: string[], context: CliContext): Promise<n
   const args = parseArgs(argv);
   const channelId = args.positional[0];
   if (channelId === undefined) throw new Error("channel id is required");
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room channel-create");
   const type = parseChannelType(flagString(args, "type") ?? "chat");
   const channel: Channel = {
     id: channelId,
@@ -246,7 +247,7 @@ async function roomChannelRename(argv: string[], context: CliContext): Promise<n
   const nameFlag = flagString(args, "name");
   if (nameFlag === undefined) throw new Error("--name is required");
   const name = parseChannelName(nameFlag);
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room channel-rename");
   const boardroom = await renameChannel(context.home, current.roomId, channelId, name);
   const channel = boardroom.channels.find((c) => c.id === channelId);
   return emit(
@@ -289,7 +290,7 @@ async function roomForumPost(argv: string[], context: CliContext): Promise<numbe
   if (channelId === undefined) throw new Error("forum channel id is required");
   const title = flagString(args, "title");
   if (title === undefined) throw new Error("--title is required");
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room forum-post");
   const input: { author: string; title: string; body: string; id?: string; status?: ReturnType<typeof parseForumStatus>; tags?: string[] } = {
     author: flagString(args, "author") ?? current.alias,
     title,
@@ -312,7 +313,7 @@ async function roomForumComment(argv: string[], context: CliContext): Promise<nu
   if (channelId === undefined || postId === undefined) throw new Error("forum-comment requires <channel> <post>");
   const body = flagString(args, "body") ?? args.positional.slice(2).join(" ");
   if (body.trim().length === 0) throw new Error("comment body is required");
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room forum-comment");
   const comment = await addForumComment(context.home, current.roomId, channelId, postId, {
     author: flagString(args, "author") ?? current.alias,
     body
@@ -355,7 +356,7 @@ async function roomForumStatus(argv: string[], context: CliContext): Promise<num
   const postId = args.positional[1];
   if (channelId === undefined || postId === undefined) throw new Error("forum-status requires <channel> <post>");
   const status = parseForumStatus(flagString(args, "status") ?? args.positional[2] ?? "");
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room forum-status");
   const post = await setForumPostStatus(context.home, current.roomId, channelId, postId, status);
   return emit(context, flagBoolean(args, "json"), { ok: true, post }, `forum post ${post.id} → ${post.status}\n`);
 }
@@ -386,15 +387,19 @@ function parseChannelSpec(spec: string | undefined, createdAt: string): Channel[
 
 async function roomBrief(argv: string[], context: CliContext): Promise<number> {
   const [action, ...rest] = argv;
-  const current = await readCurrent(context.home);
   const args = parseArgs(rest);
   if (action === "view") {
+    const current = await readCurrent(context.home);
     const brief = await readBrief(context.home, current.roomId);
     return emit(context, flagBoolean(args, "json"), { ok: true, brief }, brief.body);
   }
   if (action === "set") {
     const body = (await resolveBriefBody(args, "body")) ?? args.positional.join(" ");
     if (body.length === 0) throw new Error("brief body is required");
+    // Host-only (#310): the server rejects a non-host `POST /brief` with 403, and
+    // the local fallback writes host-owned files, so classify the home before
+    // either path runs.
+    const current = await requireHostRoom(context.home, "room brief set");
     const brief =
       (await postBriefToServer(current.baseUrl, current.token, body)) ??
       (await updateBriefDirect(context, current.roomId, current.alias, body));
@@ -405,9 +410,9 @@ async function roomBrief(argv: string[], context: CliContext): Promise<number> {
 
 async function roomAttendance(argv: string[], context: CliContext): Promise<number> {
   const [action, ...rest] = argv;
-  const current = await readCurrent(context.home);
   const args = parseArgs(rest);
   if (action === "view") {
+    const current = await readCurrent(context.home);
     const state = await readRoomState(roomPaths(context.home, current.roomId));
     return emit(
       context,
@@ -418,6 +423,9 @@ async function roomAttendance(argv: string[], context: CliContext): Promise<numb
   }
   if (action === "set") {
     const policy = parseAttendancePolicy(flagString(args, "policy") ?? args.positional[0] ?? "");
+    // Host-only (#310): `POST /attendance` is 403 for a non-host and the fallback
+    // writes room.json, so the home is classified before either path runs.
+    const current = await requireHostRoom(context.home, "room attendance set");
     const state =
       (await postAttendanceToServer(current.baseUrl, current.token, policy)) ??
       (await updateAttendancePolicyDirect(context, current.roomId, current.alias, policy));
@@ -480,7 +488,6 @@ async function updateAttendancePolicyDirect(
 // attendance`.
 async function roomSession(argv: string[], context: CliContext): Promise<number> {
   const [action, ...rest] = argv;
-  const current = await readCurrent(context.home);
   const args = parseArgs(rest);
   if (action === "start") {
     const channel = flagString(args, "channel") ?? DEFAULT_CHANNEL_ID;
@@ -490,6 +497,9 @@ async function roomSession(argv: string[], context: CliContext): Promise<number>
     const expectedDurationM = parseSessionDuration(flagString(args, "duration-m"));
     const modeValue = flagString(args, "mode");
     const requestedMode = modeValue === undefined ? undefined : parseAttendancePolicy(modeValue);
+    // Host-only (#310) on both paths: `POST /session` is 403 for a non-host, and
+    // the direct fallback writes the host's room.json + message log.
+    const current = await requireHostRoom(context.home, "room session start");
     const session =
       (await postSessionToServer(current.baseUrl, current.token, {
         action: "start",
@@ -506,6 +516,7 @@ async function roomSession(argv: string[], context: CliContext): Promise<number>
     );
   }
   if (action === "end") {
+    const current = await requireHostRoom(context.home, "room session end");
     const session =
       (await postSessionToServer(current.baseUrl, current.token, { action: "end" })) ??
       (await endSessionDirect(context, current.roomId));
@@ -652,7 +663,7 @@ async function roomInvite(argv: string[], context: CliContext): Promise<number> 
   const args = parseArgs(argv);
   const alias = args.positional[0];
   if (alias === undefined) throw new Error("participant alias is required");
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room invite");
   const kind = parseKind(flagString(args, "kind") ?? "agent");
   const token = createToken();
   // 9A: the host may request an attention mode for this participant; the
@@ -692,7 +703,7 @@ async function roomInviteCard(argv: string[], context: CliContext): Promise<numb
   const args = parseArgs(argv);
   const alias = args.positional[0];
   if (alias === undefined) throw new Error("participant alias is required");
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room invite-card");
   const token = await readToken(context.home, current.roomId, alias);
   const [brief, state] = await Promise.all([
     readBrief(context.home, current.roomId),
@@ -774,7 +785,7 @@ async function roomLeave(argv: string[], context: CliContext): Promise<number> {
 
 async function roomClose(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room close");
   const state = await closeRoom(context.home, current.roomId);
   await appendServerMessage({ root: context.home, roomId: current.roomId, from: "system", text: "room closed" });
   return emit(context, flagBoolean(args, "json"), { ok: true, room_status: state.status });
@@ -793,7 +804,7 @@ async function roomDashboard(argv: string[], context: CliContext): Promise<numbe
 // plan carries no tokens.
 async function roomLaunch(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
+  const current = await requireHostRoom(context.home, "room launch");
   const currentUrl = new URL(current.baseUrl);
   const port = Number(flagString(args, "port") ?? (currentUrl.port || "8787"));
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -840,6 +851,10 @@ async function roomLaunch(argv: string[], context: CliContext): Promise<number> 
 // manual-run-required (token-free).
 async function roomRuntimeStatus(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
+  // NOT host-only, deliberately (#310 scope decision, @head): this reads no host
+  // file — it probes a URL and reports the runtime state — so it stays usable from
+  // a participant home. `launch` and `serve`, which stand that runtime up, do
+  // classify.
   const current = await readCurrent(context.home);
   const publicUrl = sanitizePublicUrl(normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl));
   const [tmuxAvailable, runtimeReachable] = await Promise.all([hasCommand("tmux"), probeRuntime(publicUrl)]);
@@ -910,7 +925,11 @@ async function probeRuntime(publicUrl: string): Promise<boolean> {
 
 async function roomServe(argv: string[], context: CliContext, hooks: RoomCommandHooks = {}): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
+  // Host-only (#310, @re1): `serve` is not a read of host files — it stands up the
+  // host's room server over this home's room store and rewrites `current-room.json`
+  // on a successful bind. From a participant home it would bind a port and then
+  // serve a room whose state does not exist here.
+  const current = await requireHostRoom(context.home, "room serve");
   const currentUrl = new URL(current.baseUrl);
   const portValue = flagString(args, "port") ?? (currentUrl.port || "8787");
   const port = Number(portValue);
