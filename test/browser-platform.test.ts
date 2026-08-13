@@ -723,7 +723,10 @@ test("the dashboard shows device-local joined rooms and clears browser-added one
     assert.match(redirect.headers.get("location") ?? "", /^http:\/\/127\.0\.0\.1:9\/?\?dashboard=.*#token=tgl_joined_cli_secret(&snapshot=[A-Za-z0-9_-]+)?$/);
 
     // Add a browser-recorded token-free pointer.
-    await page.fill("#joined-input", "http://127.0.0.1:8787/saved-room");
+    // #305: not the product default room port — a saved pointer must not name a
+    // live service on the developer's machine. The discard port is unbindable
+    // without root, and this row is asserted `saved` (never probed) anyway.
+    await page.fill("#joined-input", "http://127.0.0.1:9/saved-room");
     await page.click("#joined-add-button");
     await page.waitForSelector('.joined-row[data-reachability="saved"]');
 
