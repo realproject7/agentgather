@@ -845,11 +845,24 @@ async function roomLeave(argv: string[], context: CliContext): Promise<number> {
       // and no next step, which is the shape #314 exists to remove. So the reason
       // becomes context on an actionable message rather than being the message.
       //
-      // The reason is redacted before it is shown: it is a string from another
-      // machine, and a host could put a URL or a credential in it. Redact first,
-      // then cap — capping first could cut a token into a form the redactor no
-      // longer recognises.
-      const reason = redactSnapshotText(payload.message ?? `HTTP ${response.status}`).slice(0, 200);
+      // The reason is a string from another machine, so it is both redacted and
+      // reshaped before it is shown.
+      //
+      // Redact first, then cap — capping first could cut a token into a form the
+      // redactor no longer recognises.
+      //
+      // Collapse whitespace before interpolating (@re2). Redaction protects
+      // confidentiality; this protects FRAMING. `The host said:` labels one line,
+      // so a reason carrying a newline would push its remaining lines below ours,
+      // unattributed and indistinguishable from this tool's own guidance — and a
+      // plain URL is deliberately not redacted, so a fake instruction could carry a
+      // working address. Flattening to one line keeps the host's words visibly the
+      // host's, and makes the 200-char cap a cap on the whole reason rather than on
+      // its first line.
+      const reason = redactSnapshotText(payload.message ?? `HTTP ${response.status}`)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
       throw new Error(
         [
           `\`agentgather room leave\` was refused by the host of room "${current.roomId}": it is not accepting this credential.`,
