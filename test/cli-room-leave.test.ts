@@ -205,6 +205,32 @@ test("a participant whose host is unreachable is told exactly that, and nothing 
   await assert.rejects(() => stat(roomPaths(joined.context.home, ROOM).state));
 });
 
+test("a host that answers and REFUSES is reported with its own reason, not as unreachable (#314)", async () => {
+  // The distinction the participant branch is built on: "no server answered" and
+  // "the server said no" are different problems with different next actions.
+  // Flattening the second into the first would send the reader to restart a host
+  // that is already running.
+  const { participant: joined, server } = await hostAndParticipant();
+  try {
+    // A credential the room does not know. The server answers 403 with its reason.
+    await writeCurrent(joined.context.home, {
+      roomId: ROOM,
+      alias: "project7",
+      token: "tgl_a_token_this_room_never_issued",
+      baseUrl: server.baseUrl
+    });
+
+    const error = await runFailing(["leave"], joined.context);
+    assert.equal(error.message, "participant token is not allowed");
+    assert.notEqual(error.message, hostUnreachable(ROOM), "a refusal must not read as unreachable");
+    assert.equal(error.message.includes(HOST_HOME_REMEDY), false);
+    assert.equal(/tgl_/.test(error.message), false, "the rejected token must not be echoed back");
+    assert.equal(error.message.includes(joined.context.home), false);
+  } finally {
+    await server.close();
+  }
+});
+
 test("leaving a room this home holds no copy of says so, distinctly (#314)", async () => {
   const home = await makeHome("leave-unknown");
   await writeCurrent(home.context.home, {

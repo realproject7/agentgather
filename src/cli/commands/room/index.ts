@@ -819,8 +819,34 @@ async function roomLeave(argv: string[], context: CliContext): Promise<number> {
 
   // A participant copy. Nothing here can record the departure — the host's files
   // are on the host's device — so the server is not a preferred path, it is the
-  // only one.
-  if (!(await postLeaveToServer(current.baseUrl, current.token))) {
+  // only one. `POST /leave` accepts any participant, so the participant's own
+  // token is what authenticates it; no host credential is involved.
+  //
+  // `announced` is false only when NO room server answered: unreachable, or a 404
+  // from something that is not this room's server. A server that answers and
+  // REFUSES is surfaced with its own reason rather than flattened into
+  // "unreachable", which would send the reader after the wrong problem.
+  let announced: boolean;
+  try {
+    const response = await fetch(roomUrl(current.baseUrl, "/leave"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${current.token}`,
+        "Content-Type": "application/json"
+      },
+      body: "{}"
+    });
+    const payload = await readResponseJson<{ message?: string }>(response);
+    if (!response.ok && response.status !== 404) {
+      throw new Error(payload.message ?? `leaving the room failed with HTTP ${response.status}`);
+    }
+    announced = response.ok;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    announced = false;
+  }
+
+  if (!announced) {
     throw new Error(
       [
         `\`agentgather room leave\` could not reach the host of room "${current.roomId}", so your departure was not announced.`,
@@ -835,32 +861,6 @@ async function roomLeave(argv: string[], context: CliContext): Promise<number> {
     { ok: true },
     `You left ${current.roomId} as ${current.alias}. The host was notified.\n`
   );
-}
-
-// Announce a participant's departure to the room server. `POST /leave` accepts any
-// participant, so this needs no host credential — the participant's own token is
-// what it authenticates. Returns false when no room server answered (unreachable,
-// or a 404 from something that is not this room's server); a server that answers
-// and refuses is surfaced with its own reason rather than flattened into
-// "unreachable", which would send the reader after the wrong problem.
-async function postLeaveToServer(baseUrl: string, token: string): Promise<boolean> {
-  try {
-    const response = await fetch(roomUrl(baseUrl, "/leave"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: "{}"
-    });
-    const payload = await readResponseJson<{ message?: string }>(response);
-    if (response.status === 404) return false;
-    if (!response.ok) throw new Error(payload.message ?? `leaving the room failed with HTTP ${response.status}`);
-    return true;
-  } catch (error) {
-    if (error instanceof TypeError) return false;
-    throw error;
-  }
 }
 
 async function roomClose(argv: string[], context: CliContext): Promise<number> {
