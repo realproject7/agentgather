@@ -9,6 +9,18 @@
 // A block is in the surface if it drives a browser at all: it launches one, opens
 // a page, or uses a fixture page. Every such block must reach a `diagnostics`
 // write on failure, or be listed in EXCEPTIONS with a stated reason.
+//
+// #322 — and it must also carry a title this script can resolve to the name node
+// reports at runtime. If you have arrived here because a table-driven or otherwise
+// parameterised browser test just failed the guard: **that refusal is deliberate,
+// and EXCEPTIONS deliberately does not cover it** (@re2). EXCEPTIONS excuses a
+// block from ATTACHING a recorder, which is a property of the block. An
+// unresolvable title is a property of the whole diagnostic chain: the status
+// matches a failing test to its block by runtime name, so a block without one has
+// its failures reported as outside the wait surface even when the recorder
+// attached and wrote — a false sentence no exception list can make true. An entry
+// keyed on `<unnamed at line N>` would also break the moment anything above it
+// moved. Give the block a literal title, or parameterise the body under one.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
