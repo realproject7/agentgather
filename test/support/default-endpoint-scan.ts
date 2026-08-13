@@ -22,8 +22,22 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-/** Product defaults that must never appear as an address in the test surface. */
-export const DEFAULT_ENDPOINT_PATTERN = /127\.0\.0\.1:(8787|8788)\b/;
+/**
+ * Product defaults that must never appear as an address in the test surface.
+ *
+ * ALL FOUR loopback spellings, because the product treats them as the same host:
+ * `isLoopbackHost` (`src/browser/room.js:1519-1521`) accepts `127.0.0.1`,
+ * `localhost`, `::1` and `[::1]`. A guard matching only the dotted form would let
+ * `?dashboard=http://localhost:8788` reach the same live dashboard and write the
+ * same rows, while reading as a complete guarantee — and then the next author has
+ * to remember not to write the other three, which is the state that produced the
+ * 66 rows (@re2, PR #316).
+ *
+ * `\[::1\]` precedes `::1` so the bracketed form matches whole rather than as a
+ * suffix. The alternation is written with escapes throughout, so this source line
+ * contains no literal host:port and the guard does not report itself.
+ */
+export const DEFAULT_ENDPOINT_PATTERN = /(?:127\.0\.0\.1|localhost|\[::1\]|::1):(?:8787|8788)\b/;
 
 export interface DefaultEndpointHit {
   file: string;

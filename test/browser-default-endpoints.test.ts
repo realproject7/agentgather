@@ -51,6 +51,25 @@ test("the scan detects a default endpoint in code and ignores one in a comment (
     true,
     "the scan would not have caught a saved pointer at the default room port"
   );
+
+  // Every spelling the PRODUCT treats as this host, one pinned case each (@re2).
+  // `isLoopbackHost` (`src/browser/room.js:1519-1521`) accepts all four, so a
+  // guard that matched only the dotted form would read as complete while leaving
+  // three ways to write the same live address.
+  for (const alias of ["127.0.0.1", "localhost", "[::1]", "::1"]) {
+    for (const port of [roomPort, dashboardPort]) {
+      assert.equal(
+        DEFAULT_ENDPOINT_PATTERN.test(`const dashboard = "http://${alias}:${port}";`),
+        true,
+        `${alias}:${port} is a loopback default the product accepts and the scan missed`
+      );
+    }
+  }
+  // ...and a non-default port on those same aliases is not a hit, so the guard
+  // bounds itself to the two product defaults rather than to loopback in general.
+  for (const alias of ["127.0.0.1", "localhost", "[::1]"]) {
+    assert.equal(DEFAULT_ENDPOINT_PATTERN.test(`const d = "http://${alias}:9";`), false, `${alias}:9 must not be a hit`);
+  }
   // ...and the replacements it steers towards are not themselves hits.
   assert.equal(DEFAULT_ENDPOINT_PATTERN.test(`const dashboard = "http://${host}:9";`), false);
   assert.equal(DEFAULT_ENDPOINT_PATTERN.test("const dashboard = fixture.baseUrl;"), false);
