@@ -1160,7 +1160,15 @@ async function confirmSeededAuthors() {
     // the label when it is handed nothing, so an unconfirmed row is untouched by
     // construction rather than by remembering to check.
     const hostRecord = hostById.get(id) ?? null;
-    const sender = confirmedRestoredSender(hostRecord);
+    // The host's record must itself be renderable as restored content (@re1, PR
+    // #315). A tampered store can claim `type: "chat"` on an id the host holds as
+    // `system` or `status`; replacing from that record would render the room's own
+    // voice as an ordinary restored row — #278's type boundary breached through the
+    // back door, by the very step meant to make rows trustworthy. Such a record
+    // confirms nothing, so the row keeps its pre-#312 presentation: `local copy`,
+    // its stored text, no attribution.
+    const usable = hostRecord !== null && isRestorableStoredType(hostRecord.type) ? hostRecord : null;
+    const sender = confirmedRestoredSender(usable);
     if (sender === RESTORED_SENDER_LABEL) continue;
     const from = row.querySelector(".message-from");
     const body = row.querySelector(".message-text");
@@ -1176,7 +1184,7 @@ async function confirmSeededAuthors() {
     // survives. Redaction is re-applied on the way in, as at seed time, because a
     // restored region stays uniformly redacted whatever its content's origin.
     from.textContent = state.participantLabels.get(sender) || sender;
-    renderSafeMarkdown(body, redactForBackup(String(hostRecord.text ?? "")), { mentions: state.participants });
+    renderSafeMarkdown(body, redactForBackup(String(usable.text ?? "")), { mentions: state.participants });
     row.dataset.authorConfirmed = "true";
   }
 }

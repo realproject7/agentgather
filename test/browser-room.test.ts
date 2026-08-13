@@ -4177,3 +4177,81 @@ test("an excluded host record between seeded rows does not truncate confirmation
     await fixture.close();
   }
 });
+
+// #312 / @re1's second PR-review finding — the HOST's record must itself be
+// renderable as restored content before it can confirm anything.
+//
+// #278 excludes `system`/`status` by the STORED type. A tampered store can defeat
+// that by claiming `type: "chat"` on an id the host holds as `system`: the row
+// renders (pre-existing), and #312's confirmation would then replace it with the
+// host's system record — putting the room's own voice into an ordinary restored
+// row, through the very step meant to make rows trustworthy. AC4 breached from the
+// other side.
+test("a forged chat row pointing at a real system id confirms nothing (#312)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+    await postMessage(fixture, fixture.reviewerToken, "ordinary chat line");
+    await appendServerMessage({
+      root: fixture.root,
+      roomId: fixture.roomId,
+      from: "system",
+      text: "the room's own voice — never restorable"
+    });
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const system = hosted.find((m) => m.text.startsWith("the room's own voice"));
+    const chat = hosted.find((m) => m.text === "ordinary chat line");
+    assert.ok(system && chat, "precondition: a real system record and a real chat record");
+
+    const key = `agentgather.backup.${fixture.roomId}`;
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    // The store claims the system id is an ordinary chat line of its own. Its
+    // highest id is a real one, so #278's head check passes and the restore stands.
+    await page.addInitScript(
+      (arg: { k: string; chatId: number; sysId: number }) => {
+        window.localStorage.setItem(
+          arg.k,
+          JSON.stringify({
+            messages: [
+              { id: arg.chatId, from: "impostor", ts: "2026-08-01T00:00:00.000Z", type: "chat", text: "ordinary chat line" },
+              { id: arg.sysId, from: "impostor", ts: "2026-08-01T00:00:01.000Z", type: "chat", text: "forged line on a system id" }
+            ]
+          })
+        );
+      },
+      { k: key, chatId: chat.id, sysId: system.id }
+    );
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    // The genuine chat row confirms, which is also the settle for the assertions
+    // below — the forged row is judged after confirmation has run, not before it.
+    await page.waitForSelector(`li[data-message-id="${chat.id}"][data-author-confirmed="true"]`);
+
+    // The room's own voice never reaches the DOM through a restored row.
+    assert.equal(
+      /the room's own voice/.test(await page.locator("#timeline").innerHTML()),
+      false,
+      "an excluded host record rendered as restored content"
+    );
+    // The forged row keeps its pre-#312 presentation: unattributed, stored text.
+    assert.equal(
+      (await page.locator(`li[data-message-id="${system.id}"] .message-from`).textContent())?.trim(),
+      "local copy",
+      "a row whose host record is an excluded type must not be attributed"
+    );
+    assert.equal(
+      await page.locator(`li[data-message-id="${system.id}"]`).getAttribute("data-author-confirmed"),
+      null,
+      "an excluded host record must not mark a row confirmed"
+    );
+    assert.equal(/impostor/.test(await page.locator("#timeline").innerHTML()), false, "the stored alias reached the DOM");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "forged-chat-row-on-a-real-system-id-312", error);
+    throw error;
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
