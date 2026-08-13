@@ -851,7 +851,11 @@ async function roomLaunch(argv: string[], context: CliContext): Promise<number> 
 // manual-run-required (token-free).
 async function roomRuntimeStatus(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
-  const current = await requireHostRoom(context.home, "room runtime-status");
+  // NOT host-only, deliberately (#310 scope decision, @head): this reads no host
+  // file — it probes a URL and reports the runtime state — so it stays usable from
+  // a participant home. `launch` and `serve`, which stand that runtime up, do
+  // classify.
+  const current = await readCurrent(context.home);
   const publicUrl = sanitizePublicUrl(normalizeBaseUrl(flagString(args, "url") ?? current.baseUrl));
   const [tmuxAvailable, runtimeReachable] = await Promise.all([hasCommand("tmux"), probeRuntime(publicUrl)]);
   const runtimeState = resolveRuntimeState(tmuxAvailable, runtimeReachable);

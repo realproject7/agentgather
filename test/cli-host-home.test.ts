@@ -78,12 +78,14 @@ const SERVE_BIND_FAILURE: RoomCommandHooks = {
   listen: async () => ({ ok: false, error: Object.assign(new Error("listen failed"), { code: "EADDRNOTAVAIL" }) })
 };
 
-// The complete host-only family: the twelve subcommands #310 names, plus the three
-// host-runtime commands @re1 identified in review. `serve` is the reason they
-// belong here — it does not read host files, it stands the host's room server up
-// over this home's room store and rewrites `current-room.json` on a successful
-// bind, so from a participant home it would bind a port and then serve a room
-// whose state is not there.
+// The complete host-only family: the twelve subcommands #310 names, plus `launch`
+// and `serve`, added in review. `serve` is the reason those two belong here — it
+// does not read host files, it stands the host's room server up over this home's
+// room store and rewrites `current-room.json` on a successful bind, so from a
+// participant home it would bind a port and then serve a room whose state is not
+// there; `launch` builds and can spawn that same command. `runtime-status` is
+// deliberately NOT here — it reads no host file and stays usable from a
+// participant home (#310 scope decision); the test below pins that.
 //
 // The order is also a valid order to run them in against a real host home, which
 // the last test does: the forum mutations follow the post they act on, the runtime
@@ -101,7 +103,6 @@ const HOST_ONLY_FAMILY: ReadonlyArray<{ command: string; argv: string[]; hooks?:
   { command: "room session start", argv: ["session", "start", "--duration-m", "15"] },
   { command: "room session end", argv: ["session", "end"] },
   { command: "room launch", argv: ["launch", "--json"] },
-  { command: "room runtime-status", argv: ["runtime-status", "--json"] },
   { command: "room serve", argv: ["serve"], hooks: SERVE_BIND_FAILURE },
   { command: "room close", argv: ["close"] }
 ];
@@ -239,6 +240,27 @@ test("every host-only room command reports a home with no current room with its 
     assert.ok(!error.message.includes("ENOENT"), `${command} leaked ENOENT`);
     assert.ok(!error.message.includes("current-room.json"), `${command} leaked an internal file name`);
   }
+});
+
+test("room runtime-status stays usable from a participant-only home (#310 scope decision)", async () => {
+  const { participant } = await hostAndParticipantHomes();
+  participant.stdout.chunks = [];
+
+  // Read-only: it probes a URL and reports the runtime state, touching no host
+  // file. Guarding it would take a working command away from a participant, so it
+  // is deliberately outside the family above. This test fails if someone adds it.
+  assert.equal(await runRoomCommand(["runtime-status", "--json"], participant.context), 0);
+  const status = participant.stdout.json<{ ok: true; room: string; runtime_state: string }>();
+  assert.equal(status.ok, true);
+  assert.equal(status.room, ROOM);
+  // The room's baseUrl is a reserved-and-released port, so the runtime is not
+  // reachable; which of the two unreachable states it reports depends on whether
+  // this machine has tmux, so assert the set rather than pin the runner's tooling.
+  assert.ok(
+    ["runtime-unreachable", "manual-run-required"].includes(status.runtime_state),
+    `unexpected runtime_state ${status.runtime_state}`
+  );
+  assert.ok(!participant.stdout.text().includes("tgl_"), "runtime-status echoed a token");
 });
 
 test("a joined-rooms row with no room directory is still a participant copy, not an unknown room (#310)", async () => {
