@@ -2673,6 +2673,16 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     assert.equal(await confirmed.getAttribute("data-restored"), "true", "the row is still this device's copy");
     // The forged author never reaches the DOM: what renders is the host's own.
     assert.equal((await confirmed.locator(".message-from").textContent())?.trim(), "reviewer");
+    // These three became LOAD-BEARING in the same change that first dropped them
+    // (@re2, review 4922776640). Before #312 a restored row said `local copy`, so
+    // its label alone marked it as not-live. A confirmed row now shows a real
+    // participant's name, which makes the sender kind, the avatar treatment and
+    // the absence of `own` the entire remaining visual distinction between a
+    // restored row and a live one. They are asserted against the CONFIRMED row —
+    // the case where the label no longer carries the distinction by itself.
+    assert.equal(await confirmed.locator(".message-from").getAttribute("data-kind"), "restored");
+    assert.equal(await confirmed.locator(".message-avatar.human, .message-avatar.agent").count(), 0);
+    assert.equal(((await confirmed.getAttribute("class")) ?? "").includes("own"), false);
     const restoredHtml = (await page.locator("#timeline").innerHTML()) ?? "";
     assert.equal(/message-from[^>]*>\s*host\s*</.test(restoredHtml), false, "no restored row is labelled host");
     // Malformed records are dropped rather than coerced into a half-rendered row.
