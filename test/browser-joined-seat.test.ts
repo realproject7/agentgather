@@ -284,9 +284,15 @@ test("opening a joined row may pick another held seat, and refuses one this devi
     assert.match(help, /not one this device holds a credential for/);
     assert.equal(/tgl_/.test(help), false);
 
-    // And a seat held for a DIFFERENT room is still refused for this one.
-    const crossRoom = await open(`${both}&alias=nobody-here`);
+    // A seat this device really does hold — but for ANOTHER room — is still refused
+    // here (@re2: the previous version of this passed `nobody-here`, which is held
+    // nowhere and so only repeated the case above). `pb-lead` is held for
+    // `agent-room` and `both-room`, and must not open `human-room`.
+    const crossRoom = await open(
+      `room_id=human-room&base_url=${encodeURIComponent(baseUrls.human)}&alias=pb-lead`
+    );
     assert.equal(crossRoom.status, 409);
+    assert.equal(/tgl_/.test(await crossRoom.text()), false);
   } finally {
     await platform.close();
   }
@@ -410,6 +416,29 @@ test("a room held under both kinds offers a visible, reversible Join as choice t
       await page.locator('.joined-row:has-text("Both Room")').first().getAttribute("aria-label"),
       seatLabel("Both Room", "human")
     );
+
+    // Reversible for a KEYBOARD user too (@re2): re-rendering the rail replaces the
+    // control being operated, so without restoring focus it lands on <body> and
+    // reversing means tabbing back through the rail from the top. Drive the change
+    // from the keyboard and require focus to still be on that row's select.
+    await page.locator('.joined-row:has-text("Both Room") select.joined-seat-select').focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector('.joined-row:has-text("Both Room") .joined-seat[data-seat="agent"]');
+    const focused = await page.evaluate(() => {
+      const active = document.activeElement;
+      return {
+        tag: active?.tagName ?? "",
+        cls: active?.className ?? "",
+        row: active?.closest(".joined-row")?.querySelector(".joined-name")?.textContent ?? ""
+      };
+    });
+    assert.equal(focused.tag, "SELECT", "focus left the seat control after a keyboard change");
+    assert.equal(focused.cls, "joined-seat-select");
+    assert.equal(focused.row, "Both Room", "focus moved to a different row's control");
+    // Restore the human default for the assertions that follow.
+    await page.locator('.joined-row:has-text("Both Room") select.joined-seat-select').selectOption("project7");
+    await page.waitForSelector('.joined-row:has-text("Both Room") .joined-seat[data-seat="agent"]', { state: "detached" });
 
     // Choosing a seat must not open the room — the row is itself a link.
     assert.equal(new URL(page.url()).pathname, "/");

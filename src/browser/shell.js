@@ -631,6 +631,10 @@ function renderRail() {
     if (entry.archived) item.dataset.archived = "true";
     item.dataset.reachability = entry.reachability || "saved";
     item.dataset.openHref = joinedOpenUrl(entry);
+    // Stable identity for this row across a re-render (#311), keyed the same way
+    // the #277 manage selection is — so restoring focus after a seat change lands
+    // on the row the user was operating, never on whichever row now sits there.
+    item.dataset.rowKey = joinedKey(entry);
     item.tabIndex = 0;
     item.setAttribute("role", "link");
     // Seat disclosure (#311) rides the row's own accessible name, so it is
@@ -801,8 +805,19 @@ function buildSeatChoice(entry) {
   }
   select.addEventListener("change", (event) => {
     event.stopPropagation();
-    state.seatChoice.set(joinedKey(entry), select.value);
+    const rowKey = joinedKey(entry);
+    state.seatChoice.set(rowKey, select.value);
+    // Re-rendering the rail replaces the very control being operated, which drops
+    // keyboard focus to <body> (@re2). Reversing the choice would then mean tabbing
+    // back through the rail from the top with nothing announced — so "reversible"
+    // holds for a mouse and not for a keyboard. Put focus back on the new select
+    // for THIS row; the row key survives the re-render, the DOM node does not.
+    const hadFocus = document.activeElement === select;
     renderJoined(state.joinedRooms);
+    if (!hadFocus) return;
+    const row = [...roomList.querySelectorAll(".joined-row")].find((node) => node.dataset.rowKey === rowKey);
+    const restored = row?.querySelector("select.joined-seat-select") ?? null;
+    if (restored !== null) restored.focus();
   });
   wrap.append(caption, select);
   return wrap;
