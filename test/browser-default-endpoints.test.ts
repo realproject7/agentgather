@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { findDefaultEndpointUses } from "./support/default-endpoint-scan.js";
+import { DEFAULT_PORTS, findDefaultEndpointUses } from "./support/default-endpoint-scan.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -36,9 +36,10 @@ test("the scan detects a default endpoint in code and ignores one in a comment (
   // inside the scanned surface instead of being exempted from it. An exemption is
   // a place a real default endpoint could hide; composition keeps the guard
   // pointed at itself.
+  // Imported, never written: this file is in the scanned surface, and naming a
+  // default port here is exactly the composition bypass the guard now rejects.
   const host = "127.0.0.1";
-  const dashboardPort = 8788;
-  const roomPort = 8787;
+  const [roomPort, dashboardPort] = DEFAULT_PORTS;
 
   // The line that wrote 66 rows, in shape.
   assert.equal(
@@ -87,7 +88,7 @@ test("the scan walks e2e and support to any depth (#305)", async () => {
     await writeFile(path.join(root, rel), body, "utf8");
   };
   const host = "127.0.0.1";
-  const port = 8788;
+  const [, port] = DEFAULT_PORTS;
   const offending = `const dashboard = "http://${host}:${port}";\n`;
 
   await write(path.join("test", "browser-x.test.ts"), offending);
@@ -109,3 +110,63 @@ test("the scan walks e2e and support to any depth (#305)", async () => {
     "the scan missed a nested file, or reached outside its surface"
   );
 });
+
+// @re1, PR #316 — the bypass a one-line pattern cannot see.
+//
+// A test can declare the host and the port on SEPARATE lines, compose the URL at
+// runtime, and reach the same live dashboard while every individual line passes a
+// `host:port` pattern. This is not hypothetical: the detector test above was
+// originally written that way to avoid self-matching, which is the proof the shape
+// is writable by someone acting in good faith.
+//
+// So the rule is centralised — `default-endpoint-scan.ts` is the one file allowed
+// to name a default port, and naming one anywhere else in the surface is a hit
+// however it is split. The exemption is a single named file, and its being the
+// ONLY one is asserted rather than assumed.
+test("a split host/port composition is rejected, and the exemption is one file (#305)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agentgather-split-"));
+  const write = async (rel: string, body: string): Promise<void> => {
+    await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
+    await writeFile(path.join(root, rel), body, "utf8");
+  };
+  const [roomPort, dashboardPort] = DEFAULT_PORTS;
+
+  // The bypass, exactly as @re1 described it: no line contains `host:port`.
+  await write(
+    path.join("test", "browser-split.test.ts"),
+    [
+      `const host = "localhost";`,
+      `const port = ${dashboardPort};`,
+      "await page.goto(`${base}/?dashboard=${encodeURIComponent(`http://${host}:${port}`)}`);"
+    ].join("\n")
+  );
+  // The same shape one directory deeper, and with the room port.
+  await write(path.join("test", "e2e", "deep", "split.test.ts"), `const p = ${roomPort};\nconst u = \`http://[::1]:\${p}\`;\n`);
+  // A file that composes nothing and names nothing must stay clean.
+  await write(path.join("test", "support", "clean.ts"), `const target = fixture.baseUrl;\nconst spare = 9;\n`);
+
+  const hits = await findDefaultEndpointUses(root);
+  assert.deepEqual(
+    hits.map((hit) => hit.file).sort(),
+    [path.join("test", "browser-split.test.ts"), path.join("test", "e2e", "deep", "split.test.ts")].sort(),
+    "a split host/port composition slipped past the guard, or a clean file was flagged"
+  );
+
+  // The definition site is exempt; nothing else is. Proven by putting the SAME
+  // declaration in both and asserting only the non-exempt one is reported.
+  const root2 = await mkdtemp(path.join(os.tmpdir(), "agentgather-exempt-"));
+  const decl = `export const PORTS = [${roomPort}, ${dashboardPort}];\n`;
+  await write2(root2, path.join("test", "support", "default-endpoint-scan.ts"), decl);
+  await write2(root2, path.join("test", "support", "impostor-scan.ts"), decl);
+  const hits2 = await findDefaultEndpointUses(root2);
+  assert.deepEqual(
+    hits2.map((hit) => hit.file),
+    [path.join("test", "support", "impostor-scan.ts")],
+    "the exemption is not limited to the single definition file"
+  );
+});
+
+async function write2(root: string, rel: string, body: string): Promise<void> {
+  await mkdir(path.join(root, path.dirname(rel)), { recursive: true });
+  await writeFile(path.join(root, rel), body, "utf8");
+}

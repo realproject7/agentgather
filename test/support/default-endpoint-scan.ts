@@ -39,6 +39,30 @@ import path from "node:path";
  */
 export const DEFAULT_ENDPOINT_PATTERN = /(?:127\.0\.0\.1|localhost|\[::1\]|::1):(?:8787|8788)\b/;
 
+/**
+ * The product default ports, declared HERE and nowhere else in the surface.
+ *
+ * A one-line `host:port` pattern is bypassable by composition (@re1, PR #316): a
+ * test can write `const host = "localhost"` and `const port = 8788` on separate
+ * lines, build the URL at runtime, and reach the same live dashboard while every
+ * line passes the pattern. That is not hypothetical — the detector test in this
+ * PR was written exactly that way to avoid self-matching, which is the proof the
+ * shape is writable.
+ *
+ * So the rule is centralised rather than pattern-matched: this module is the one
+ * place allowed to name a default port, everything else in the surface imports
+ * these, and naming one anywhere else is a hit however it is spelled or split.
+ * The exemption is a single named file rather than a category, and the guard
+ * asserts that it is the only one.
+ */
+export const DEFAULT_PORTS = [8787, 8788] as const;
+
+/** The one file permitted to name a default port: the definition site above. */
+export const DEFINITION_FILE = path.join("test", "support", "default-endpoint-scan.ts");
+
+/** A bare default port number, however it is assembled into an address later. */
+export const DEFAULT_PORT_PATTERN = new RegExp(`\\b(?:${DEFAULT_PORTS.join("|")})\\b`);
+
 export interface DefaultEndpointHit {
   file: string;
   line: number;
@@ -88,9 +112,13 @@ export async function findDefaultEndpointUses(repoRoot: string): Promise<Default
     for (const file of await walk(repoRoot, surface.dir, surface.recursive, surface.match)) {
       const text = await readFile(path.join(repoRoot, file), "utf8");
       text.split("\n").forEach((line, index) => {
-        if (!DEFAULT_ENDPOINT_PATTERN.test(line)) return;
         const trimmed = line.trim();
         if (trimmed.startsWith("//") || trimmed.startsWith("*")) return;
+        // Either spelling is a hit: a whole address on one line, or a bare default
+        // port that some later line can compose into one.
+        const addressed = DEFAULT_ENDPOINT_PATTERN.test(line);
+        const composable = file !== DEFINITION_FILE && DEFAULT_PORT_PATTERN.test(line);
+        if (!addressed && !composable) return;
         hits.push({ file, line: index + 1, text: trimmed });
       });
     }
