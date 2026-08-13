@@ -23,6 +23,7 @@ import {
   readBrief,
   readParticipants,
   readRoomState,
+  redactSnapshotText,
   roomPaths,
   updateAttendancePolicy,
   updateBrief,
@@ -58,7 +59,7 @@ import { parseArgs, flagBoolean, flagString, type ParsedArgs } from "../../args.
 import type { CliContext } from "../../context.js";
 import { listenErrorMessage, listenOrError, type ListenOutcome } from "../listen.js";
 import { readCurrent, readToken, recordJoinedRoom, writeCurrent, writeToken } from "../../state.js";
-import { requireHostRoom } from "./host-home.js";
+import { classifyRoomHome, requireHostRoom } from "./host-home.js";
 
 export interface RoomCommandHooks {
   // Injectable so tests can deterministically exercise the bind-error path without
@@ -767,20 +768,131 @@ async function roomCurrent(argv: string[], context: CliContext): Promise<number>
   return emit(context, flagBoolean(args, "json"), { ok: true, current, room_status: state.status });
 }
 
+// `room leave` is a PARTICIPANT command, and #314 is #310's defect on it: from a
+// joined copy it read the host's `participants.json` and failed with a raw ENOENT.
+//
+// The fix is not #310's remedy. Telling a participant to point AGENTGATHER_HOME at
+// the host's home would be worse than the ENOENT — they do not have that home, and
+// leaving is theirs to do from here. The host's room server already accepts
+// `POST /leave` from any participant (`src/server/http.ts:678`), which marks them
+// away, appends the system line, and wakes the waiters. That is the participant's
+// route, and it is the only one that can record a departure a host will see.
+//
+// The home classification is shared with #310 (`classifyRoomHome`); only the
+// wording is not.
 async function roomLeave(argv: string[], context: CliContext): Promise<number> {
   const args = parseArgs(argv);
-  const current = await readCurrent(context.home);
-  const participants = await readParticipants(roomPaths(context.home, current.roomId));
-  const existing = participants.find((item) => item.alias === current.alias);
-  if (existing !== undefined) {
-    await upsertParticipant(context.home, current.roomId, {
-      ...existing,
-      attention: "away",
-      lastSeenAt: new Date().toISOString()
-    });
+  const classification = await classifyRoomHome(context.home);
+
+  if (classification.state === "no-current-room") {
+    throw new Error(
+      [
+        "`agentgather room leave` has no room to leave: this home has no current room.",
+        "Run `agentgather room join <room> --alias <you> --token <invite>` to join one."
+      ].join("\n")
+    );
   }
-  await appendServerMessage({ root: context.home, roomId: current.roomId, from: "system", text: `${current.alias} left` });
-  return emit(context, flagBoolean(args, "json"), { ok: true });
+  if (classification.state === "unknown") {
+    throw new Error(
+      [
+        `\`agentgather room leave\` has nothing to leave for room "${classification.current.roomId}": this home holds no copy of it.`,
+        "Run `agentgather room current` to see what this home points at, or `agentgather room join` to join that room again."
+      ].join("\n")
+    );
+  }
+
+  const current = classification.current;
+  if (classification.state === "host") {
+    // The host home owns the files, so it edits them directly — unchanged from
+    // before #314. A host leaving its own room is a local bookkeeping act.
+    const participants = await readParticipants(roomPaths(context.home, current.roomId));
+    const existing = participants.find((item) => item.alias === current.alias);
+    if (existing !== undefined) {
+      await upsertParticipant(context.home, current.roomId, {
+        ...existing,
+        attention: "away",
+        lastSeenAt: new Date().toISOString()
+      });
+    }
+    await appendServerMessage({ root: context.home, roomId: current.roomId, from: "system", text: `${current.alias} left` });
+    return emit(context, flagBoolean(args, "json"), { ok: true });
+  }
+
+  // A participant copy. Nothing here can record the departure — the host's files
+  // are on the host's device — so the server is not a preferred path, it is the
+  // only one. `POST /leave` accepts any participant, so the participant's own
+  // token is what authenticates it; no host credential is involved.
+  //
+  // `announced` is false only when NO room server answered: unreachable, or a 404
+  // from something that is not this room's server. A server that answers and
+  // REFUSES is surfaced with its own reason rather than flattened into
+  // "unreachable", which would send the reader after the wrong problem.
+  let announced: boolean;
+  try {
+    const response = await fetch(roomUrl(current.baseUrl, "/leave"), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${current.token}`,
+        "Content-Type": "application/json"
+      },
+      body: "{}"
+    });
+    const payload = await readResponseJson<{ message?: string }>(response);
+    if (!response.ok && response.status !== 404) {
+      // The host answered and said no. This is the state a removed participant
+      // reaches (#210 removal, `removed_at`) with the host UP, and the bare server
+      // string — "participant token is not allowed" — names no command, no state
+      // and no next step, which is the shape #314 exists to remove. So the reason
+      // becomes context on an actionable message rather than being the message.
+      //
+      // The reason is a string from another machine, so it is both redacted and
+      // reshaped before it is shown.
+      //
+      // Redact first, then cap — capping first could cut a token into a form the
+      // redactor no longer recognises.
+      //
+      // Collapse whitespace before interpolating (@re2). Redaction protects
+      // confidentiality; this protects FRAMING. `The host said:` labels one line,
+      // so a reason carrying a newline would push its remaining lines below ours,
+      // unattributed and indistinguishable from this tool's own guidance — and a
+      // plain URL is deliberately not redacted, so a fake instruction could carry a
+      // working address. Flattening to one line keeps the host's words visibly the
+      // host's, and makes the 200-char cap a cap on the whole reason rather than on
+      // its first line.
+      const reason = redactSnapshotText(payload.message ?? `HTTP ${response.status}`)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
+      throw new Error(
+        [
+          `\`agentgather room leave\` was refused by the host of room "${current.roomId}": it is not accepting this credential.`,
+          "You may have been removed from the room, or this device's invite may have been replaced.",
+          "Open the room in your dashboard to check, or ask the host for a new invite.",
+          `The host said: ${reason}`
+        ].join("\n")
+      );
+    }
+    announced = response.ok;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    announced = false;
+  }
+
+  if (!announced) {
+    throw new Error(
+      [
+        `\`agentgather room leave\` could not reach the host of room "${current.roomId}", so your departure was not announced.`,
+        "Nothing changed: this device still holds its copy of the room, and no credential was altered.",
+        "Try again while the host is serving the room, or leave from the room page in your dashboard."
+      ].join("\n")
+    );
+  }
+  return emit(
+    context,
+    flagBoolean(args, "json"),
+    { ok: true },
+    `You left ${current.roomId} as ${current.alias}. The host was notified.\n`
+  );
 }
 
 async function roomClose(argv: string[], context: CliContext): Promise<number> {
