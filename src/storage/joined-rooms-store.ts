@@ -8,6 +8,23 @@ import { ensureSecureDir, isNotFoundError, writeSecureFile } from "./secure-fs.j
 // METADATA ONLY — a participant bearer token is NEVER persisted here (the token
 // lives in the per-alias token store / per-session entry). This file never leaves
 // the device; there is no central membership copy.
+// The participant kind of a seat, as the HOST reported it (#311). Deliberately
+// optional everywhere: a row written before #311, or by a path that never learned
+// the kind, carries none — and "unknown" is the honest answer for it. Nothing here
+// ever infers a kind from an alias, a naming convention, or a default (#293: the
+// defect was starting from a claim about the user's data).
+export type JoinedRoomKind = "human" | "agent";
+
+// One credential this device actually holds for a room, and the kind it seats you
+// as. Recorded per alias because a device can hold several credentials for one
+// room while the row itself opens exactly one of them: the row's `kind` describes
+// only its selected alias, so without this the kind of every other held credential
+// is lost on the next import.
+export interface JoinedRoomSeat {
+  alias: string;
+  kind?: JoinedRoomKind;
+}
+
 export interface JoinedRoom {
   roomId: string;
   title: string;
@@ -15,6 +32,11 @@ export interface JoinedRoom {
   baseUrl: string;
   joinedAt: string;
   lastSeen: string;
+  // Kind of THIS row's selected alias (#311). Absent = unknown, never inferred.
+  kind?: JoinedRoomKind;
+  // Every seat this device has learned for this room, including ones the row is
+  // not currently opening as. Never a token — the alias only.
+  seats?: JoinedRoomSeat[];
   // Device-local lifecycle flag (#210): an archived entry is hidden from the
   // dashboard by default but its metadata/history pointers are preserved for
   // recovery. Purely local — it never closes the host room or notifies anyone.
@@ -107,6 +129,22 @@ async function upsertJoinedRoomLocked(
     joinedAt: index === -1 ? entry.joinedAt : (rooms[index]?.joinedAt ?? entry.joinedAt),
     lastSeen: entry.lastSeen
   };
+  // Seat kind (#311). The rule is the same one that governs the alias: a kind is a
+  // statement about a specific participant, so it may only travel with the alias it
+  // was observed for.
+  //
+  //  - explicit record (invite import): the caller learned this alias's kind from
+  //    the host, so it wins. If it learned none, the row keeps its stored kind ONLY
+  //    when the alias is unchanged — a re-import that switches alias must not carry
+  //    the previous participant's kind onto the new one, it must go back to unknown.
+  //  - metadata refresh (bridge): the stored alias is kept, so a kind is accepted
+  //    only when the caller is talking about that same alias.
+  const aliasUnchanged = existingAlias !== undefined && existingAlias === record.alias;
+  const existingKind = index === -1 ? undefined : rooms[index]?.kind;
+  const kind = entry.kind ?? (aliasUnchanged ? existingKind : undefined);
+  if (kind !== undefined) record.kind = kind;
+  const seats = mergeSeats(index === -1 ? undefined : rooms[index]?.seats, entry.seats, record.alias, kind);
+  if (seats.length > 0) record.seats = seats;
   // Preserve an existing archived flag across a re-record so re-joining doesn't
   // silently un-archive a room the user chose to hide (#210).
   const archived = entry.archived ?? (index === -1 ? undefined : rooms[index]?.archived);
@@ -114,6 +152,33 @@ async function upsertJoinedRoomLocked(
   if (index === -1) rooms.push(record);
   else rooms[index] = record;
   await writeSecureFile(joinedRoomsPath(home), `${JSON.stringify({ rooms }, null, 2)}\n`);
+}
+
+// Accumulate what this device knows about the seats of one room (#311).
+//
+// Additive and non-destructive: a seat already recorded keeps its kind unless the
+// caller supplies one for that same alias, so importing an agent invite never
+// erases what we learned about the human credential still held for the room —
+// which is exactly the state the "Join as" choice needs to see. An alias with no
+// kind is still recorded, as a held seat whose kind is unknown; it is never
+// promoted to a kind by being seen again.
+function mergeSeats(
+  existing: readonly JoinedRoomSeat[] | undefined,
+  incoming: readonly JoinedRoomSeat[] | undefined,
+  selectedAlias: string,
+  selectedKind: JoinedRoomKind | undefined
+): JoinedRoomSeat[] {
+  const merged = new Map<string, JoinedRoomSeat>();
+  for (const seat of existing ?? []) {
+    if (typeof seat?.alias === "string" && seat.alias.length > 0) merged.set(seat.alias, { alias: seat.alias, ...(seat.kind === undefined ? {} : { kind: seat.kind }) });
+  }
+  const learned = [...(incoming ?? []), ...(selectedAlias.length > 0 ? [{ alias: selectedAlias, kind: selectedKind }] : [])];
+  for (const seat of learned) {
+    if (typeof seat?.alias !== "string" || seat.alias.length === 0) continue;
+    const kind = seat.kind ?? merged.get(seat.alias)?.kind;
+    merged.set(seat.alias, { alias: seat.alias, ...(kind === undefined ? {} : { kind }) });
+  }
+  return [...merged.values()];
 }
 
 // Archive/unarchive one device-local joined-room record (#210). Writes ONLY the

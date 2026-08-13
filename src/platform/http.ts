@@ -33,6 +33,9 @@ import {
   SNAPSHOT_MAX_COMMENTS_PER_POST,
   SNAPSHOT_MAX_FORUM_POSTS,
   SNAPSHOT_MAX_MESSAGES,
+  type JoinedRoom,
+  type JoinedRoomKind,
+  type JoinedRoomSeat,
   type JoinedRoomTarget,
   type SnapshotForumPost,
   type SnapshotMessage
@@ -230,9 +233,48 @@ async function sendRoomMessages(
 async function sendJoinedRooms(options: PlatformHttpServerOptions, res: ServerResponse): Promise<void> {
   const rooms = await readJoinedRooms(options.root);
   const withReachability = await Promise.all(
-    rooms.map(async (room) => ({ ...room, reachability: await probeReachability(room.baseUrl) }))
+    rooms.map(async (room) => ({
+      ...room,
+      reachability: await probeReachability(room.baseUrl),
+      // #311: the seats this device can actually open as — recorded seats
+      // intersected with the credentials really present in the token store. Alias
+      // and kind only; the token itself never leaves the store. A seat we know of
+      // but no longer hold a credential for is dropped, so the "Join as" choice can
+      // never offer something that would fail at open.
+      heldSeats: await heldSeatsFor(options.root, room)
+    }))
   );
   sendJson(res, 200, { ok: true, rooms: withReachability });
+}
+
+async function heldSeatsFor(root: string, room: JoinedRoom): Promise<JoinedRoomSeat[]> {
+  const held = await readStoredParticipantAliases(root, room.roomId);
+  if (held.size === 0) return [];
+  const known = new Map<string, JoinedRoomSeat>();
+  for (const seat of room.seats ?? []) known.set(seat.alias, seat);
+  // The row's own alias is a seat even on a legacy row that has no `seats` list;
+  // its kind stays undefined there, which renders as unknown.
+  if (room.alias.length > 0 && !known.has(room.alias)) {
+    known.set(room.alias, { alias: room.alias, ...(room.kind === undefined ? {} : { kind: room.kind }) });
+  }
+  return [...known.values()].filter((seat) => held.has(seat.alias));
+}
+
+// Alias names present in this room's local token store. Reads the same file as
+// `readStoredParticipantToken` but returns only its KEYS — no token value is read
+// out, so nothing here can put a credential in a response.
+async function readStoredParticipantAliases(root: string, roomId: string): Promise<Set<string>> {
+  if (!isSafeRoomId(roomId)) return new Set();
+  try {
+    const raw = await readFile(path.join(root, "rooms", roomId, "tokens.json"), "utf8");
+    const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
+    const aliases = Object.keys(store.tokens ?? {}).filter(
+      (alias) => isSafeAlias(alias) && typeof store.tokens?.[alias] === "string"
+    );
+    return new Set(aliases);
+  } catch {
+    return new Set();
+  }
 }
 
 // Browser dashboard convenience for token-free joined-room records. The dashboard
@@ -257,16 +299,31 @@ async function openJoinedRoom(
     sendJoinedOpenHelp(res, 404, "This room is not tracked on this device.");
     return;
   }
-  if (!joined.alias) {
+  // #311: the row still names the seat it opens by default. `alias` may name a
+  // DIFFERENT seat, but only one this device already holds a credential for — the
+  // token lookup below is the whole authorization, exactly as before. Choosing a
+  // seat therefore cannot validate a new credential or reach a room this device
+  // could not already open; it only picks between credentials already on disk.
+  const requestedAlias = url.searchParams.get("alias");
+  let alias = joined.alias;
+  if (requestedAlias !== null && requestedAlias !== joined.alias) {
+    const held = await readStoredParticipantAliases(options.root, joined.roomId);
+    if (!held.has(requestedAlias)) {
+      sendJoinedOpenHelp(res, 409, "That seat is not one this device holds a credential for.");
+      return;
+    }
+    alias = requestedAlias;
+  }
+  if (!alias) {
     sendJoinedOpenHelp(res, 409, "This saved room has no participant alias. Paste the invite link again to refresh it.");
     return;
   }
-  const token = await readStoredParticipantToken(options.root, joined.roomId, joined.alias);
+  const token = await readStoredParticipantToken(options.root, joined.roomId, alias);
   if (token === null) {
     sendJoinedOpenHelp(
       res,
       409,
-      `No local token is stored for ${joined.alias}. Paste the invite link again or re-run the room join command.`
+      `No local token is stored for ${alias}. Paste the invite link again or re-run the room join command.`
     );
     return;
   }
@@ -861,12 +918,23 @@ async function rememberJoinedRoomFromInviteRequest(
     alias: status.me,
     baseUrl: parsed.baseUrl,
     joinedAt: now,
-    lastSeen: now
+    lastSeen: now,
+    // #311: absent when the host's roster did not name this alias's kind. The row
+    // then reads as unknown rather than being defaulted to either kind.
+    ...(status.kind === undefined ? {} : { kind: status.kind })
   });
   await writeToken(options.root, status.room, status.me, parsed.token);
   sendJson(res, 200, {
     ok: true,
-    room: { roomId: status.room, title, alias: status.me, baseUrl: parsed.baseUrl, joinedAt: now, lastSeen: now }
+    room: {
+      roomId: status.room,
+      title,
+      alias: status.me,
+      baseUrl: parsed.baseUrl,
+      joinedAt: now,
+      lastSeen: now,
+      ...(status.kind === undefined ? {} : { kind: status.kind })
+    }
   });
 }
 
@@ -918,7 +986,7 @@ function isInviteToken(value: string | null): value is string {
 async function fetchInviteStatus(
   baseUrl: string,
   token: string
-): Promise<{ room: string; me: string; boardroom?: { name?: string } } | null> {
+): Promise<{ room: string; me: string; kind?: JoinedRoomKind; boardroom?: { name?: string } } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
   try {
@@ -932,13 +1000,31 @@ async function fetchInviteStatus(
       ok?: unknown;
       room?: unknown;
       me?: unknown;
+      participants?: unknown;
       boardroom?: { name?: unknown };
     };
     const room = shortString(payload.room);
     const me = shortString(payload.me);
     if (payload.ok !== true || room === undefined || me === undefined || !isSafeRoomId(room) || !isSafeAlias(me)) return null;
     const name = shortString(payload.boardroom?.name);
-    return name === undefined ? { room, me } : { room, me, boardroom: { name } };
+    // The invited alias's own kind, from the roster the host already returns here
+    // (#311). Taken from the entry whose alias IS `me` and nowhere else — not a
+    // default, not the room's majority, not the alias's spelling. No roster, no
+    // matching entry, or an unrecognised value leaves it undefined and the row
+    // stays honestly unknown.
+    const seat = Array.isArray(payload.participants)
+      ? (payload.participants as Array<{ alias?: unknown; kind?: unknown }>).find(
+          (entry) => typeof entry === "object" && entry !== null && entry.alias === me
+        )
+      : undefined;
+    const kind: JoinedRoomKind | undefined =
+      seat?.kind === "human" || seat?.kind === "agent" ? seat.kind : undefined;
+    return {
+      room,
+      me,
+      ...(kind === undefined ? {} : { kind }),
+      ...(name === undefined ? {} : { boardroom: { name } })
+    };
   } catch {
     return null;
   } finally {

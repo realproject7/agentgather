@@ -23,6 +23,12 @@ const state = {
   // The joined room currently shown from its device-local snapshot (#247), or
   // null. Distinct from activeRoomId, which always names a host-owned room.
   activeJoined: null,
+  // Chosen seat per joined row (#311), keyed by the same row key the manage view
+  // uses — not an index or a DOM node — so a re-render or a list refresh cannot
+  // move a choice onto a different room. Session-only and never persisted: the
+  // choice picks between credentials this device already holds for the next entry,
+  // so leaving it out of storage is what keeps it reversible by construction.
+  seatChoice: new Map(),
   // Bulk manage view (#277). `selected` holds row keys, not indices or DOM nodes,
   // so a re-render, a filter change, or a concurrent list refresh can never move
   // the selection onto a different room than the one the user ticked.
@@ -625,9 +631,20 @@ function renderRail() {
     if (entry.archived) item.dataset.archived = "true";
     item.dataset.reachability = entry.reachability || "saved";
     item.dataset.openHref = joinedOpenUrl(entry);
+    // Stable identity for this row across a re-render (#311), keyed the same way
+    // the #277 manage selection is — so restoring focus after a seat change lands
+    // on the row the user was operating, never on whichever row now sits there.
+    item.dataset.rowKey = joinedKey(entry);
     item.tabIndex = 0;
     item.setAttribute("role", "link");
-    item.setAttribute("aria-label", `Open ${entry.title || entry.roomId || entry.baseUrl}`);
+    // Seat disclosure (#311) rides the row's own accessible name, so it is
+    // announced before entry rather than after it. The three states are distinct
+    // sentences; none is a prefix of another.
+    item.dataset.seat = seatState(entry);
+    item.setAttribute(
+      "aria-label",
+      `Open ${entry.title || entry.roomId || entry.baseUrl} — ${seatDescription(entry)}`
+    );
     item.addEventListener("click", () => {
       if (item.dataset.confirming === "true") return; // don't open while confirming a delete
       openJoinedRoom(entry);
@@ -659,17 +676,157 @@ function renderRail() {
 
     const aside = document.createElement("span");
     aside.className = "joined-aside";
+    // Mark the agent seat ONLY (#311). A human seat and an unknown legacy seat get
+    // no badge: a mark that is true of almost every row stops being read, and a
+    // badge on an unknown row would be a claim this device cannot make.
+    if (seatState(entry) === "agent") {
+      const seatBadge = document.createElement("span");
+      seatBadge.className = "status-badge joined-seat";
+      seatBadge.dataset.seat = "agent";
+      seatBadge.textContent = "Agent seat";
+      seatBadge.title = "Opening this room seats you as an agent participant";
+      aside.append(seatBadge);
+    }
     const badge = document.createElement("span");
     badge.className = "joined-reach";
     badge.dataset.reachability = entry.reachability || "saved";
     badge.textContent = reachabilityLabel(entry.reachability);
-    aside.append(badge, buildJoinedControls(entry, item));
+    aside.append(badge);
+    const seatChoice = buildSeatChoice(entry);
+    if (seatChoice !== null) aside.append(seatChoice);
+    aside.append(buildJoinedControls(entry, item));
 
     item.append(main, aside);
     roomList.append(item);
   }
 
   applyOverflow(roomList, roomsMore, OVERFLOW_LIMIT);
+}
+
+// ---- #311 seat disclosure ---------------------------------------------------
+//
+// The dashboard reads ONE default home while the rooms in it may be hosted by
+// agents under their own homes, so a joined row can seat you as an agent host with
+// nothing on screen saying so. These four helpers are the whole disclosure: what
+// seat a row opens as, said before entry, and a choice between credentials this
+// device already holds.
+//
+// Nothing here infers a kind. A row records one only when a host told us (#311
+// records it at invite import); every row written before that, and every row from a
+// path that never learned it, is `unknown` and says so.
+
+// The seat this row would open as — which is the seat the badge and description
+// must describe. That is `activeSeat`, not the row's stored kind: where this device
+// holds both kinds, the row opens as the human default even though the row itself
+// records the agent it imported last, and saying "agent" there would disclose a
+// seat the click would not actually take.
+function seatState(entry) {
+  const seat = activeSeat(entry);
+  const kind = seat === null ? entry.kind : seat.kind;
+  return kind === "agent" || kind === "human" ? kind : "unknown";
+}
+
+// Exact, mutually distinct accessible text for the three states. The unknown
+// wording is fixed by #311's UI specification; the other two are its parallels.
+function seatDescription(entry) {
+  const seat = seatState(entry);
+  if (seat === "agent") return "Seat identity agent";
+  if (seat === "human") return "Seat identity human";
+  return "Seat identity unknown";
+}
+
+// Seats this device holds a credential for, as reported by the platform. The row's
+// own alias is the fallback for a legacy row the platform could not enumerate.
+function heldSeats(entry) {
+  const seats = Array.isArray(entry.heldSeats) ? entry.heldSeats.filter((seat) => seat && seat.alias) : [];
+  if (seats.length > 0) return seats;
+  return entry.alias ? [{ alias: entry.alias, kind: entry.kind }] : [];
+}
+
+// The user's current pick for this row, or null when they have not chosen. Only a
+// seat still present in the held list counts: a credential that has gone away must
+// not keep a stale choice alive.
+function chosenSeat(entry) {
+  const alias = state.seatChoice.get(joinedKey(entry));
+  if (!alias) return null;
+  return heldSeats(entry).find((seat) => seat.alias === alias) ?? null;
+}
+
+// The seat a row opens as with no explicit choice: a human credential when this
+// device holds one, otherwise the alias the row already carries. This is the
+// default the ticket asks for, and it is only ever a choice BETWEEN credentials
+// already on disk — it validates nothing and grants nothing.
+function defaultSeat(entry) {
+  const seats = heldSeats(entry);
+  return seats.find((seat) => seat.kind === "human") ?? seats.find((seat) => seat.alias === entry.alias) ?? seats[0] ?? null;
+}
+
+function activeSeat(entry) {
+  return chosenSeat(entry) ?? defaultSeat(entry);
+}
+
+// The inline "Join as" control, or null when there is nothing to choose between.
+// One held credential is not a choice, so no control is rendered for it.
+function buildSeatChoice(entry) {
+  const seats = heldSeats(entry);
+  if (seats.length < 2) return null;
+  const active = activeSeat(entry);
+  const wrap = document.createElement("label");
+  // `joined-seat-choice` is this control's own name; `manage-filter` is borrowed
+  // for its existing inline label+select styling (#277). shell.css is outside this
+  // ticket's file boundary, so the choice is between reusing a styled pattern and
+  // shipping a native unstyled select — reuse wins, and a dedicated rule is a
+  // one-line follow-up if the operator wants a distinct treatment.
+  wrap.className = "joined-seat-choice manage-filter";
+  const caption = document.createElement("span");
+  caption.className = "joined-seat-caption";
+  caption.textContent = "Join as";
+  const select = document.createElement("select");
+  select.className = "joined-seat-select";
+  select.dataset.action = "seat-choice";
+  for (const seat of seats) {
+    const option = document.createElement("option");
+    option.value = seat.alias;
+    // The selected label is the alias (#311 UI spec); the kind rides the option's
+    // accessible name so a screen reader hears which seat it is choosing.
+    option.textContent = seat.alias;
+    option.setAttribute("aria-label", `${seat.alias} — ${seatKindWord(seat.kind)}`);
+    if (active !== null && seat.alias === active.alias) option.selected = true;
+    select.append(option);
+  }
+  // The row itself is a link, so every event this control raises has to stop at the
+  // control. These sit on the WRAPPER, not the select: the visible "Join as"
+  // caption is part of the label, and a click on it bubbles to the row exactly like
+  // a click on the row's own text would — which opened the room while the user was
+  // only trying to pick a seat (@re1). Listening at the wrapper covers the caption,
+  // the select, and the padding between them in one place.
+  for (const type of ["click", "keydown", "mousedown", "pointerdown"]) {
+    wrap.addEventListener(type, (event) => event.stopPropagation());
+  }
+  select.addEventListener("change", (event) => {
+    event.stopPropagation();
+    const rowKey = joinedKey(entry);
+    state.seatChoice.set(rowKey, select.value);
+    // Re-rendering the rail replaces the very control being operated, which drops
+    // keyboard focus to <body> (@re2). Reversing the choice would then mean tabbing
+    // back through the rail from the top with nothing announced — so "reversible"
+    // holds for a mouse and not for a keyboard. Put focus back on the new select
+    // for THIS row; the row key survives the re-render, the DOM node does not.
+    const hadFocus = document.activeElement === select;
+    renderJoined(state.joinedRooms);
+    if (!hadFocus) return;
+    const row = [...roomList.querySelectorAll(".joined-row")].find((node) => node.dataset.rowKey === rowKey);
+    const restored = row?.querySelector("select.joined-seat-select") ?? null;
+    if (restored !== null) restored.focus();
+  });
+  wrap.append(caption, select);
+  return wrap;
+}
+
+function seatKindWord(kind) {
+  if (kind === "agent") return "agent seat";
+  if (kind === "human") return "human seat";
+  return "seat identity unknown";
 }
 
 // Two-character monogram for a room, from its title or id.
@@ -2194,6 +2351,11 @@ function joinedOpenUrl(entry) {
   const url = new URL("./joined-rooms/open", window.location.href);
   url.searchParams.set("room_id", entry.roomId || "");
   url.searchParams.set("base_url", entry.baseUrl);
+  // #311: name the seat only when it is not the one the row already stores, so an
+  // unchanged row opens by exactly the URL it always did. The platform still
+  // resolves the credential itself and refuses any alias this device does not hold.
+  const seat = activeSeat(entry);
+  if (seat !== null && seat.alias && seat.alias !== entry.alias) url.searchParams.set("alias", seat.alias);
   return url.toString();
 }
 
