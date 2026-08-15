@@ -2563,7 +2563,13 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     // way — what changed is the request, and the exact URL is what states it. The
     // warm half below, which is what this test is actually about, is untouched.
     assert.equal(queries[0], `?before_id=${Number.MAX_SAFE_INTEGER}&limit=50`);
-    assert.deepEqual(sinceIds, [], "a first entry asked forward from the beginning");
+    // @re2 on #334: what this must pin is that a cold entry never asks forward FROM
+    // THE BEGINNING — not that it has not polled yet. An empty-array assertion would
+    // have said the second thing and stopped being true ~3 s later when the first
+    // ordinary poll fired, failing with the CORRECT next id in hand and reading like
+    // a product defect. `queries[0]` above already pins what the first request was;
+    // this only has to pin what it was not, and that stays true for the whole run.
+    assert.equal(sinceIds.includes(0), false, "a first entry asked forward from the beginning");
 
     // A message arrives while this tab is away, so the second entry must still see
     // it — the seam between restored and fetched is where a gap would show.
@@ -3679,43 +3685,58 @@ test("a cold entry takes the newest page, keeps older history reachable, and pol
     // proof of that from outside the page. A rewind reads as a lower id here and an
     // `undefined` — the field a backward response deliberately omits — reads as the
     // literal string, so both fail this assertion rather than passing quietly.
+    // @re1 on #334: synchronised on the request event itself, not on elapsed time —
+    // the promise is armed BEFORE the index is taken, so a poll that fires between
+    // the two is caught by the wait rather than missed by it.
+    const nextPoll = page.waitForRequest(
+      (request) => request.method() === "GET" && new URL(request.url()).pathname.endsWith("/messages"),
+      { timeout: 10_000 }
+    );
     const settled = queries.length;
-    const pollDeadline = Date.now() + 10_000;
-    while (queries.length === settled && Date.now() < pollDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    const afterEntry = queries.slice(settled);
-    assert.ok(afterEntry.length >= 1, "expected at least one poll after the cold page");
-    for (const query of afterEntry) {
-      assert.equal(query, `?since_id=${newestId}`, `the poll after the cold page asked ${query}`);
+    const polled = new URL((await nextPoll).url()).search;
+    assert.equal(polled, `?since_id=${newestId}`, `the poll after the cold page asked ${polled}`);
+    // ...and every other poll observed since, so this is a property of the cursor
+    // rather than of the one request that happened to be waited on.
+    for (const query of queries.slice(settled)) {
+      assert.equal(query, `?since_id=${newestId}`, `a later poll asked ${query}`);
     }
 
     // (2) Older history is reachable, and reaching it uses #283's backward route.
     assert.equal(await page.locator("#show-earlier").isVisible(), true, "the cold entry offers no route to older history");
+    // Armed before the click, so the backward request cannot be missed, and before
+    // the forward-poll wait below so the two cannot be confused for each other.
+    const backwardRead = page.waitForRequest(
+      (request) =>
+        request.method() === "GET" && new URL(request.url()).search.startsWith("?before_id="),
+      { timeout: 10_000 }
+    );
+    // The next FORWARD poll after the backward read — matched on `since_id` so the
+    // backward request itself cannot satisfy it.
+    const pollAfterBackward = page.waitForRequest(
+      (request) =>
+        request.method() === "GET" && new URL(request.url()).search.startsWith("?since_id="),
+      { timeout: 10_000 }
+    );
     await page.locator("#show-earlier").click();
+    assert.equal(
+      new URL((await backwardRead).url()).search,
+      `?before_id=${pageStartId}&limit=50`,
+      "the backward page did not start exactly where the rendered history did"
+    );
     await waitForCount(60);
     assert.deepEqual(
       await rendered(),
       Array.from({ length: 60 }, (_, index) => `m${index + 1}`),
       "show earlier did not land the older page in order above what was already there"
     );
-    assert.equal(
-      queries.some((query) => query === `?before_id=${pageStartId}&limit=50`),
-      true,
-      `the backward page asked something else: ${queries.join(" ")}`
-    );
-
     // The backward read must not have moved the live cursor — #283's rule, now
-    // reached by a path that did not exist when it was written.
-    const beforeBackwardSettle = queries.length;
-    const backwardDeadline = Date.now() + 10_000;
-    while (queries.length === beforeBackwardSettle && Date.now() < backwardDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    const afterEarlier = queries.slice(beforeBackwardSettle);
-    assert.ok(afterEarlier.length >= 1, "expected at least one poll after the backward read");
-    for (const query of afterEarlier) {
-      assert.equal(query, `?since_id=${newestId}`, `a poll after the backward read asked ${query}`);
+    // reached by a path that did not exist when it was written. Waited on the poll
+    // event armed above, so what is asserted is the first poll that actually
+    // followed the backward read.
+    const afterBackward = new URL((await pollAfterBackward).url()).search;
+    assert.equal(afterBackward, `?since_id=${newestId}`, `a poll after the backward read asked ${afterBackward}`);
+    for (const query of queries.filter((query) => query.startsWith("?since_id="))) {
+      assert.equal(query, `?since_id=${newestId}`, `a forward poll in this session asked ${query}`);
     }
     // Nothing in the session refetched from the start — the cost this ticket exists
     // to remove, and the one a wrong cursor would silently reintroduce.
