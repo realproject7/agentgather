@@ -91,7 +91,11 @@ const state = {
   // enabled + scope persist per-room in sessionStorage; unread drives the title
   // badge + favicon dot while the tab is unfocused. ready gates out the initial
   // history backlog so only genuinely new messages notify.
-  notify: { enabled: false, scope: "mentions", ready: false, focused: true, unread: 0 }
+  notify: { enabled: false, scope: "mentions", ready: false, focused: true, unread: 0 },
+  // #306: whether this entry's first message fetch has already come back. It is
+  // the ONE bounded read; everything after it is the ordinary forward poll — a
+  // discarded restore (#278) refetches from the start exactly as it did before.
+  entryPageLoaded: false
 };
 
 const shell = document.querySelector(".room-shell");
@@ -892,6 +896,16 @@ function refreshRestoredDivider() {
 //     caps is explicitly out of scope for this ticket.
 const EARLIER_PAGE_SIZE = 50;
 
+// #306 — a cold entry wants the NEWEST page, and the endpoint expresses that as a
+// backward read: "the newest `limit` messages STRICTLY OLDER than before_id". At
+// entry this device holds no head id to count back from — `/status` carries none —
+// so the page is asked for from the largest id the endpoint will accept.
+// `parseCursorParam` validates exactly `Number.isSafeInteger`, so this is that
+// endpoint's own upper bound written in its own terms rather than an invented
+// sentinel: no room id can ever reach it, so "older than this" is "the newest page"
+// for every room, at every size, without a second request to discover the head.
+const NEWEST_PAGE_BEFORE_ID = Number.MAX_SAFE_INTEGER;
+
 function mountEarlierControl() {
   const item = document.createElement("li");
   item.className = "message system earlier-history";
@@ -1231,8 +1245,20 @@ async function pollMessages() {
   state.pollInFlight = true;
   try {
     let payload;
+    // #306: a COLD entry — nothing restored, nothing on screen, cursor still at the
+    // beginning — asks for the newest page instead of the whole history. This is the
+    // only bounded read: once it has come back, every later fetch is the ordinary
+    // forward poll, including the refetch after a discarded restore, so #278's
+    // behaviour is untouched. The flag is set on success rather than on attempt, so
+    // a failed cold read retries as a cold read instead of silently falling back to
+    // the unbounded fetch this ticket exists to avoid.
+    const coldEntry = !state.entryPageLoaded && state.cursor === 0 && state.seen.size === 0;
     try {
-      payload = await authFetch(`/messages?since_id=${state.cursor}`);
+      payload = await authFetch(
+        coldEntry
+          ? `/messages?before_id=${NEWEST_PAGE_BEFORE_ID}&limit=${EARLIER_PAGE_SIZE}`
+          : `/messages?since_id=${state.cursor}`
+      );
     } catch (error) {
       state.historyAvailable = false;
       handlePollError(error);
@@ -1243,6 +1269,7 @@ async function pollMessages() {
     }
     markConnectionLive();
     state.historyAvailable = true;
+    state.entryPageLoaded = true;
     const fresh = [];
     for (const message of payload.messages) {
       if (state.seen.has(message.id)) continue;
@@ -1260,7 +1287,25 @@ async function pollMessages() {
     recordBackupBatch(fresh);
     bridgeHistoryToDashboard(fresh);
     updateLastMessage();
-    advanceCursorTo(payload.next_since_id);
+    if (coldEntry) {
+      // The backward read carries no `next_since_id` by design (#283), so the live
+      // cursor comes from what actually rendered: the newest id on screen. It moves
+      // through `advanceCursorTo` like every other batch, which is what makes a
+      // rewind — and an `undefined` from the field that is deliberately absent —
+      // unreachable by construction rather than by this branch remembering to check.
+      const newestRendered = payload.messages.at(-1);
+      if (newestRendered !== undefined) advanceCursorTo(newestRendered.id);
+      // What this page stopped short of is reachable by the route #283 already
+      // built. `oldestId` is the lowest id ON SCREEN, and whether anything precedes
+      // it is the host's own answer — never inferred from a short page, which also
+      // occurs when the remainder is exactly one page.
+      const oldestRendered = payload.messages.at(0);
+      if (oldestRendered !== undefined) state.earlier.oldestId = oldestRendered.id;
+      state.earlier.hasMore = payload.has_more_before === true;
+      if (state.earlier.hasMore) mountEarlierControl();
+    } else {
+      advanceCursorTo(payload.next_since_id);
+    }
     if (state.seedUnverified) {
       state.seedUnverified = false;
       // Only an empty first poll is ambiguous; anything returned proves the room's

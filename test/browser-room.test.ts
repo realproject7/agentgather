@@ -2543,9 +2543,13 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     // #303: failure-only capture; coverage is the 30s wait surface.
     diagnostics = recordBrowserDiagnostics(page, page.context());
     const sinceIds: number[] = [];
+    const queries: string[] = [];
     page.on("request", (req) => {
+      if (req.method() !== "GET") return;
+      const url = new URL(req.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
       const match = /\/messages\?since_id=(\d+)/.exec(req.url());
-      if (match && req.method() === "GET") sinceIds.push(Number(match[1]));
+      if (match) sinceIds.push(Number(match[1]));
     });
 
     for (const text of ["history one", "history two", "history three"]) {
@@ -2553,8 +2557,13 @@ test("a second entry seeds from the local backup and fetches only what is new (#
     }
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await page.waitForSelector("text=history three");
-    // First entry has no backup to restore: it asks from the beginning, as before.
-    assert.equal(sinceIds[0], 0);
+    // #306 changed what a first entry asks for: with no backup to restore it takes
+    // the bounded NEWEST page instead of the whole history from the beginning. The
+    // room here is smaller than one page, so the same three messages render either
+    // way — what changed is the request, and the exact URL is what states it. The
+    // warm half below, which is what this test is actually about, is untouched.
+    assert.equal(queries[0], `?before_id=${Number.MAX_SAFE_INTEGER}&limit=50`);
+    assert.deepEqual(sinceIds, [], "a first entry asked forward from the beginning");
 
     // A message arrives while this tab is away, so the second entry must still see
     // it — the seam between restored and fetched is where a gap would show.
@@ -2601,7 +2610,7 @@ test("a second entry seeds from the local backup and fetches only what is new (#
   }
 });
 
-test("an empty or corrupt backup falls back to the full fetch and never blocks entry (#278)", async () => {
+test("an empty or corrupt backup falls back to a cold entry and never blocks entry (#278/#306)", async () => {
   const fixture = await startFixture();
   let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
   let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
@@ -2610,10 +2619,11 @@ test("an empty or corrupt backup falls back to the full fetch and never blocks e
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     // #303: failure-only capture; coverage is the 30s wait surface.
     diagnostics = recordBrowserDiagnostics(page, page.context());
-    const sinceIds: number[] = [];
+    const queries: string[] = [];
     page.on("request", (req) => {
-      const match = /\/messages\?since_id=(\d+)/.exec(req.url());
-      if (match && req.method() === "GET") sinceIds.push(Number(match[1]));
+      if (req.method() !== "GET") return;
+      const url = new URL(req.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
     });
     await postMessage(fixture, fixture.reviewerToken, "only message");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
@@ -2621,7 +2631,7 @@ test("an empty or corrupt backup falls back to the full fetch and never blocks e
 
     // Corrupt the store in three ways a real one could break, and reload for each.
     for (const broken of ["{not json", JSON.stringify({ messages: "nope" }), ""]) {
-      sinceIds.length = 0;
+      queries.length = 0;
       await page.evaluate((value) => {
         for (const key of Object.keys(window.localStorage)) {
           if (key.startsWith("agentgather.backup.")) {
@@ -2632,7 +2642,15 @@ test("an empty or corrupt backup falls back to the full fetch and never blocks e
       }, broken);
       await page.reload();
       await page.waitForSelector("text=only message");
-      assert.equal(sinceIds[0], 0, `a corrupt backup (${broken.slice(0, 12)}) refetches from the start`);
+      // #306: nothing was restorable, so this IS a cold entry and it reads what a
+      // cold entry reads — the bounded newest page. What the test is about is
+      // unchanged and still asserted: entry is never blocked, the room's history is
+      // on screen, and nothing is claimed as this device's copy.
+      assert.equal(
+        queries[0],
+        `?before_id=${Number.MAX_SAFE_INTEGER}&limit=50`,
+        `a corrupt backup (${broken.slice(0, 12)}) entered cold, asking ${queries[0]}`
+      );
       assert.equal(await page.locator(".restored-divider").count(), 0, "nothing is claimed as restored");
     }
   } catch (error) {
@@ -3578,6 +3596,212 @@ test("show earlier loads host history older than the backup without refetching o
     }
   } catch (error) {
     await captureBrowserFailure(diagnostics, "show-earlier-loads-host-history-older-than-the-b", error);
+    throw error;
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #306 — a COLD entry (no local copy to restore) asked `since_id=0` with no limit,
+// so every message the room had ever held was downloaded and rendered before the
+// room was usable. The endpoint has served a bounded newest-page read since #283;
+// entry simply never used it. The two entries are asserted against each other here:
+// cold takes the bounded newest page, warm still asks forward from the id this
+// device already holds, and both land on the same screen.
+test("a cold entry takes the newest page, keeps older history reachable, and polls forward from what it rendered (#306)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    // 60 messages — more than one page, so a bounded first read is observable as a
+    // set and not merely as a URL. Posted by the host, so the loop guard (which
+    // counts agent posts) never enters this fixture.
+    for (let n = 1; n <= 60; n += 1) {
+      await postMessage(fixture, fixture.hostToken, `m${n}`);
+    }
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const ids = new Map(hosted.map((message) => [message.text, message.id]));
+    const newestId = ids.get("m60");
+    const pageStartId = ids.get("m11");
+    assert.ok(newestId !== undefined && pageStartId !== undefined);
+
+    const queries: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "GET") return;
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
+    });
+
+    const rendered = async () =>
+      (await page.locator("#timeline .message .message-text").allInnerTexts())
+        .map((line) => line.trim())
+        .filter((line) => /^m\d+$/.test(line));
+    // Waits for AT LEAST n so the exact set is asserted by the deepEqual below
+    // rather than by a timeout: a defect that renders too many rows must fail with
+    // the diff that names it, not with "waiting".
+    const waitForCount = (n: number) =>
+      page.waitForFunction(
+        (want) =>
+          [...document.querySelectorAll("#timeline .message .message-text")].filter((node) =>
+            /^m\d+$/.test((node.textContent ?? "").trim())
+          ).length >= want,
+        n,
+        { timeout: 10_000 }
+      );
+
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    // #323: entry is finished only once `bindEvents()` has armed the composer.
+    await page.waitForSelector('.composer[data-ready="true"]');
+    await waitForCount(50);
+
+    // (1) The first read is bounded, and it is the NEWEST page rather than the
+    // oldest — a forward `limit` would have served m1…m50, which is the wrong end
+    // of the room and would still leave the newest message unrendered.
+    assert.equal(
+      queries[0],
+      `?before_id=${Number.MAX_SAFE_INTEGER}&limit=50`,
+      `the cold entry's first read was ${queries[0]}`
+    );
+
+    // (5) Exact set AND order on screen: the newest 50, ascending, nothing older.
+    assert.deepEqual(
+      await rendered(),
+      Array.from({ length: 50 }, (_, index) => `m${index + 11}`),
+      "the cold entry rendered something other than the newest page, in order"
+    );
+
+    // (3) The cursor is the newest RENDERED id, and the next poll's URL is the only
+    // proof of that from outside the page. A rewind reads as a lower id here and an
+    // `undefined` — the field a backward response deliberately omits — reads as the
+    // literal string, so both fail this assertion rather than passing quietly.
+    const settled = queries.length;
+    const pollDeadline = Date.now() + 10_000;
+    while (queries.length === settled && Date.now() < pollDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const afterEntry = queries.slice(settled);
+    assert.ok(afterEntry.length >= 1, "expected at least one poll after the cold page");
+    for (const query of afterEntry) {
+      assert.equal(query, `?since_id=${newestId}`, `the poll after the cold page asked ${query}`);
+    }
+
+    // (2) Older history is reachable, and reaching it uses #283's backward route.
+    assert.equal(await page.locator("#show-earlier").isVisible(), true, "the cold entry offers no route to older history");
+    await page.locator("#show-earlier").click();
+    await waitForCount(60);
+    assert.deepEqual(
+      await rendered(),
+      Array.from({ length: 60 }, (_, index) => `m${index + 1}`),
+      "show earlier did not land the older page in order above what was already there"
+    );
+    assert.equal(
+      queries.some((query) => query === `?before_id=${pageStartId}&limit=50`),
+      true,
+      `the backward page asked something else: ${queries.join(" ")}`
+    );
+
+    // The backward read must not have moved the live cursor — #283's rule, now
+    // reached by a path that did not exist when it was written.
+    const beforeBackwardSettle = queries.length;
+    const backwardDeadline = Date.now() + 10_000;
+    while (queries.length === beforeBackwardSettle && Date.now() < backwardDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    const afterEarlier = queries.slice(beforeBackwardSettle);
+    assert.ok(afterEarlier.length >= 1, "expected at least one poll after the backward read");
+    for (const query of afterEarlier) {
+      assert.equal(query, `?since_id=${newestId}`, `a poll after the backward read asked ${query}`);
+    }
+    // Nothing in the session refetched from the start — the cost this ticket exists
+    // to remove, and the one a wrong cursor would silently reintroduce.
+    assert.deepEqual(queries.filter((query) => query.includes("since_id=0")), []);
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-cold-entry-takes-the-newest-page-keeps-older-h", error);
+    throw error;
+  } finally {
+    await browser?.close();
+    await fixture.close();
+  }
+});
+
+// #306 — the other half of the same contract: #278's warm entry must not have been
+// touched. A device that already holds a copy still asks FORWARD from the highest id
+// it holds, never the bounded newest page, or every reload would re-download a page
+// it already has and the restored rows would render twice.
+test("a warm entry still asks forward from the copy it holds, and lands on the same screen (#306/#278)", async () => {
+  const fixture = await startFixture();
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(page, page.context());
+    for (let n = 1; n <= 60; n += 1) {
+      await postMessage(fixture, fixture.hostToken, `m${n}`);
+    }
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const ids = new Map(hosted.map((message) => [message.text, message.id]));
+    const newestId = ids.get("m60");
+    assert.ok(newestId !== undefined);
+
+    const queries: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "GET") return;
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/messages")) queries.push(url.search);
+    });
+    const rendered = async () =>
+      (await page.locator("#timeline .message .message-text").allInnerTexts())
+        .map((line) => line.trim())
+        .filter((line) => /^m\d+$/.test(line));
+    const waitForCount = (n: number) =>
+      page.waitForFunction(
+        (want) =>
+          [...document.querySelectorAll("#timeline .message .message-text")].filter((node) =>
+            /^m\d+$/.test((node.textContent ?? "").trim())
+          ).length >= want,
+        n,
+        { timeout: 10_000 }
+      );
+
+    // First entry is cold and writes the local copy (#211) that makes the next one
+    // warm — the backup is produced by the same path a real second visit uses.
+    await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
+    await page.waitForSelector('.composer[data-ready="true"]');
+    await waitForCount(50);
+    const coldRendered = await rendered();
+
+    queries.length = 0;
+    await page.reload();
+    await page.waitForSelector('.composer[data-ready="true"]');
+    await waitForCount(50);
+
+    // The warm entry's FIRST read is the forward one #278 established, from the id
+    // this device already holds — not the bounded page, which would refetch rows it
+    // is at that moment rendering from its own copy.
+    assert.equal(queries[0], `?since_id=${newestId}`, `the warm entry's first read was ${queries[0]}`);
+    assert.equal(
+      queries.some((query) => query.startsWith("?before_id=")),
+      false,
+      `a warm entry issued a backward read: ${queries.join(" ")}`
+    );
+
+    // Same set, same order, from the copy instead of from the host.
+    assert.deepEqual(await rendered(), coldRendered, "the warm entry rendered a different screen than the cold one");
+    assert.deepEqual(await rendered(), Array.from({ length: 50 }, (_, index) => `m${index + 11}`));
+    assert.match(
+      (await page.locator(".restored-divider").textContent()) ?? "",
+      /Restored from this device/,
+      "the warm entry lost its restored provenance"
+    );
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "a-warm-entry-still-asks-forward-from-the-copy-it", error);
     throw error;
   } finally {
     await browser?.close();
