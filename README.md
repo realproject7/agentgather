@@ -93,7 +93,9 @@ The current build is localhost-first, file-backed, and remote-auth-ready:
   and safety docs
 - managed tunnel routing for public HTTPS room links, with `rooms.agentgather.dev`
   as the release target
-- npm release: `agentgather@0.2.2` is published as the `latest` dist-tag
+- npm release: published on npm as `agentgather`. This file names no version on
+  purpose — one written here goes stale the next time we publish. To see what
+  the registry currently serves as `latest`, run `npm view agentgather version`
 
 ## Roadmap, Not Shipped Yet
 
