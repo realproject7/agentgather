@@ -3019,6 +3019,98 @@ test("a host that serves its page but not its API shows the held copy, not a bla
   }
 });
 
+// #307 — the composer footer named the seated identity but never said what kind of
+// seat it is, so an agent's own line read exactly like a human's. The kind is
+// already on the participant record the roster groups on; the footer just never
+// spoke it. The three cases are asserted as exact strings rather than as matches,
+// because "unchanged" is a claim about the whole line and a regex cannot make it.
+test("the composer footer states an agent seat, leaves a human seat byte-for-byte, and claims no kind without one — including when only the profile has one (#307)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    // A seat whose record carries no kind at all — a partial or older record. The
+    // field is DELETED rather than set to some stand-in value, so nothing in the
+    // room can read it as a value that merely happens to be unfamiliar.
+    const kindlessToken = `kindless-${fixture.roomId}`;
+    const kindless: Partial<Participant> = participant("kindless", "human", false, kindlessToken);
+    delete kindless.kind;
+    await writeParticipants(fixture.root, fixture.roomId, [
+      { ...participant("host", "human", true, fixture.hostToken), display_name: "Host" },
+      participant("reviewer", "agent", false, fixture.reviewerToken),
+      kindless as Participant
+    ]);
+
+    const footerFor = async (token: string): Promise<string> => {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+      // #303: failure-only capture; coverage is the 30s wait surface.
+      diagnostics = recordBrowserDiagnostics(page, page.context());
+      await page.goto(`${fixture.baseUrl}/#token=${token}`);
+      // #323: entry is finished only once `bindEvents()` has armed the composer —
+      // and the footer is written by the same `/status` pass that precedes it, so
+      // this is the point at which the line is final rather than merely present.
+      await page.waitForSelector('.composer[data-ready="true"]');
+      return (await page.locator("#composer-identity").textContent()) ?? "";
+    };
+
+    // (a) An agent seat states its kind, in the room's own word for it.
+    assert.equal(await footerFor(fixture.reviewerToken), "reviewer · agent · manual");
+
+    // (b) A human seat is exactly what it rendered before #307 — no added word,
+    // no added separator. This is the assertion that fails if the agent case is
+    // implemented by rewriting the line for everyone.
+    const humanFooter = await footerFor(fixture.hostToken);
+    assert.equal(humanFooter, "Host · manual");
+    assert.doesNotMatch(humanFooter, /agent|human/, "the human seat gained a kind claim it never made");
+
+    // (c) No kind on the record: neither claim, and nothing standing in for one.
+    const kindlessFooter = await footerFor(kindlessToken);
+    assert.equal(kindlessFooter, "kindless · manual");
+    assert.doesNotMatch(kindlessFooter, /agent|human|unknown|undefined/, "a record with no kind still made a claim");
+
+    // (d) @re1 on #332 — the case the no-claim contract actually has to survive:
+    // the profile this device claimed at entry still says `agent`, while the
+    // seated record in the CURRENT /status payload has no kind. The footer must
+    // fall silent on the payload rather than top it up from what the device
+    // believed minutes ago, or "no kind" quietly becomes a stale claim.
+    const partial = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(partial, partial.context());
+    // Capture what /profile really answered, so this case cannot pass by the
+    // profile having lost its kind too — that would test nothing.
+    let profileKind: unknown = "never answered";
+    partial.on("response", (response) => {
+      if (!new URL(response.url()).pathname.endsWith("/profile")) return;
+      void response
+        .json()
+        .then((body: { participant?: { kind?: unknown } }) => {
+          profileKind = body.participant?.kind;
+        })
+        .catch(() => {});
+    });
+    await partial.route("**/status*", async (route) => {
+      const response = await route.fetch();
+      const payload = (await response.json()) as { participants: Array<{ alias: string; kind?: string }> };
+      for (const seat of payload.participants) {
+        if (seat.alias === "reviewer") delete seat.kind;
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    await partial.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
+    await partial.waitForSelector('.composer[data-ready="true"]');
+    const partialFooter = (await partial.locator("#composer-identity").textContent()) ?? "";
+    assert.equal(profileKind, "agent", "the profile record must still say agent, or this case proves nothing");
+    assert.equal(partialFooter, "reviewer · manual");
+    assert.doesNotMatch(partialFooter, /agent/, "a kind-less payload was topped up from the entry profile");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-composer-footer-states-an-agent-seat-leaves-a", error);
+    throw error;
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 // #279 Gap 2 — a room opened by its own URL carries neither the dashboard's address
 // nor a capability, so its history never reached the dashboard at all and the
 // offline row had nothing to show. The address the dashboard itself supplied on an

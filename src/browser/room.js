@@ -1890,7 +1890,23 @@ function updateComposerIdentity(participants) {
   const me = participants.find((participant) => participant.alias === state.profile.alias);
   const name = (me && (me.display_name || me.alias)) || state.profile.display_name || state.profile.alias;
   const presence = me ? me.attendance_state || me.attention : null;
-  composerIdentity.textContent = presence ? `${name} · ${presence}` : name;
+  // #307: an agent seat says so. The kind is read from the participant record the
+  // roster already groups on — no new field, no new request — and ONLY the value
+  // the room itself uses for agents makes a claim: an absent or unfamiliar kind
+  // stays silent rather than guessing at it. A human seat is left exactly as it
+  // was, which is also why nothing here says "human": this footer has never
+  // spoken for humans, and a claim it never made is not a claim to preserve.
+  //
+  // @re1 on #332: read ONLY the seated record in THIS payload — never fall back to
+  // `state.profile.kind`. The profile is claimed once at entry and never refreshed,
+  // so a payload that omits the kind would otherwise be topped up from what this
+  // device believed minutes ago, turning "no kind" into a stale claim. The whole
+  // point of the no-claim case is that it survives a partial record.
+  const kind = me && me.kind;
+  const parts = [name];
+  if (kind === "agent") parts.push("agent");
+  if (presence) parts.push(presence);
+  composerIdentity.textContent = parts.join(" · ");
 }
 
 function updateLastMessage() {
