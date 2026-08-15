@@ -3019,6 +3019,63 @@ test("a host that serves its page but not its API shows the held copy, not a bla
   }
 });
 
+// #307 — the composer footer named the seated identity but never said what kind of
+// seat it is, so an agent's own line read exactly like a human's. The kind is
+// already on the participant record the roster groups on; the footer just never
+// spoke it. The three cases are asserted as exact strings rather than as matches,
+// because "unchanged" is a claim about the whole line and a regex cannot make it.
+test("the composer footer states an agent seat, leaves a human seat byte-for-byte, and claims no kind without one (#307)", async () => {
+  const fixture = await startFixture();
+  const browser = await chromium.launch();
+  let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
+  try {
+    // A seat whose record carries no kind at all — a partial or older record. The
+    // field is DELETED rather than set to some stand-in value, so nothing in the
+    // room can read it as a value that merely happens to be unfamiliar.
+    const kindlessToken = `kindless-${fixture.roomId}`;
+    const kindless: Partial<Participant> = participant("kindless", "human", false, kindlessToken);
+    delete kindless.kind;
+    await writeParticipants(fixture.root, fixture.roomId, [
+      { ...participant("host", "human", true, fixture.hostToken), display_name: "Host" },
+      participant("reviewer", "agent", false, fixture.reviewerToken),
+      kindless as Participant
+    ]);
+
+    const footerFor = async (token: string): Promise<string> => {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+      // #303: failure-only capture; coverage is the 30s wait surface.
+      diagnostics = recordBrowserDiagnostics(page, page.context());
+      await page.goto(`${fixture.baseUrl}/#token=${token}`);
+      // #323: entry is finished only once `bindEvents()` has armed the composer —
+      // and the footer is written by the same `/status` pass that precedes it, so
+      // this is the point at which the line is final rather than merely present.
+      await page.waitForSelector('.composer[data-ready="true"]');
+      return (await page.locator("#composer-identity").textContent()) ?? "";
+    };
+
+    // (a) An agent seat states its kind, in the room's own word for it.
+    assert.equal(await footerFor(fixture.reviewerToken), "reviewer · agent · manual");
+
+    // (b) A human seat is exactly what it rendered before #307 — no added word,
+    // no added separator. This is the assertion that fails if the agent case is
+    // implemented by rewriting the line for everyone.
+    const humanFooter = await footerFor(fixture.hostToken);
+    assert.equal(humanFooter, "Host · manual");
+    assert.doesNotMatch(humanFooter, /agent|human/, "the human seat gained a kind claim it never made");
+
+    // (c) No kind on the record: neither claim, and nothing standing in for one.
+    const kindlessFooter = await footerFor(kindlessToken);
+    assert.equal(kindlessFooter, "kindless · manual");
+    assert.doesNotMatch(kindlessFooter, /agent|human|unknown|undefined/, "a record with no kind still made a claim");
+  } catch (error) {
+    await captureBrowserFailure(diagnostics, "the-composer-footer-states-an-agent-seat-leaves-a", error);
+    throw error;
+  } finally {
+    await browser.close();
+    await fixture.close();
+  }
+});
+
 // #279 Gap 2 — a room opened by its own URL carries neither the dashboard's address
 // nor a capability, so its history never reached the dashboard at all and the
 // offline row had nothing to show. The address the dashboard itself supplied on an

@@ -1890,7 +1890,17 @@ function updateComposerIdentity(participants) {
   const me = participants.find((participant) => participant.alias === state.profile.alias);
   const name = (me && (me.display_name || me.alias)) || state.profile.display_name || state.profile.alias;
   const presence = me ? me.attendance_state || me.attention : null;
-  composerIdentity.textContent = presence ? `${name} · ${presence}` : name;
+  // #307: an agent seat says so. The kind is read from the participant record the
+  // roster already groups on — no new field, no new request — and ONLY the value
+  // the room itself uses for agents makes a claim: an absent or unfamiliar kind
+  // stays silent rather than guessing at it. A human seat is left exactly as it
+  // was, which is also why nothing here says "human": this footer has never
+  // spoken for humans, and a claim it never made is not a claim to preserve.
+  const kind = (me && me.kind) || (state.profile && state.profile.kind);
+  const parts = [name];
+  if (kind === "agent") parts.push("agent");
+  if (presence) parts.push(presence);
+  composerIdentity.textContent = parts.join(" · ");
 }
 
 function updateLastMessage() {
