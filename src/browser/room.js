@@ -1896,7 +1896,13 @@ function updateComposerIdentity(participants) {
   // stays silent rather than guessing at it. A human seat is left exactly as it
   // was, which is also why nothing here says "human": this footer has never
   // spoken for humans, and a claim it never made is not a claim to preserve.
-  const kind = (me && me.kind) || (state.profile && state.profile.kind);
+  //
+  // @re1 on #332: read ONLY the seated record in THIS payload — never fall back to
+  // `state.profile.kind`. The profile is claimed once at entry and never refreshed,
+  // so a payload that omits the kind would otherwise be topped up from what this
+  // device believed minutes ago, turning "no kind" into a stale claim. The whole
+  // point of the no-claim case is that it survives a partial record.
+  const kind = me && me.kind;
   const parts = [name];
   if (kind === "agent") parts.push("agent");
   if (presence) parts.push(presence);

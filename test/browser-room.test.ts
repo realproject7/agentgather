@@ -3024,7 +3024,7 @@ test("a host that serves its page but not its API shows the held copy, not a bla
 // already on the participant record the roster groups on; the footer just never
 // spoke it. The three cases are asserted as exact strings rather than as matches,
 // because "unchanged" is a claim about the whole line and a regex cannot make it.
-test("the composer footer states an agent seat, leaves a human seat byte-for-byte, and claims no kind without one (#307)", async () => {
+test("the composer footer states an agent seat, leaves a human seat byte-for-byte, and claims no kind without one — including when only the profile has one (#307)", async () => {
   const fixture = await startFixture();
   const browser = await chromium.launch();
   let diagnostics: ReturnType<typeof recordBrowserDiagnostics> | null = null;
@@ -3067,6 +3067,41 @@ test("the composer footer states an agent seat, leaves a human seat byte-for-byt
     const kindlessFooter = await footerFor(kindlessToken);
     assert.equal(kindlessFooter, "kindless · manual");
     assert.doesNotMatch(kindlessFooter, /agent|human|unknown|undefined/, "a record with no kind still made a claim");
+
+    // (d) @re1 on #332 — the case the no-claim contract actually has to survive:
+    // the profile this device claimed at entry still says `agent`, while the
+    // seated record in the CURRENT /status payload has no kind. The footer must
+    // fall silent on the payload rather than top it up from what the device
+    // believed minutes ago, or "no kind" quietly becomes a stale claim.
+    const partial = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+    // #303: failure-only capture; coverage is the 30s wait surface.
+    diagnostics = recordBrowserDiagnostics(partial, partial.context());
+    // Capture what /profile really answered, so this case cannot pass by the
+    // profile having lost its kind too — that would test nothing.
+    let profileKind: unknown = "never answered";
+    partial.on("response", (response) => {
+      if (!new URL(response.url()).pathname.endsWith("/profile")) return;
+      void response
+        .json()
+        .then((body: { participant?: { kind?: unknown } }) => {
+          profileKind = body.participant?.kind;
+        })
+        .catch(() => {});
+    });
+    await partial.route("**/status*", async (route) => {
+      const response = await route.fetch();
+      const payload = (await response.json()) as { participants: Array<{ alias: string; kind?: string }> };
+      for (const seat of payload.participants) {
+        if (seat.alias === "reviewer") delete seat.kind;
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    await partial.goto(`${fixture.baseUrl}/#token=${fixture.reviewerToken}`);
+    await partial.waitForSelector('.composer[data-ready="true"]');
+    const partialFooter = (await partial.locator("#composer-identity").textContent()) ?? "";
+    assert.equal(profileKind, "agent", "the profile record must still say agent, or this case proves nothing");
+    assert.equal(partialFooter, "reviewer · manual");
+    assert.doesNotMatch(partialFooter, /agent/, "a kind-less payload was topped up from the entry profile");
   } catch (error) {
     await captureBrowserFailure(diagnostics, "the-composer-footer-states-an-agent-seat-leaves-a", error);
     throw error;
