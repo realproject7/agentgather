@@ -215,6 +215,11 @@ test("browser composer dedupes rapid submit and reuses the idempotency key on re
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
     await page.waitForSelector("text=Ship the browser room safely.");
+    // #323: the brief renders at the START of entry, so it does not mean the
+    // composer is armed. Submitting on it alone lands in #268's refusal window,
+    // where the submit is refused and issues no POST at all — the wait below
+    // would then run its full ceiling. `data-ready` is set in `bindEvents()`.
+    await page.waitForSelector('.composer[data-ready="true"]');
 
     await page.fill("#message-text", "@reviewer duplicate guard");
     // #289 (@re1): the window opens immediately before the SUBMIT, not before
@@ -420,6 +425,8 @@ test("browser reply affordance: per-message reply button, clearable composer ind
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
     await page.waitForSelector("text=Ship the browser room safely.");
+    // #323: the brief is not the arming signal; `bindEvents()` is. See #268.
+    await page.waitForSelector('.composer[data-ready="true"]');
 
     // Seed a message to reply to.
     await page.fill("#message-text", "first message here");
@@ -1126,6 +1133,8 @@ test("last-message rail KV updates on the sender's own send (#121/#123)", async 
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
     await page.waitForSelector("text=Ship the browser room safely.");
+    // #323: the brief is not the arming signal; `bindEvents()` is. See #268.
+    await page.waitForSelector('.composer[data-ready="true"]');
     // No messages yet → the KV shows the empty-state dash.
     assert.equal((await page.textContent("#roster-last-message"))?.trim(), "—");
     // The host sends; the own message is added to state.seen and skipped by the
@@ -2412,6 +2421,17 @@ test("Send before entry completes cannot navigate or eject the participant (#268
       if (frame === page.mainFrame()) navigations.push(frame.url());
     });
 
+    // #323: the other half of the refusal. A refused Send must issue no POST at
+    // all — and "no POST at all" is exactly the signature #323 investigated, so
+    // it is asserted here where it is correct, and counted again after entry
+    // where it would be the defect. Nothing on screen looks the same either way;
+    // only the request count tells a deliberate refusal from a lost send.
+    const messagePosts: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      if (new URL(request.url()).pathname.endsWith("/messages")) messagePosts.push(request.url());
+    });
+
     // The composer is present and the Send button clickable while entry is still
     // in flight — this is the window the defect lives in.
     await page.waitForSelector("#send-button", { state: "visible" });
@@ -2446,6 +2466,11 @@ test("Send before entry completes cannot navigate or eject the participant (#268
     assert.match(notice, /still joining/i);
     assert.doesNotMatch(notice, /tgl_|Bearer|#token=|http/);
 
+    // The refusal actually refused: the notice is not cover for a send that went
+    // out anyway, and nothing was rendered as if it had.
+    assert.deepEqual(messagePosts, [], "the refused click posted a message anyway");
+    assert.equal(await page.locator("text=sent too early").count(), 0, "the refused click rendered a message anyway");
+
     // (b) Enter with the button focused must not submit either, whatever has
     // focus. Hide the notice first so its reappearance is the positive signal.
     await page.evaluate(() => {
@@ -2463,24 +2488,35 @@ test("Send before entry completes cannot navigate or eject the participant (#268
     assert.equal(page.url(), urlDuringEntry, "Enter on the focused Send button navigated the page");
     assert.deepEqual(navigations, [], "Enter on the focused Send button triggered a navigation");
     assert.equal(await page.locator("#auth-error").isVisible(), false);
+    assert.deepEqual(messagePosts, [], "the refused Enter posted a message anyway");
 
     // Let entry finish; the room must be fully usable afterwards.
     // No unroute: the handler already passes every later /status straight
     // through, and unrouting can race a request already in flight.
     releaseEntry();
     await page.waitForSelector("text=Ship the browser room safely.");
-    await page.waitForSelector(".composer");
+    // #323: entry is finished only when `bindEvents()` has armed the composer.
+    // The brief text and `.composer` are both true from first paint — with the
+    // entry `/status` still held above, BOTH already match — so gating the click
+    // below on them put it back inside the refusal window this test exists to
+    // prove, where it was refused, issued no POST, and the wait for its message
+    // ran the full 30s ceiling. `data-ready` is set in `bindEvents()` itself.
+    await page.waitForSelector('.composer[data-ready="true"]');
 
     // Post-entry click-to-send still works (the button is no longer a submit,
     // so this proves the replacement click path is wired).
     await page.fill("#message-text", "click after entry");
     await page.click("#send-button");
     await page.waitForSelector("text=click after entry");
+    // #323: the same count, after the gate. Zero here is the failure this ticket
+    // was opened on — a Send that produced no request whatsoever.
+    assert.equal(messagePosts.length, 1, "the post-entry click issued no POST");
 
     // Post-entry Enter-to-send still works.
     await page.fill("#message-text", "enter after entry");
     await page.press("#message-text", "Enter");
     await page.waitForSelector("text=enter after entry");
+    assert.equal(messagePosts.length, 2, "the post-entry Enter issued no POST");
 
     // And still no navigation from either.
     assert.equal(page.url(), urlDuringEntry, "sending after entry navigated the page");
