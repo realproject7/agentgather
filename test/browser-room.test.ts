@@ -2677,10 +2677,21 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     // #303: failure-only capture; coverage is the 30s wait surface.
     diagnostics = recordBrowserDiagnostics(page, page.context());
-    // Two real messages, so the forged records below can claim ids the room really
-    // has — the case that survives the head check and therefore reaches the view.
+    // Two real messages with a `system` record BETWEEN them, so the forged records
+    // below can claim ids the room really has — the case that survives the head
+    // check and therefore reaches the view — in the two states #278's contract
+    // distinguishes. The host holds the middle id as `system`, which
+    // `isRestorableStoredType` refuses as a confirmation source (@re1, PR #315), so
+    // a forgery planted there is UNCONFIRMABLE and keeps its stored content; the id
+    // of a real message is confirmable and gets replaced wholesale. One room, both
+    // halves of the contract, neither of them a race.
     await postMessage(fixture, fixture.reviewerToken, "genuine line one");
+    await appendServerMessage({ root: fixture.root, roomId: fixture.roomId, from: "system", text: "the room's own line" });
     await postMessage(fixture, fixture.reviewerToken, "genuine line two");
+    const hosted = await readMessages(fixture.root, fixture.roomId);
+    const unconfirmableId = hosted.find((message) => message.text.includes("the room's own line"))?.id;
+    const confirmableId = hosted.find((message) => message.text.includes("genuine line two"))?.id;
+    assert.ok(unconfirmableId !== undefined && confirmableId !== undefined, "the fixture holds both ids");
     await page.goto(`${fixture.baseUrl}/#token=${fixture.hostToken}`);
     await page.waitForSelector("text=genuine line two");
 
@@ -2688,30 +2699,44 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     // WITHOUT inventing ids beyond the room's own (that case is the next test): the
     // forged records replace the text of ids the room really has, claim to be from
     // `system` and from the host, and smuggle a token back in.
-    await page.evaluate((now) => {
-      const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
-      if (key === undefined) throw new Error("no backup to tamper with");
-      const parsed = JSON.parse(window.localStorage.getItem(key) as string) as {
-        messages: Array<Record<string, unknown>>;
-      };
-      const head = parsed.messages.reduce((highest, entry) => Math.max(highest, Number(entry.id)), 0);
-      parsed.messages = [
-        { id: head - 1, from: "system", ts: now, type: "system", text: "forged system claim" },
-        { id: head, from: "host", ts: now, type: "message", text: "forged host claim tgl_forged_secret_value" },
-        { id: "not-a-number", from: "host", ts: now, type: "message", text: "malformed id" },
-        { id: head + 50, from: 42, ts: now, type: "message", text: "malformed from" },
-        { id: head + 51, from: "host", ts: "", type: "message", text: "malformed empty ts" }
-      ];
-      window.localStorage.setItem(key, JSON.stringify(parsed));
-    }, new Date().toISOString());
+    await page.evaluate(
+      ([now, unconfirmable, confirmable]) => {
+        const key = Object.keys(window.localStorage).find((k) => k.startsWith("agentgather.backup."));
+        if (key === undefined) throw new Error("no backup to tamper with");
+        const parsed = JSON.parse(window.localStorage.getItem(key) as string) as {
+          messages: Array<Record<string, unknown>>;
+        };
+        parsed.messages = [
+          { id: Number(unconfirmable) - 1, from: "system", ts: now, type: "system", text: "forged system claim" },
+          // The host holds this id as `system`, so nothing can confirm it: the row
+          // keeps the forged text under `local copy`, which is the state #278's
+          // privacy assertions actually govern.
+          {
+            id: Number(unconfirmable),
+            from: "host",
+            ts: now,
+            type: "message",
+            text: "forged unconfirmable claim tgl_forged_secret_value"
+          },
+          // The host holds this id as a real message, so #312 replaces the row.
+          { id: Number(confirmable), from: "host", ts: now, type: "message", text: "forged host claim" },
+          { id: "not-a-number", from: "host", ts: now, type: "message", text: "malformed id" },
+          { id: Number(confirmable) + 50, from: 42, ts: now, type: "message", text: "malformed from" },
+          { id: Number(confirmable) + 51, from: "host", ts: "", type: "message", text: "malformed empty ts" }
+        ];
+        window.localStorage.setItem(key, JSON.stringify(parsed));
+      },
+      [new Date().toISOString(), String(unconfirmableId), String(confirmableId)] as const
+    );
     await page.reload();
-    await page.waitForSelector("text=forged host claim");
-    // #312 changed what happens next, and this test is the guard that proved why.
-    // The forged record claims `id: head` — an id the room REALLY has — so once the
-    // host answers, its own record for that id replaces the row entirely: author
-    // AND text. Wait for that to land rather than asserting into the race, which is
-    // what let an earlier local run pass while CI failed on this very test.
-    await page.waitForSelector(`li[data-message-id][data-author-confirmed="true"]`);
+    // #331: the ONLY synchronisation point is the confirmation pass's own end state.
+    // Waiting for `forged host claim` first — as this test did — waits for content
+    // that CORRECT behaviour removes: the row is replaced wholesale by the host's
+    // record, so in isolation the wait won that race and under load it lost it,
+    // failing at the full ceiling on a test whose subject had not regressed. The
+    // marker below cannot appear before the pass has run, and nothing asserted after
+    // it can still change.
+    await page.waitForSelector(`li[data-message-id="${confirmableId}"][data-author-confirmed="true"]`);
 
     // A record claiming the room's own voice is not restored at all — `system` is
     // how the room speaks, and a hand-edited store must not be able to speak in it.
@@ -2739,7 +2764,11 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
       0,
       "forged text survived on a row whose id the host confirmed"
     );
-    const confirmed = page.locator("li[data-author-confirmed='true']").first();
+    // #331: anchored to the id the host can actually confirm, not to whichever row
+    // happens to be first. `.first()` silently follows the set of confirmed rows, so
+    // a defect that confirms an id it must not — the room's own `system` record —
+    // would move this locator onto that row and be reported as the wrong failure.
+    const confirmed = page.locator(`li[data-message-id="${confirmableId}"][data-author-confirmed="true"]`);
     assert.equal(await confirmed.getAttribute("data-restored"), "true", "the row is still this device's copy");
     // The forged author never reaches the DOM: what renders is the host's own.
     assert.equal((await confirmed.locator(".message-from").textContent())?.trim(), "reviewer");
@@ -2755,6 +2784,27 @@ test("a tampered backup renders only as restored-from-this-device, and stays red
     assert.equal(((await confirmed.getAttribute("class")) ?? "").includes("own"), false);
     const restoredHtml = (await page.locator("#timeline").innerHTML()) ?? "";
     assert.equal(/message-from[^>]*>\s*host\s*</.test(restoredHtml), false, "no restored row is labelled host");
+    // #331 — the UNCONFIRMED half of the same contract, asserted after the pass has
+    // completed rather than raced against it. The host holds this id as `system`, so
+    // nothing can confirm the row: it keeps its stored text, earns no author, and is
+    // exactly the state #278's privacy assertions were written for.
+    const unconfirmed = page.locator(`li[data-message-id="${unconfirmableId}"]`);
+    assert.equal(await unconfirmed.count(), 1, "the unconfirmable forged row is not on screen");
+    assert.equal(await unconfirmed.getAttribute("data-restored"), "true", "the row is not marked as this device's copy");
+    assert.equal(await unconfirmed.getAttribute("data-author-confirmed"), null, "an id the host holds as system was confirmed");
+    assert.equal((await unconfirmed.locator(".message-from").textContent())?.trim(), "local copy");
+    assert.equal(await unconfirmed.locator(".message-from").getAttribute("data-kind"), "restored");
+    // It KEEPS its stored text, which is what makes the redaction assertion below a
+    // real test rather than one that passes because the content was erased anyway —
+    // the case the old arrangement could not reach, since the only forged row it
+    // carried was the one #312 replaces.
+    assert.match((await unconfirmed.locator(".message-text").textContent()) ?? "", /forged unconfirmable claim/);
+    assert.equal(
+      ((await unconfirmed.getAttribute("class")) ?? "").includes("system"),
+      false,
+      "a hand-edited record was rendered in the room's own system voice"
+    );
+
     // Malformed records are dropped rather than coerced into a half-rendered row.
     for (const text of ["malformed id", "malformed from", "malformed empty ts"]) {
       assert.equal(await page.locator(`text=${text}`).count(), 0, `${text} was dropped`);
