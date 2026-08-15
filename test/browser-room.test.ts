@@ -3703,18 +3703,10 @@ test("a cold entry takes the newest page, keeps older history reachable, and pol
 
     // (2) Older history is reachable, and reaching it uses #283's backward route.
     assert.equal(await page.locator("#show-earlier").isVisible(), true, "the cold entry offers no route to older history");
-    // Armed before the click, so the backward request cannot be missed, and before
-    // the forward-poll wait below so the two cannot be confused for each other.
+    // Armed before the click, so the request the click issues cannot be missed.
     const backwardRead = page.waitForRequest(
       (request) =>
         request.method() === "GET" && new URL(request.url()).search.startsWith("?before_id="),
-      { timeout: 10_000 }
-    );
-    // The next FORWARD poll after the backward read — matched on `since_id` so the
-    // backward request itself cannot satisfy it.
-    const pollAfterBackward = page.waitForRequest(
-      (request) =>
-        request.method() === "GET" && new URL(request.url()).search.startsWith("?since_id="),
       { timeout: 10_000 }
     );
     await page.locator("#show-earlier").click();
@@ -3722,6 +3714,17 @@ test("a cold entry takes the newest page, keeps older history reachable, and pol
       new URL((await backwardRead).url()).search,
       `?before_id=${pageStartId}&limit=50`,
       "the backward page did not start exactly where the rendered history did"
+    );
+    // @re1 on #334: armed only AFTER the backward request has been observed. Armed
+    // before the click it would match any forward poll — including one that fired
+    // BEFORE the backward read — and the assertion below would then be about a poll
+    // that had nothing to do with it, which is the one thing this must not be. The
+    // poll interval is 3 s, well inside this wait, and the session-wide check below
+    // covers any poll that lands in the gap between resolution and arming.
+    const pollAfterBackward = page.waitForRequest(
+      (request) =>
+        request.method() === "GET" && new URL(request.url()).search.startsWith("?since_id="),
+      { timeout: 10_000 }
     );
     await waitForCount(60);
     assert.deepEqual(
