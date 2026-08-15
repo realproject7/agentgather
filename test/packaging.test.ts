@@ -44,6 +44,74 @@ function readmeSection(readme: string, heading: string): string {
   return end === -1 ? body : body.slice(0, end);
 }
 
+// #329: this line used to read "`agentgather@0.2.2` is published as the `latest`
+// dist-tag", and the test asserted that literal. The two went stale together and
+// silently — the README was two releases behind while the assertion passed
+// BECAUSE nobody had updated it. A test that pins a fact only the registry owns
+// is not a guard; it is a copy of the answer.
+//
+// So the contract is the lookup, not the number: the README must tell a reader
+// how to ask npm, and must not answer for it. Checked against the document only
+// — running `npm view` here would put a release gate on the network and make an
+// offline suite fail for reasons that have nothing to do with the code.
+const NPM_VERSION_LOOKUP = "npm view agentgather version";
+// The first cut of this guard only rejected a pinned version when the SAME LINE
+// also said `latest`, `dist-tag`, or `published`. Two independent reviews took
+// it apart, and between them the failure has two halves that need one fix:
+//
+//   - the vocabulary is unbounded. "The npm registry currently serves
+//     `agentgather@9.9.9`" says none of the three words and is exactly as stale
+//     as the sentence #329 removed. Adding "serves" only moves the goalposts.
+//   - the line is the wrong unit. A claim using the ORIGINAL vocabulary escapes
+//     just by wrapping between the version and the claim word — and this
+//     README's own npm bullet is wrapped across three lines, so that is the
+//     normal shape of the text, not a contrived one.
+//
+// So the rule stopped asking how the version is worded or where the line breaks
+// fall: a pinned `agentgather@<version>` anywhere in the README is the defect,
+// whatever prose surrounds it. Nothing to dodge, nothing a line break can split.
+// Safe to state that flatly because the README has no legitimate pin — and a
+// future pinned install example would trip it too, deliberately. Naming a
+// release in this document is the thing that goes stale, so putting one back
+// should be an edit to this guard, not a quiet edit to the document.
+//
+// Version shape is deliberately loose: `9.9` and `9.9.9-rc.1` go stale exactly
+// like `9.9.9`, and matching only the three-part form leaves a two-part pin as
+// the next way through.
+const PINNED_NPM_VERSION = /agentgather@\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?/;
+
+// Two rules, because passing the first one alone is the likely half-done edit:
+// adding the lookup command ABOVE the stale sentence leaves the stale sentence
+// in place. Returned as a list rather than asserted inline so the guard can be
+// driven against fixtures that MUST fail — an all-negative suite cannot tell
+// "the rule works" from "the rule never fires".
+//
+// Scope is deliberately the `agentgather@<version>` pin and nothing wider. A
+// version named without the package prefix is not covered: telling a bare
+// version apart from `127.0.0.1:8787` needs section- and wording-sensitive
+// matching, which is a different guard than the one #329 asked for.
+function npmReleaseDocProblems(readme: string): string[] {
+  const problems: string[] = [];
+  const shipped = readmeSection(readme, "Shipped Today");
+
+  // Whitespace-insensitive: the command may be rewrapped by an editor without
+  // changing what it tells the reader to run.
+  if (!shipped.replace(/\s+/g, " ").includes(NPM_VERSION_LOOKUP)) {
+    problems.push(`Shipped Today must name \`${NPM_VERSION_LOOKUP}\` as the way to read the published version`);
+  }
+
+  // The claim can return anywhere in the file, not only in the section this
+  // ticket found it in — and it does not have to sound like a claim to be one.
+  for (const line of readme.split("\n")) {
+    const pinned = line.match(PINNED_NPM_VERSION);
+    if (pinned !== null) {
+      problems.push(`the README must not pin a version (${pinned[0]}); the registry owns that answer: ${line.trim()}`);
+    }
+  }
+
+  return problems;
+}
+
 test("the pack lifecycle builds and verifies the CLI bin before the tarball is assembled (#243)", async () => {
   const manifest = await readManifest();
   const prepack = manifest.scripts.prepack;
@@ -92,12 +160,12 @@ test("the packed tarball contains the declared bin target (#243)", async () => {
   assert.ok(packedPaths.includes(binTarget), `the tarball must contain ${binTarget}`);
 });
 
-test("the README reports the published npm release and keeps the production operator gates unshipped (#243)", async () => {
+test("the README reports the published npm release and keeps the production operator gates unshipped (#243, #329)", async () => {
   const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
 
   const shipped = readmeSection(readme, "Shipped Today");
   assert.match(shipped, /npm/i, "Shipped Today must record the npm release");
-  assert.match(shipped, /agentgather@0\.2\.2/, "Shipped Today must name the published version");
+  assert.deepEqual(npmReleaseDocProblems(readme), [], "the README must discover the published version, not pin it");
 
   const roadmap = readmeSection(readme, "Roadmap, Not Shipped Yet");
   assert.match(
@@ -106,4 +174,128 @@ test("the README reports the published npm release and keeps the production oper
     "the production operator gates must remain listed as not shipped"
   );
   assert.doesNotMatch(roadmap, /npm publish/i, "the roadmap must no longer claim npm publish is unshipped");
+});
+
+test("the npm-release doc guard rejects a pinned version, a half-done edit, and a missing lookup (#329)", () => {
+  const fixture = (bullet: string): string =>
+    `# Agent Gather\n\n## Shipped Today\n\n${bullet}\n\n## Roadmap, Not Shipped Yet\n\n- nothing here\n`;
+  const lookup = `- npm release: published on npm as \`agentgather\`. To see what the registry currently serves as \`latest\`, run \`${NPM_VERSION_LOOKUP}\``;
+  // The exact wording this repository carried from v0.2.2 until #329.
+  const stale = "- npm release: `agentgather@0.2.2` is published as the `latest` dist-tag";
+
+  assert.deepEqual(npmReleaseDocProblems(fixture(lookup)), [], "the shipped wording must pass");
+  assert.deepEqual(
+    npmReleaseDocProblems(fixture(lookup.replace(/\s+/g, "\n  "))),
+    [],
+    "rewrapping the command across lines must not change the verdict"
+  );
+
+  const staleOnly = npmReleaseDocProblems(fixture(stale)).join("\n");
+  assert.match(staleOnly, /must name `npm view agentgather version`/, "the stale README must fail for the missing lookup");
+  assert.match(staleOnly, /must not pin a version \(agentgather@0\.2\.2\)/, "the stale README must fail for the pinned version");
+
+  // The half-done edit #329 exists to prevent: the lookup added, the stale
+  // sentence left in place. Passing on this is what "require the command" alone
+  // would do.
+  const halfDone = npmReleaseDocProblems(fixture(`${lookup}\n${stale}`)).join("\n");
+  assert.doesNotMatch(halfDone, /must name `npm view agentgather version`/, "the lookup is present in this case");
+  assert.match(halfDone, /must not pin a version/, "leaving the stale sentence must still fail");
+
+  // A version claim that returns somewhere other than Shipped Today.
+  const elsewhere = npmReleaseDocProblems(
+    `${fixture(lookup)}\n## Install\n\n\`agentgather@9.9.9\` is published as the \`latest\` dist-tag\n`
+  ).join("\n");
+  assert.match(elsewhere, /must not pin a version \(agentgather@9\.9\.9\)/, "a claim outside Shipped Today must still fail");
+
+  const noLookup = npmReleaseDocProblems(fixture("- npm release: published on npm as `agentgather`")).join("\n");
+  assert.match(noLookup, /must name `npm view agentgather version`/, "removing the lookup must fail");
+});
+
+// #329 review (RE1 and RE2, same P1 from two directions): the first guard only
+// rejected a pinned version when the line also said `latest`, `dist-tag`, or
+// `published`. Every case below carries the same stale claim and got through —
+// by using words the list never had, by wrapping between the pin and a word it
+// did have, by sitting in a fenced block, or by naming two version parts instead
+// of three. They must all fail, or the README goes stale again in a form the
+// guard was never taught.
+test("the npm-release doc guard rejects a pinned version whatever the wording, wrapping, or version shape (#329)", () => {
+  const fixture = (bullet: string): string =>
+    `# Agent Gather\n\n## Shipped Today\n\n${bullet}\n\n## Roadmap, Not Shipped Yet\n\n- nothing here\n`;
+  const lookup = `- npm release: published on npm as \`agentgather\`. To see what the registry currently serves as \`latest\`, run \`${NPM_VERSION_LOOKUP}\``;
+
+  // The exact sentence named in the review.
+  const evasive = "The npm registry currently serves `agentgather@9.9.9`.";
+  const outside = npmReleaseDocProblems(`${fixture(lookup)}\n## Install\n\n${evasive}\n`).join("\n");
+  assert.doesNotMatch(outside, /must name `npm view agentgather version`/, "the lookup is present in this case");
+  assert.match(
+    outside,
+    /must not pin a version \(agentgather@9\.9\.9\)/,
+    "an authoritative claim that never says latest/dist-tag/published must still fail"
+  );
+
+  // Same sentence inside the section the ticket found the defect in.
+  const inside = npmReleaseDocProblems(fixture(`${lookup}\n- ${evasive}`)).join("\n");
+  assert.match(inside, /must not pin a version \(agentgather@9\.9\.9\)/, "the same wording must fail inside Shipped Today");
+
+  // Other phrasings that dodge the original word list, one per line so each is
+  // driven on its own rather than passing on a neighbour's failure.
+  for (const wording of [
+    "- npm release: current release is `agentgather@9.9.9`",
+    "- npm release: `agentgather@9.9.9` is what you get today",
+    "- npm release: install `agentgather@9.9.9`",
+  ]) {
+    assert.match(
+      npmReleaseDocProblems(fixture(`${lookup}\n${wording}`)).join("\n"),
+      /must not pin a version \(agentgather@9\.9\.9\)/,
+      `this wording must fail: ${wording}`
+    );
+  }
+
+  // RE2's cases: the claim does not have to sit on one line, or in prose, or
+  // carry a three-part version. Each one is driven on its own.
+  //
+  // Wrapped — uses the ORIGINAL `published`/`latest`/`dist-tag` vocabulary and
+  // escaped a line-based rule only because the break falls between the pin and
+  // the claim word. This README's own npm bullet is wrapped, so this is the
+  // ordinary shape of the text.
+  const wrapped = npmReleaseDocProblems(
+    `${fixture(lookup)}\n## Install\n\nThe package \`agentgather@9.9.9\` is currently\npublished as the \`latest\` dist-tag.\n`
+  ).join("\n");
+  assert.match(wrapped, /must not pin a version \(agentgather@9\.9\.9\)/, "a claim wrapped across two lines must fail");
+
+  // Fenced — the version sits alone in a code block under a claim sentence.
+  const fenced = npmReleaseDocProblems(
+    `${fixture(lookup)}\n## Install\n\nThe current release is:\n\n\`\`\`\nagentgather@9.9.9\n\`\`\`\n`
+  ).join("\n");
+  assert.match(fenced, /must not pin a version \(agentgather@9\.9\.9\)/, "a pin inside a fenced block must fail");
+
+  // Two-part — `9.9` goes stale exactly like `9.9.9`.
+  const twoPart = npmReleaseDocProblems(
+    `${fixture(lookup)}\n## Install\n\nThe npm registry currently serves \`agentgather@9.9\`.\n`
+  ).join("\n");
+  assert.match(twoPart, /must not pin a version \(agentgather@9\.9\)/, "a two-part version pin must fail");
+
+  // Prerelease — the suffix must not truncate the match into something that
+  // reads as a different version in the failure message.
+  const prerelease = npmReleaseDocProblems(
+    `${fixture(lookup)}\n## Install\n\nThe npm registry currently serves \`agentgather@9.9.9-rc.1\`.\n`
+  ).join("\n");
+  assert.match(prerelease, /must not pin a version \(agentgather@9\.9\.9-rc\.1\)/, "a prerelease pin must fail");
+
+  // The rule must not fire on the shipped wording, which names no version at
+  // all. Proving both directions keeps the pin rule from passing by rejecting
+  // everything.
+  assert.deepEqual(npmReleaseDocProblems(fixture(lookup)), [], "the shipped wording must still pass");
+
+  // The over-correction to stay clear of: `agentgather@latest` and
+  // `agentgather@next` are dist-tag specifiers, not pins. They do not go stale —
+  // they are the evergreen thing #329 wants a reader pointed at — so a pattern
+  // broad enough to reject them would be rejecting the fix.
+  for (const specifier of ["agentgather@latest", "agentgather@next"]) {
+    assert.deepEqual(
+      npmReleaseDocProblems(`${fixture(lookup)}\n## Install\n\nRun \`npx ${specifier}\`.\n`),
+      [],
+      `a dist-tag specifier must not be treated as a pin: ${specifier}`
+    );
+  }
 });
