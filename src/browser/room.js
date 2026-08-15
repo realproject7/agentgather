@@ -483,6 +483,14 @@ async function claimDisplayName(displayName) {
 function bindEvents() {
   // #268: from here the composer's handlers exist, so Send may act.
   state.composerReady = true;
+  // #323: publish that readiness on the composer itself. `state.composerReady`
+  // was observable only from inside the page, so anything outside it had to
+  // guess at entry from the brief text or from `.composer` — both true from
+  // first paint, before the awaits in `enterRoom()`. A Send on that guess lands
+  // inside #268's refusal window and is correctly refused, producing no POST at
+  // all. This attribute is the only signal that means "armed"; it is set here,
+  // beside the flag it mirrors, so the two cannot drift apart.
+  composer.dataset.ready = "true";
   rosterToggle.addEventListener("click", () => shell.classList.toggle("roster-open"));
   notifyToggle.addEventListener("click", () => void toggleNotify());
   notifyScope.addEventListener("click", () => toggleNotifyScope());
