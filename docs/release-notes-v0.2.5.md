@@ -150,10 +150,12 @@ evidence record for that investigation and shipped no code.
 ## Release validation
 
 **CI for #319 and #314 was not clean on the way in, and is recorded here in
-full.** Both branches took red runs on the same underlying defect — the `#278`
-restored-record render timeout that #319 exists to fix — and one of the greens
-below was a rerun of an unchanged commit. Naming that is the point of this
-section.
+full.** The two branches went red on **two different tests**, and keeping them
+apart is the point: #314's reds are the `#278` restored-record render timeout —
+the defect #319 exists to fix — while #319's own reds are the `#268` no-POST
+timeout, a separate failure now owned by #323 and not addressed in this release.
+One of the greens below is also a rerun of an unchanged commit. Both facts are
+named rather than rounded off.
 
 **#319 / PR #321** (`task/319-restored-record-render-timeout`):
 
