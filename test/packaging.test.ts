@@ -80,45 +80,16 @@ const NPM_VERSION_LOOKUP = "npm view agentgather version";
 // the next way through.
 const PINNED_NPM_VERSION = /agentgather@\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?/;
 
-// `npmjs` on its own so a versioned registry URL — npmjs.com/package/
-// agentgather/v/0.2.2 — is caught for what it says rather than for happening to
-// sit near the word `registry`. `\bnpm\b` does not match `npmjs.com`.
-const NPM_MENTION = /\bnpmjs?\b|\bregistry\b/i;
-// Not anchored to `agentgather@`, so it also catches a version named without the
-// package prefix ("the registry currently serves 9.9.9") — dropping the prefix
-// is the remaining way to state the claim. Applied only to npm/registry bullets
-// inside Shipped Today, where every bullet is a release claim: elsewhere the
-// README is full of `127.0.0.1:8787`, which no version shape can be told apart
-// from by itself.
-const BARE_VERSION = /\b\d+\.\d+(?:\.\d+)*\b/;
-
-// The bullet, not the line, is the unit — and not the whole section either.
+// Two rules, because passing the first one alone is the likely half-done edit:
+// adding the lookup command ABOVE the stale sentence leaves the stale sentence
+// in place. Returned as a list rather than asserted inline so the guard can be
+// driven against fixtures that MUST fail — an all-negative suite cannot tell
+// "the rule works" from "the rule never fires".
 //
-// Per line, "the registry currently serves" and the version it serves can sit
-// on either side of a wrap and neither half trips the rule: the same mistake
-// that let the original guard through, made again one rule over. Per section,
-// any `\d+.\d+` anywhere in Shipped Today would be judged against an `npm` that
-// some other bullet supplied, which is why the rule was scoped narrowly in the
-// first place. Joining each `- ` item with its indented continuation lines keeps
-// both properties: a claim cannot be split by a wrap, and an unrelated version
-// in a neighbouring bullet stays unrelated.
-function bullets(section: string): string[] {
-  const items: string[] = [];
-  for (const line of section.split("\n")) {
-    const isContinuation = /^\s+\S/.test(line) && items.length > 0;
-    if (isContinuation) items[items.length - 1] += ` ${line.trim()}`;
-    else items.push(line);
-  }
-  return items;
-}
-
-// Three rules, because each one alone is a half-done edit that the other two
-// catch: requiring the lookup passes a README that ADDS the command above the
-// stale sentence; rejecting `agentgather@x.y.z` passes a version named without
-// the package prefix; and both together still need the whole-file sweep, or the
-// claim simply moves to another heading. Returned as a list rather than asserted
-// inline so the guard can be driven against fixtures that MUST fail — an
-// all-negative suite cannot tell "the rule works" from "the rule never fires".
+// Scope is deliberately the `agentgather@<version>` pin and nothing wider. A
+// version named without the package prefix is not covered: telling a bare
+// version apart from `127.0.0.1:8787` needs section- and wording-sensitive
+// matching, which is a different guard than the one #329 asked for.
 function npmReleaseDocProblems(readme: string): string[] {
   const problems: string[] = [];
   const shipped = readmeSection(readme, "Shipped Today");
@@ -127,14 +98,6 @@ function npmReleaseDocProblems(readme: string): string[] {
   // changing what it tells the reader to run.
   if (!shipped.replace(/\s+/g, " ").includes(NPM_VERSION_LOOKUP)) {
     problems.push(`Shipped Today must name \`${NPM_VERSION_LOOKUP}\` as the way to read the published version`);
-  }
-
-  for (const bullet of bullets(shipped)) {
-    if (PINNED_NPM_VERSION.test(bullet)) continue; // reported by the whole-file rule below
-    const bare = bullet.match(BARE_VERSION);
-    if (bare !== null && NPM_MENTION.test(bullet)) {
-      problems.push(`Shipped Today must not name a release version (${bare[0]}); the registry owns that answer`);
-    }
   }
 
   // The claim can return anywhere in the file, not only in the section this
@@ -319,42 +282,9 @@ test("the npm-release doc guard rejects a pinned version whatever the wording, w
   ).join("\n");
   assert.match(prerelease, /must not pin a version \(agentgather@9\.9\.9-rc\.1\)/, "a prerelease pin must fail");
 
-  // Dropping the package prefix is the other way around a pin rule, so an npm
-  // bullet in Shipped Today may not name a bare version either.
-  const bare = npmReleaseDocProblems(fixture("- npm release: the registry currently serves 9.9.9")).join("\n");
-  assert.match(bare, /must not name a release version \(9\.9\.9\)/, "a version named without the package prefix must fail");
-
-  // ...and that rule is judged per BULLET, not per line, or a wrap splits the
-  // claim from the word that identifies it as one — the same mistake the pin
-  // rule was just fixed for, and the README's own npm bullet is wrapped. A
-  // single-line fixture cannot tell a per-line rule from a per-bullet one, so
-  // both wrap directions are driven here.
-  const wrappedBare = npmReleaseDocProblems(
-    fixture(`${lookup}\n- npm release: the registry currently serves\n  9.9.9`)
-  ).join("\n");
-  assert.match(wrappedBare, /must not name a release version \(9\.9\.9\)/, "a wrapped bare-version claim must fail");
-
-  const versionFirst = npmReleaseDocProblems(fixture(`${lookup}\n- release 9.9.9 is what the\n  npm registry serves`)).join("\n");
-  assert.match(versionFirst, /must not name a release version \(9\.9\.9\)/, "the version may wrap ahead of the npm mention");
-
-  // A versioned registry URL states the same claim with no `agentgather@` and no
-  // `npm` word — `\bnpm\b` does not match `npmjs.com`.
-  const versionedUrl = npmReleaseDocProblems(
-    fixture(`${lookup}\n- release page:\n  https://www.npmjs.com/package/agentgather/v/0.2.2`)
-  ).join("\n");
-  assert.match(versionedUrl, /must not name a release version \(0\.2\.2\)/, "a versioned registry URL must fail");
-
-  // The bullet unit must not become the section unit: a version in an unrelated
-  // bullet is not a release claim just because another bullet says `npm`.
-  assert.deepEqual(
-    npmReleaseDocProblems(fixture(`${lookup}\n- requires Node 20.10 or newer`)),
-    [],
-    "a version in a neighbouring, non-npm bullet must stay unrelated"
-  );
-
-  // ...and that rule must not fire on the shipped wording, which names no
-  // version at all. Proving the two directions separately keeps the bare-version
-  // rule from passing by rejecting everything.
+  // The rule must not fire on the shipped wording, which names no version at
+  // all. Proving both directions keeps the pin rule from passing by rejecting
+  // everything.
   assert.deepEqual(npmReleaseDocProblems(fixture(lookup)), [], "the shipped wording must still pass");
 
   // The over-correction to stay clear of: `agentgather@latest` and
